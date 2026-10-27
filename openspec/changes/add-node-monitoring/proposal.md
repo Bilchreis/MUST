@@ -6,7 +6,7 @@ SHALL shows node status in a Qt window inside the host process. must replaces th
 
 ## What Changes
 
-- Each process hosting at least one must node opens one local monitoring endpoint covering all its nodes, on loopback only, on by default.
+- Each process hosting at least one must node opens one local monitoring endpoint covering all its nodes, on by default: a Unix domain socket on Linux and a named pipe on Windows, which the operating system restricts to the user. The registration describes the endpoint by kind, so another transport (e.g. local TCP) can be added later without changing the protocol or its readers.
 - Nodes are shown from creation on, with a state (building, failed, running, stopped); nodes built through the SHALL C ABI show their context ID and, when `SECoP_S_nodeComplete` failed, its errors and warnings.
 - `must-server` reports client activation and deactivation as node events.
 - The endpoint is registered in a per-user runtime directory, so tools can discover every running must process; stale registrations are recognized and cleaned up.

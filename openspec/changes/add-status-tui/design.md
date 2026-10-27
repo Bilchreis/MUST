@@ -2,7 +2,7 @@
 
 ## Context
 
-`add-node-monitoring` gives each host process one loopback endpoint with a registration file in a per-user directory, plus a Rust client library (`must-monitor`) that lists endpoints and streams snapshots and events. `add-shall-c-abi` routes `bGUI` and `SECoP_S_showStatusWindow` to a no-op status display hook. Hosts include 32-bit LabVIEW on Windows (a GUI process without a console) and console or GUI programs on Linux.
+`add-node-monitoring` gives each host process one local endpoint (Unix domain socket on Linux, named pipe on Windows) with a registration file in a per-user directory, plus a Rust client library (`must-monitor`) that lists endpoints and streams snapshots and events. `add-shall-c-abi` routes `bGUI` and `SECoP_S_showStatusWindow` to a no-op status display hook. Hosts include 32-bit LabVIEW on Windows (a GUI process without a console) and console or GUI programs on Linux.
 
 ## Goals / Non-Goals
 

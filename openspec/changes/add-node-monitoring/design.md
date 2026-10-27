@@ -18,13 +18,15 @@
 
 ## Decisions
 
-### Loopback TCP + token instead of local sockets
-The endpoint is a TCP listener on `127.0.0.1` with an OS-assigned port. Access control comes from a 128-bit random token stored in the registration file, which only the user can read.
-*Alternative:* Unix domain sockets / Windows named pipes (e.g. via the `interprocess` crate). Rejected: two transports to maintain, and tokio's TCP is already used by `must-server`. File permissions on the registration file give equivalent per-user protection for a read-only feed.
+### OS-local connections, behind a transport seam
+The endpoint is a Unix domain socket `<registry dir>/<pid>.sock` on Linux (the directory is 0700, the socket 0600) and a named pipe `\\.\pipe\must-<user SID>-<pid>` on Windows, both with tokio (`tokio::net::UnixListener`, `tokio::net::windows::named_pipe`). The operating system enforces that only the user's processes can connect, so no token is needed, and nothing listens on a network port: no firewall prompts, no exposure.
+On Windows the default security descriptor of a named pipe grants read access to Everyone, so the pipe is created with an explicit descriptor that allows only the current user's SID (and SYSTEM). The first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE` so no other process can have taken the name, and the client checks `GetNamedPipeServerProcessId` against the registration's pid before trusting the stream.
+Both sides use one small seam: the endpoint opens a `Listener` that yields byte streams, and the client library has one `connect(&EndpointDescription)` that returns a byte stream. Everything above (hello, snapshot, events, coalescing) only sees `AsyncRead + AsyncWrite`, and the TUI only calls the client library. Adding local TCP later is a new `kind` (`tcp`, with address and token), one listener and one connector, with no protocol or TUI change; readers that do not know a kind skip it (spec "Endpoint description").
+*Alternative:* local TCP on `127.0.0.1` with a random port and a token in the registration file. Deferred: one code path for both platforms, but a network port that firewalls may question and a token that any process of the user can read. The seam keeps it available.
 
-### Registry files rather than a fixed port or a broker
+### Registry files rather than fixed names or a broker
 Each process writes `<pid>.json` into a per-user directory; consumers scan the directory (and watch it, see `add-status-tui`). No central daemon is needed and processes stay independent.
-*Alternative:* a fixed well-known port with a broker process. Rejected: needs a daemon lifecycle and fails when two users share a machine.
+*Alternative:* one fixed, well-known endpoint with a broker process that all hosts register with. Rejected: needs a daemon lifecycle and fails when two users share a machine.
 Atomic write: write to `<pid>.json.tmp`, then rename. On Windows the file gets an ACL restricted to the current user (inherited from `%LOCALAPPDATA%`, which is already per-user).
 
 ### Stale detection
@@ -32,7 +34,7 @@ Registration includes the process start time (Linux: `/proc/<pid>/stat` field 22
 
 ### Protocol shape
 Line-delimited JSON (`serde_json`, one object per line, `type` tag):
-- client → endpoint: `hello {token, version, client, update_interval?}`; `subscribe_traffic {node, enabled}`; `subscribe_updates {node, mode: "coalesced" | "all"}`.
+- client → endpoint: `hello {version, client, update_interval?}` (a future `tcp` kind adds `token`); `subscribe_traffic {node, enabled}`; `subscribe_updates {node, mode: "coalesced" | "all"}`.
 - endpoint → client: `welcome {version, process}`, `snapshot {...}`, `event {kind, ...}`, `counters {node, rx, tx, per_second}`, `lagged {dropped}`, `error {message}`.
 Version is `major.minor`; minor additions are optional fields that old readers ignore. The structure report is sent as embedded JSON, values in their SECoP JSON encoding, so the TUI can reuse `must-types` to interpret them.
 
@@ -54,8 +56,12 @@ Polled or pushed parameters can update far faster than a display needs, so per m
 
 ## Risks / Trade-offs
 
-- [Another local process of the same user can read the token and the feed] → Same trust boundary as the user's own files; the feed is read-only. Documented.
-- [Loopback TCP may be blocked by strict host firewalls on Windows] → Loopback is normally exempt; the error is logged and monitoring disabled for that process, nodes keep working.
+- [Another local process of the same user can read the feed] → Same trust boundary as the user's own files; the feed is read-only. Documented.
+- [Windows named pipes are readable by Everyone with the default security descriptor] → Explicit descriptor for the user's SID; a test checks that the pipe's DACL contains no other user or group than the user and SYSTEM.
+- [Pipe-name squatting by another process] → `FILE_FLAG_FIRST_PIPE_INSTANCE` on the endpoint side; the client checks the server's pid against the registration.
+- [Unix socket paths are limited to about 108 bytes] → `<registry dir>/<pid>.sock` stays short for `$XDG_RUNTIME_DIR` and `/tmp/must-<uid>`; if the path is too long, monitoring is disabled with a warning.
+- [Debugging without `nc`] → Documented commands: `socat - UNIX-CONNECT:<path>` on Linux, a PowerShell `NamedPipeClientStream` snippet on Windows.
+- [Two platform-specific listeners to maintain] → Kept small behind the seam and tested on all three CI targets.
 - [Global `tracing` subscriber conflicts with a Rust host's own] → Never replace an existing global subscriber; document the layer for such hosts.
 - [Large structure reports in snapshots] → Sent once per monitor connection; acceptable.
 

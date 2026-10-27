@@ -39,11 +39,26 @@ The endpoint SHALL report, for each node created through the C ABI, the context 
 - **WHEN** one LabVIEW process runs node `cryo` under context `vi_cryo` and node `magnet` under context `vi_magnet`
 - **THEN** the snapshot lists `cryo` with context `vi_cryo` and `magnet` with context `vi_magnet`
 
-### Requirement: Loopback only with token
-The endpoint SHALL listen only on the loopback interface and SHALL require a client to send, as its first message, a hello containing the endpoint's random access token from the registration; otherwise it closes the connection.
+### Requirement: Local and per-user access
+The endpoint SHALL be a local connection that is not reachable over the network and that the operating system allows only processes of the same user to open: a Unix domain socket in the user's registry directory on Linux, a named pipe whose access is limited to the user on Windows.
 
-#### Scenario: Wrong token
-- **WHEN** a client connects and sends a hello with a wrong token
+#### Scenario: Other user on Linux
+- **WHEN** another user on the same machine tries to connect to the endpoint's socket
+- **THEN** the operating system refuses the connection
+
+#### Scenario: Other user on Windows
+- **WHEN** another user on the same machine tries to open the endpoint's named pipe
+- **THEN** opening the pipe fails with access denied
+
+#### Scenario: Not on the network
+- **WHEN** the machine's open TCP and UDP ports are listed while a node runs
+- **THEN** only the node's SECoP port belongs to the process, no monitoring port
+
+### Requirement: Hello first
+The endpoint SHALL require a hello as the first message of a connection and SHALL close the connection without sending any data when the first message is not a valid hello.
+
+#### Scenario: No hello
+- **WHEN** a client connects and sends `{"type":"subscribe_traffic"}` first
 - **THEN** the endpoint closes the connection without sending any data
 
 ### Requirement: Versioned line protocol
