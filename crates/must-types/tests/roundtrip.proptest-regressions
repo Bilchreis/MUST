@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc dbe59032e78121340ddec4879393862c7fb69dbfcd14f375735ecb185bbd6305 # shrinks to info = Double(DoubleInfo { min: Some(371.6287170194339), max: Some(1159.2674234015299), unit: Some("K"), absolute_resolution: None, relative_resolution: None, fmtstr: None, extra: {} })
+cc 9af246921d1e1783d7754ec74228beeb8aab1934ba1c33d44ff0333d85ad2c50 # shrinks to (info, value) = (Double(DoubleInfo { min: None, max: None, unit: None, absolute_resolution: None, relative_resolution: None, fmtstr: None, extra: {} }), Double(-2.6838794791545703e-42))
