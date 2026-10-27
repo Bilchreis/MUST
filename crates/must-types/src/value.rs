@@ -20,6 +20,7 @@ use crate::datainfo::{
     ArrayInfo, BlobInfo, CommandInfo, DataInfo, DoubleInfo, EnumInfo, IntInfo, ScaledInfo,
     StringInfo, StructInfo, TupleInfo, json_to_i64,
 };
+use crate::error::ErrorClass;
 use crate::path::{Path, PathSegment};
 
 /// A typed SECoP value, matching some [`DataInfo`].
@@ -95,31 +96,6 @@ pub enum Mode {
     /// Values in replies and updates: only the shape is checked, all struct members are
     /// required.
     Report,
-}
-
-/// SECoP error class of a value that could not be decoded or encoded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorClass {
-    /// The JSON shape does not fit the datainfo.
-    WrongType,
-    /// The shape fits but a limit is violated.
-    RangeError,
-}
-
-impl ErrorClass {
-    /// The SECoP name of the class, as used in error reports.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::WrongType => "WrongType",
-            Self::RangeError => "RangeError",
-        }
-    }
-}
-
-impl fmt::Display for ErrorClass {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 /// A value does not fit its datainfo.

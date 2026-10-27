@@ -48,3 +48,22 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           # make sure tests actually ran on this target, not only compiled
           grep -E "test result: ok\. [1-9][0-9]* passed" test.log
+
+  interop:
+    name: interop with Frappy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --example simple_node
+      # the Frappy client needs only the standard library; pinned for reproducibility
+      - uses: actions/checkout@v7
+        with:
+          repository: SampleEnvironment/frappy
+          ref: f3eacc28b84cd00acbcfb72799f3c37394e46f00
+          path: frappy
+      - name: drive the example node with the Frappy client
+        run: |
+          target/debug/examples/simple_node 127.0.0.1:2055 &
+          sleep 1
+          PYTHONPATH=frappy timeout 120 python3 crates/must-server/tests/interop/frappy_client.py localhost:2055

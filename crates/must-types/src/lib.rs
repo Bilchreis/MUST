@@ -50,13 +50,23 @@
 //!   chapter omit them.
 
 pub mod datainfo;
+pub mod error;
 pub mod identifier;
 pub mod path;
 pub mod postfix;
+pub mod report;
 pub mod value;
 
 pub use datainfo::{DataInfo, DataInfoBuilder, DataInfoError, DataInfoErrorKind};
+pub use error::{ErrorClass, SecopError, UnknownErrorClass};
 pub use identifier::{IdentifierError, NameClash, NameScope, is_custom, validate_identifier};
 pub use path::{Path, PathSegment};
 pub use postfix::{Postfix, PostfixError, split_postfix};
-pub use value::{DynLimits, ErrorClass, Mode, Value, ValueError};
+pub use report::{Qualifiers, data_report, error_report};
+pub use value::{DynLimits, Mode, Value, ValueError};
+
+/// Date of the SECoP 2.0 draft must implements (commit `a6e90eb` of the specification),
+/// sent as third field of the `*IDN?` reply.
+pub const SECOP_DRAFT_DATE: &str = "2026-07-07";
+/// The SECoP version must implements, sent as fourth field of the `*IDN?` reply.
+pub const SECOP_VERSION: &str = "v2.0";

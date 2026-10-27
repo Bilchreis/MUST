@@ -32,10 +32,10 @@ A node can be started on a caller's runtime (`Node::spawn(handle)`) or on a libr
 trait ModuleHandler: Send + Sync {
     async fn read(&self, ctx: &Ctx, param: &str) -> Result<Reading, SecopError>;
     async fn change(&self, ctx: &Ctx, param: &str, value: Value) -> Result<Reading, SecopError>;
-    async fn call(&self, ctx: &Ctx, cmd: &str, arg: Option<Value>) -> Result<Reading, SecopError>;
+    async fn call(&self, ctx: &Ctx, cmd: &str, arg: Option<Value>) -> Result<Option<Reading>, SecopError>;
 }
 ```
-`Reading { value, t: Option<f64>, e: Option<Value> }`. `Ctx` lets the handler push side-effect updates (`ctx.update("status", ...)`) that are guaranteed to go out before the reply. Default methods return `NotImplemented`-style errors so simple modules implement only `read`. The C ABI implements this trait once: for callbacks it calls the C function on a blocking thread (`spawn_blocking`); for polling mode it enqueues the request and awaits a oneshot answered by `SECoP_S_putCommandAnswer`.
+`Reading { value, t: Option<f64>, e: Option<Json> }`; `call` returns `None` for a command without result. `Ctx` lets the handler push side-effect updates (`ctx.update("status", ...)`) that are guaranteed to go out before the reply. Default methods return `NotImplemented`-style errors so simple modules implement only `read`. The C ABI implements this trait once: for callbacks it calls the C function on a blocking thread (`spawn_blocking`); for polling mode it enqueues the request and awaits a oneshot answered by `SECoP_S_putCommandAnswer`.
 
 ### Per-module actor and update bus
 Each module runs as an actor task owning its cache and a request queue; this gives "one handler call at a time per module" without locks and natural ordering of side effects: the actor publishes updates to the node's update bus before it completes the request, and the connection task writes the reply only after the bus delivered those updates to all activated connections (updates are written in bus order, replies are queued behind them). "Delivered" means enqueued: each connection has its own outgoing queue drained by its own writer task, so the bus never waits for a socket.
@@ -43,7 +43,7 @@ Each module runs as an actor task owning its cache and a request queue; this giv
 ### Slow clients
 Each outgoing queue tracks the bytes it holds (bytes already handed to the socket no longer count). Two kinds of messages are treated differently against the node's `max_outgoing_bytes` (builder option, default 16 MiB):
 - **Replies** to the connection's own requests (`reply`, `changed`, `done`, `describing`, `pong`, `active`, error replies) are always enqueued, whatever their size. Instead, the connection's reader checks the queue before taking the next request from the socket: while the queue holds more than the limit, it waits until the writer has drained it below the limit. TCP flow control then slows the client down. Since requests of one connection are processed in order, a connection can never have more than the limit plus one reply buffered, even if its client floods requests without reading.
-- **Unsolicited updates** (`update`, `error_update`) are never delayed, because the update bus serves all connections. If enqueueing one would take the queue beyond the limit, the connection is closed, its queue dropped and a `warn` log written with the client address.
+- **Unsolicited updates** (`update`, `error_update`) are never delayed, because the update bus serves all connections. If enqueueing one would take the queued *update* bytes beyond the limit, the connection is closed, its queue dropped and a `warn` log written with the client address. Replies do not count here, so a large reply being written cannot get a client disconnected by a small update arriving meanwhile; each connection therefore keeps two counters, all queued bytes (for backpressure) and queued update bytes (for disconnecting).
 
 This keeps large legitimate replies (a big `describe`, later a `get_data` matrix of an `AcquisitionChannel`) safe regardless of how many updates happen to be queued, while a client that ignores updates is still dropped. A client that both floods requests and is activated is dropped by the update rule. 16 MiB is far above normal update bursts yet small enough for a 32-bit LabVIEW host.
 For comparison: SHALL queues without limit and never disconnects (memory grows in the host); Frappy sends synchronously from the updating thread while holding the module's update lock and drops a client only after a 60 s send timeout, stalling that module's updates for everyone meanwhile.
@@ -57,6 +57,9 @@ Split at the first space (action) and the next space (specifier); the rest is da
 
 ### Constant parameters
 The spec says a constant parameter "can neither be read nor written". must answers a `read` with the constant value (no handler call) and a `change` with `ReadOnly`, and leaves it out of initial updates. Answering reads is harmless and friendlier to clients that read every parameter.
+
+### Startup reads and the cache
+Initial updates on `activate` come from the cache only. So that every parameter has a value to send, the node reads each non-constant, non-cached parameter once in the background when it starts (option `initial_read`, default on); parameters can also be seeded with `initial_value`. A parameter without a value yet is left out of the initial updates.
 
 ### Errors
 `must-types` gains `ErrorClass` with all SECoP 2.0 classes (`ProtocolError`, `NoSuchModule`, `NoSuchParameter`, `NoSuchCommand`, `ReadOnly`, `NotCheckable`, `WrongType`, `RangeError`, `BadJSON`, `NotImplemented`, `HardwareError`, `CommandRunning`, `CommunicationFailed`, `TimeoutError`, `IsBusy`, `IsError`, `Disabled`, `Impossible`, `ReadFailed`, `OutOfRange`, `InternalError`) and `SecopError { class, message, extra }`. A handler panic is caught and turned into `InternalError`.
