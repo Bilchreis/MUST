@@ -73,6 +73,7 @@
 pub mod events;
 pub mod handler;
 pub mod model;
+pub mod monitor;
 mod protocol;
 mod report;
 mod runtime;
@@ -84,4 +85,4 @@ pub use model::{
     BuildError, Command, ModelError, ModelErrorKind, ModelWarning, Module, Node, NodeBuilder,
     Parameter,
 };
-pub use runtime::{RunningNode, StartError};
+pub use runtime::{NODE_LOG_TARGET, RunningNode, StartError};

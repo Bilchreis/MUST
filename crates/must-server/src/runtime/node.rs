@@ -44,6 +44,8 @@ pub struct RunningNode {
     addr: SocketAddr,
     stop: CancellationToken,
     tracker: TaskTracker,
+    /// The node's id at the monitoring endpoint, if it registered itself.
+    monitor_id: Option<u64>,
 }
 
 /// The runtime used by [`Node::start`], created on first use.
@@ -108,12 +110,17 @@ impl Node {
 
         info!(%addr, equipment_id = %self.model.equipment_id, "node started");
         hub.emit(NodeEvent::Started { addr });
-        Ok(RunningNode {
+        let mut running = RunningNode {
             hub,
             addr,
             stop,
             tracker,
-        })
+            monitor_id: None,
+        };
+        if self.model.options.monitored {
+            running.monitor_id = crate::monitor::register_running(&running);
+        }
+        Ok(running)
     }
 }
 
@@ -236,6 +243,14 @@ impl RunningNode {
         self.tracker.wait().await;
         info!(addr = %self.addr, "node stopped");
         self.hub.emit(NodeEvent::Stopped);
+        if let Some(id) = self.monitor_id {
+            crate::monitor::unregister_running(id);
+        }
+    }
+
+    /// The node's shared state, for the monitoring endpoint.
+    pub(crate) fn hub(&self) -> &Arc<Hub> {
+        &self.hub
     }
 
     /// Stops the node from synchronous code; see [`stop`](Self::stop).

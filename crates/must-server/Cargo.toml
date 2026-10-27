@@ -11,12 +11,14 @@ authors.workspace = true
 [dependencies]
 async-trait.workspace = true
 indexmap.workspace = true
+must-monitor.workspace = true
 must-types.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+tracing-subscriber = { workspace = true, default-features = false, features = ["registry", "std"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "signal"] }

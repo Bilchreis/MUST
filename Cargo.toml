@@ -11,6 +11,7 @@ repository = "https://github.com/Bilchreis/MUST"
 authors = ["Peter Braun"]
 
 [workspace.dependencies]
+must-monitor = { path = "crates/must-monitor" }
 must-server = { path = "crates/must-server" }
 must-types = { path = "crates/must-types" }
 async-trait = "0.1"

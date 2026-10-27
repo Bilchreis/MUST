@@ -276,6 +276,7 @@ pub(crate) struct NodeOptions {
     pub max_line_length: usize,
     pub max_outgoing_bytes: usize,
     pub initial_read: bool,
+    pub monitored: bool,
 }
 
 /// Declares a SEC node. See the [module documentation](self).
@@ -304,6 +305,7 @@ impl NodeBuilder {
                 max_line_length: DEFAULT_MAX_LINE_LENGTH,
                 max_outgoing_bytes: DEFAULT_MAX_OUTGOING_BYTES,
                 initial_read: true,
+                monitored: true,
             },
         }
     }
@@ -378,6 +380,14 @@ impl NodeBuilder {
     /// that `activate` has values to send (default true).
     pub fn initial_read(mut self, enabled: bool) -> Self {
         self.options.initial_read = enabled;
+        self
+    }
+
+    /// Whether the node registers with the process's monitoring endpoint when it starts
+    /// (default true; see [`crate::monitor`]). Code that registers the node itself, like
+    /// the SHALL C ABI with [`crate::monitor::ExternalNode`], turns this off.
+    pub fn monitored(mut self, enabled: bool) -> Self {
+        self.options.monitored = enabled;
         self
     }
 }

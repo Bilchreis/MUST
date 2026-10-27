@@ -342,11 +342,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "must-monitor"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "windows-sys",
+]
+
+[[package]]
 name = "must-server"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "indexmap",
+ "must-monitor",
  "must-types",
  "serde_json",
  "thiserror",
