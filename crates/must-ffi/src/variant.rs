@@ -1026,30 +1026,68 @@ pub struct CSECoPbaseType {
     _private: [u8; 0],
 }
 
-/// All live handles, by address. Every C function checks a handle against this table, as
-/// SHALL does, so that stale or foreign pointers are rejected.
-static HANDLES: LazyLock<Mutex<HashMap<usize, Box<Node>>>> = LazyLock::new(Mutex::default);
+/// All live handles. Every C function checks a handle against this table, as SHALL does,
+/// so that stale or foreign pointers are rejected.
+///
+/// Handles are numbers from a counter, not the nodes' addresses: an address is reused
+/// once its node is freed, so a destroyed handle would silently refer to a new value.
+/// The counter only repeats after it wraps around (2^29 handles on 32-bit targets), and
+/// then skips handles still in use.
+static HANDLES: LazyLock<Mutex<HandleTable>> = LazyLock::new(Mutex::default);
 
-fn handles() -> MutexGuard<'static, HashMap<usize, Box<Node>>> {
+/// First handle value; handles step by [`HANDLE_STEP`] so they look like aligned pointers.
+const FIRST_HANDLE: usize = 0x1_0000;
+const HANDLE_STEP: usize = 8;
+
+struct HandleTable {
+    nodes: HashMap<usize, Node>,
+    next: usize,
+}
+
+impl Default for HandleTable {
+    fn default() -> Self {
+        Self {
+            nodes: HashMap::new(),
+            next: FIRST_HANDLE,
+        }
+    }
+}
+
+fn handles() -> MutexGuard<'static, HandleTable> {
     HANDLES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+impl HandleTable {
+    /// Stores `node` under the next free handle.
+    fn insert(&mut self, node: Node) -> usize {
+        let mut id = self.next;
+        while self.nodes.contains_key(&id) {
+            id = next_handle(id);
+        }
+        self.next = next_handle(id);
+        self.nodes.insert(id, node);
+        id
+    }
+}
+
 /// Registers a node and returns its handle.
 pub fn new_handle(node: Node) -> *mut CSECoPbaseType {
-    let boxed = Box::new(node);
-    let ptr = std::ptr::from_ref::<Node>(&boxed)
-        .cast_mut()
-        .cast::<CSECoPbaseType>();
-    handles().insert(ptr as usize, boxed);
-    ptr
+    std::ptr::without_provenance_mut(handles().insert(node))
+}
+
+fn next_handle(id: usize) -> usize {
+    match id.checked_add(HANDLE_STEP) {
+        Some(next) => next,
+        None => FIRST_HANDLE,
+    }
 }
 
 /// Runs `f` on the node of a handle; `None` for NULL or unknown handles.
 pub fn with_handle<R>(handle: *const CSECoPbaseType, f: impl FnOnce(&mut Node) -> R) -> Option<R> {
     let mut table = handles();
-    table.get_mut(&(handle as usize)).map(|node| f(node))
+    table.nodes.get_mut(&handle.addr()).map(f)
 }
 
 /// A copy of the node of a handle.
@@ -1059,7 +1097,7 @@ pub fn clone_handle(handle: *const CSECoPbaseType) -> Option<Node> {
 
 /// Removes and frees a handle; returns whether it existed.
 pub fn destroy_handle(handle: *const CSECoPbaseType) -> bool {
-    handles().remove(&(handle as usize)).is_some()
+    handles().nodes.remove(&handle.addr()).is_some()
 }
 
 #[cfg(test)]
@@ -1177,5 +1215,34 @@ mod tests {
         assert!(destroy_handle(h));
         assert!(!destroy_handle(h));
         assert_eq!(with_handle(h, |n| n.code()), None);
+    }
+
+    #[test]
+    fn destroyed_handles_are_not_reused() {
+        let h = new_handle(Node::from_json(&json!(1)).unwrap());
+        assert!(destroy_handle(h));
+        // new values, even when their memory takes the place of the destroyed one
+        let others: Vec<_> = (0..1000)
+            .map(|_| new_handle(Node::from_json(&json!(2.5)).unwrap()))
+            .collect();
+        assert!(!others.contains(&h));
+        assert_eq!(with_handle(h, |n| n.code()), None);
+        for o in others {
+            assert!(destroy_handle(o));
+        }
+    }
+
+    #[test]
+    fn handle_counter_wraps_and_skips_live_handles() {
+        let node = || Node::from_json(&json!(1)).unwrap();
+        let mut table = HandleTable::default();
+        let first = table.insert(node());
+        assert_eq!(first, FIRST_HANDLE);
+        // the counter wraps around at the end of the address range ...
+        table.next = usize::MAX - 3;
+        assert_eq!(table.insert(node()), usize::MAX - 3);
+        // ... and skips handles still in use
+        assert_eq!(table.insert(node()), FIRST_HANDLE + HANDLE_STEP);
+        assert_eq!(table.nodes.len(), 3);
     }
 }
