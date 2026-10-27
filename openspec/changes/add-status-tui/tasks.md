@@ -7,8 +7,8 @@
 
 ## 2. TUI foundation
 
-- [ ] 2.1 Add `crates/must-tui` (ratatui, crossterm, tokio, must-monitor, must-types) with app state, message loop, terminal setup/restore and panic hook; verify the panic-restores-terminal scenario manually and a unit test that the hook restores raw mode
-- [ ] 2.2 Implement the discovery loop (2 s rescan, connect, gone marking, 60 s removal, pinning, `MUST_MONITOR_DIR`) against the `must-monitor` client; verify the new-node-appears and host-exits scenarios with an integration test that starts and stops host processes
+- [x] 2.1 Add `crates/must-tui` (ratatui, crossterm, tokio, must-monitor, must-types) with app state, message loop, terminal setup/restore and panic hook; verify the panic-restores-terminal scenario manually and a unit test that the hook restores raw mode
+- [x] 2.2 Implement the discovery loop (rescan every second, connect, gone marking, 60 s removal, pinning, `MUST_MONITOR_DIR`) against the `must-monitor` client; verify the new-node-appears and host-exits scenarios with an integration test that starts and stops host processes
 - [ ] 2.3 Implement the single-instance lock on `tui.lock` (`File::try_lock` on a read/write handle); verify a second `must-tui` exits with a message while the first runs, on all three targets
 
 ## 3. Views

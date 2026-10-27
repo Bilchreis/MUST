@@ -33,7 +33,7 @@
 - Rendering is a pure function of `App`, which makes views testable with ratatui's `TestBackend` and `insta` snapshots.
 
 ### Discovery loop
-Every 2 s the TUI lists endpoints, connects to new ones, and keeps a `Process` entry per registration (pid + start time). An endpoint stream ending, or a listing that no longer shows the process, marks the process gone; gone processes are removed after 60 s unless pinned. File-system watching is not used: polling a small directory every 2 s is cheap and portable. `MUST_MONITOR_DIR` is honored as by every reader.
+Every second the TUI lists endpoints (the spec asks for at least every 2 s), connects to new ones, and keeps a `Process` entry per registration (pid + start time). An endpoint stream ending, or a listing that no longer shows the process, marks the process gone; gone processes are removed after 60 s unless pinned. File-system watching is not used: polling a small directory every 2 s is cheap and portable. `MUST_MONITOR_DIR` is honored as by every reader.
 
 ### Views
 - **Overview:** a table grouped by process (name, pid, context IDs). Per node:
