@@ -67,3 +67,21 @@ pub mod server {
         pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
     }
 }
+
+/// SHALL's own test scenarios (`c/shall_ported.c`). They return 0 on success, else the line
+/// of the failed check. The library state is global: run them one at a time.
+pub mod shall {
+    use std::ffi::{c_char, c_int, c_ushort};
+
+    unsafe extern "C" {
+        pub fn ctest_shall_node(
+            context: *const c_char,
+            node: *const c_char,
+            port: c_ushort,
+            function_pointers: c_int,
+        ) -> c_int;
+        pub fn ctest_shall_delete_node(node: *const c_char) -> c_int;
+        pub fn ctest_shall_done(node_only: c_int, context: *const c_char) -> c_int;
+        pub fn ctest_shall_get_command(context: *const c_char, expected: *const c_char) -> c_int;
+    }
+}

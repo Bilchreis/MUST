@@ -77,11 +77,14 @@ int ctest_server_basics(void)
     SECoP_S_showStatusWindow(0);
 
     /* node names and interfaces */
-    CHECK(SECoP_S_createNode2("bad name", "x", "127.0.0.1", 0, "basics") == SECoP_S_ERROR_INVALID_NAME);
-    CHECK(SECoP_S_createNode2(NULL, "x", "127.0.0.1", 0, "basics") == SECoP_S_ERROR_INVALID_NAME);
+    CHECK(SECoP_S_createNode2("bad name", "x", "127.0.0.1", 0, "basics") == SECoP_S_ERROR_MISSING_MANDATORY);
+    CHECK(SECoP_S_createNode2(NULL, "x", "127.0.0.1", 0, "basics") == SECoP_S_ERROR_MISSING_MANDATORY);
     CHECK(SECoP_S_createNode2("n1", "", "127.0.0.1", 0, "basics") == SECoP_S_WARNING_NO_DESCRIPTION);
     CHECK(SECoP_S_createNode2("N1", "x", "127.0.0.1", 0, "basics") == SECoP_S_ERROR_NAME_ALREADY_USED);
-    CHECK(SECoP_S_createNode2("n2", "x", "not-an-address", 0, "basics") == SECoP_S_ERROR_INVALID_VALUE);
+    /* as in SHALL, an interface that is no address means all interfaces */
+    OK(SECoP_S_createNode2("n2", "x", "not-an-address", 0, "basics"));
+    OK(SECoP_S_deleteNode("n2"));
+    OK(SECoP_S_setAddFocus("n1:")); /* deleting the context's last node cleared its focus */
 
     /* building needs a known context and a focused module */
     CHECK(SECoP_S_addModule("m", "unknown") == SECoP_S_ERROR_INVALID_CONTEXT_ID);
@@ -102,6 +105,11 @@ int ctest_server_basics(void)
     OK(SECoP_S_deleteNode("n1"));
     CHECK(SECoP_S_deleteNode("n1") == SECoP_S_ERROR_INVALID_NODE);
     CHECK(SECoP_S_addModule("m2", "basics") == SECoP_S_ERROR_INVALID_NODE);
+
+    /* initializing a context again starts it afresh, as in SHALL */
+    OK(SECoP_S_createNode2("n3", "x", "127.0.0.1", 0, "basics"));
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "basics"));
+    CHECK(SECoP_S_deleteNode("n3") == SECoP_S_ERROR_INVALID_NODE);
 
     /* done with the only context: back to the uninitialized state */
     SECoP_S_doneLibrary(0, "basics");
@@ -181,7 +189,7 @@ int ctest_server_build_many(const char* context, const char* node, unsigned shor
     return 0;
 }
 
-/* a module without description: the node is not started */
+/* a parameter without datainfo: the node is not started */
 int ctest_server_validation_fails(unsigned short port)
 {
     OK(SECoP_S_initLibrary(NULL, 0, 0, "val"));
@@ -427,7 +435,8 @@ int ctest_server_poll_step(int step)
     case 1: /* change mod1:target 500 */
         OK(poll2(&id, &action, name, &name_size, value, &value_size));
         CHECK(id != 0 && action == SECoP_S_ACTION_CHANGE);
-        CHECK(strcmp(name, "pnode:mod1:target") == 0 && name_size == (int)strlen(name) + 1);
+        /* as in SHALL, the size returned is the length without NUL */
+        CHECK(strcmp(name, "pnode:mod1:target") == 0 && name_size == (int)strlen(name));
         CHECK(strtod(value, NULL) == 500.0);
         CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "poll") == SECoP_S_ERROR_NO_DATA);
         OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, value, (int)strlen(value), NULL, 0, 0.0));
@@ -435,15 +444,12 @@ int ctest_server_poll_step(int step)
         CHECK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, value, (int)strlen(value), NULL, 0, 0.0) < 0);
         return 0;
 
-    case 2: /* read mod1:value, first with too small buffers */
+    case 2: /* read mod1:value, with a too small name buffer: handed out anyway, as in SHALL */
         name_size = 4;
         CHECK(poll2(&id, &action, name, &name_size, value, &value_size) == SECoP_S_WARNING_BUFFER_TOO_SMALL);
-        CHECK(strcmp(name, "pno") == 0 && name_size == (int)strlen("pnode:mod1:value") + 1);
-        name_size = (int)sizeof(name);
-        value_size = (int)sizeof(value);
-        OK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "poll"));
-        CHECK(action == SECoP_S_ACTION_READ && strcmp(name, "pnode:mod1:value") == 0);
-        CHECK(value[0] == '\0' && value_size == 1);
+        CHECK(strcmp(name, "pno") == 0 && name_size == (int)strlen("pnode:mod1:value"));
+        CHECK(action == SECoP_S_ACTION_READ && value[0] == '\0' && value_size == 0);
+        CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "poll") == SECoP_S_ERROR_NO_DATA);
         OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "2.5", -1, "0.25", -1, 1000.5));
         return 0;
 
@@ -471,13 +477,27 @@ int ctest_server_poll_step(int step)
         return 0;
 
     case 5: /* read mod1:value, which will not be answered in time */
-        OK(poll2(&id, &action, name, &name_size, value, &value_size));
+    {
+        int i;
+        enum SECoP_S_error rc = SECoP_S_ERROR_NO_DATA;
+        handle = SECoP_V_createSimpleDouble(0.0); /* overwritten */
+        for (i = 0; i < 500 && rc == SECoP_S_ERROR_NO_DATA; ++i) {
+            name_size = (int)sizeof(name);
+            rc = SECoP_S_getStoredCommand(&id, &action, name, &name_size, &handle, "poll");
+            if (rc == SECoP_S_ERROR_NO_DATA)
+                sleep_ms(10);
+        }
+        OK(rc);
+        /* a read has no value */
+        CHECK(action == SECoP_S_ACTION_READ && handle == NULL);
         g_late_id = id;
         return 0;
+    }
 
     case 6: /* the late answer */
-        CHECK(SECoP_S_putCommandAnswer2(g_late_id, SECoP_S_SUCCESS, "1.0", -1, NULL, 0, 0.0) == SECoP_S_ERROR_TIMEOUT);
-        CHECK(SECoP_S_putCommandAnswer2(g_late_id + 1000, SECoP_S_SUCCESS, "1.0", -1, NULL, 0, 0.0) == SECoP_S_ERROR_NO_DATA);
+        /* SHALL's code for an unknown id */
+        CHECK(SECoP_S_putCommandAnswer2(g_late_id, SECoP_S_SUCCESS, "1.0", -1, NULL, 0, 0.0) == SECoP_S_ERROR_INVALID_NAME);
+        CHECK(SECoP_S_putCommandAnswer2(g_late_id + 1000, SECoP_S_SUCCESS, "1.0", -1, NULL, 0, 0.0) == SECoP_S_ERROR_INVALID_NAME);
         return 0;
 
     case 7: /* pushed updates */

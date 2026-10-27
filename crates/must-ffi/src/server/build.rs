@@ -46,6 +46,7 @@ pub(crate) enum Focus {
 }
 
 /// A node being built.
+#[derive(Clone)]
 pub(crate) struct DraftNode {
     pub name: String,
     pub bind: SocketAddr,
@@ -54,6 +55,7 @@ pub(crate) struct DraftNode {
     pub focus: Focus,
 }
 
+#[derive(Clone)]
 pub(crate) struct DraftModule {
     pub name: String,
     pub props: Map<String, Json>,
@@ -61,6 +63,7 @@ pub(crate) struct DraftModule {
     pub accessibles: Vec<DraftAccessible>,
 }
 
+#[derive(Clone)]
 pub(crate) struct DraftAccessible {
     pub name: String,
     pub props: Map<String, Json>,
@@ -70,6 +73,7 @@ pub(crate) struct DraftAccessible {
     pub kind: AccessibleKind,
 }
 
+#[derive(Clone)]
 pub(crate) enum AccessibleKind {
     Parameter {
         writable: bool,
@@ -311,8 +315,52 @@ impl DraftNode {
         context: &str,
         callbacks: bool,
     ) -> Result<(Node, Vec<String>), Vec<Problem>> {
-        let mut problems = Vec::new();
+        let (draft, notes) = self.with_defaults();
+        draft
+            .build_complete(context, callbacks)
+            .map(|node| (node, notes))
+    }
+
+    /// A copy with what SHALL fills in automatically: descriptions (`"module without
+    /// description"`, ...), a command's datainfo `{"type":"command"}`, and
+    /// `interface_classes`, which SECoP 2.0 needs. Each is noted.
+    fn with_defaults(&self) -> (Self, Vec<String>) {
+        let mut draft = self.clone();
         let mut notes = Vec::new();
+        describe(&mut notes, &mut draft.props, "node", &draft.name);
+        for module in &mut draft.modules {
+            let path = format!("{}:{}", draft.name, module.name);
+            describe(&mut notes, &mut module.props, "module", &path);
+            if !module.props.contains_key("interface_classes") {
+                let classes = module.default_interface_classes();
+                notes.push(format!(
+                    "{path}: no interface_classes given (needed by SECoP 2.0), using {classes}"
+                ));
+                module.props.insert("interface_classes".into(), classes);
+            }
+            for acc in &mut module.accessibles {
+                let path = format!("{path}:{}", acc.name);
+                match acc.kind {
+                    AccessibleKind::Parameter { .. } => {
+                        describe(&mut notes, &mut acc.props, "parameter", &path);
+                    }
+                    AccessibleKind::Command { .. } => {
+                        describe(&mut notes, &mut acc.props, "command", &path);
+                        if acc.datainfo.is_none() {
+                            acc.datainfo = variant::Node::from_description(
+                                &serde_json::json!({"type": "command"}),
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        (draft, notes)
+    }
+
+    fn build_complete(&self, context: &str, callbacks: bool) -> Result<Node, Vec<Problem>> {
+        let mut problems = Vec::new();
         let mut props = self.props.clone();
         let description = take_string(&mut props, "description");
         let mut node = NodeBuilder::new(&self.name, &description)
@@ -329,14 +377,6 @@ impl DraftNode {
             };
         }
         for module in &self.modules {
-            if !module.props.contains_key("interface_classes") {
-                notes.push(format!(
-                    "{}:{}: no interface_classes given (needed by SECoP 2.0), using {}",
-                    self.name,
-                    module.name,
-                    module.default_interface_classes()
-                ));
-            }
             let Some(built) = self.build_module(module, context, callbacks, &mut problems) else {
                 continue;
             };
@@ -352,7 +392,6 @@ impl DraftNode {
             return Err(problems);
         }
         node.build()
-            .map(|node| (node, notes))
             .map_err(|e| e.0.iter().map(|e| problem(&self.name, e)).collect())
     }
 
@@ -365,9 +404,6 @@ impl DraftNode {
         problems: &mut Vec<Problem>,
     ) -> Option<Module> {
         let mut props = draft.props.clone();
-        props
-            .entry("interface_classes")
-            .or_insert_with(|| draft.default_interface_classes());
         let description = take_string(&mut props, "description");
         let mut module = Module::new(&draft.name, &description);
         if let Some(interval) = draft.poll {
@@ -585,6 +621,17 @@ fn set_property(props: &mut Map<String, Json>, level: Level, key: &str, value: J
         err::SUCCESS
     } else {
         err::WARNING_CUSTOM_PROPERTY
+    }
+}
+
+/// Sets SHALL's default description if there is none, noting it.
+fn describe(notes: &mut Vec<String>, props: &mut Map<String, Json>, what: &str, path: &str) {
+    if !props.contains_key("description") {
+        props.insert(
+            "description".into(),
+            format!("{what} without description").into(),
+        );
+        notes.push(format!("{path}: no description given"));
     }
 }
 

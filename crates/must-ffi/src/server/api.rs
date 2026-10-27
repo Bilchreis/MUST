@@ -99,7 +99,7 @@ pub unsafe extern "C" fn SECoP_S_initLibrary(
         // SAFETY: forwarded caller contract
         let context = unsafe { context_id(szContextID) };
         let callbacks = bEnableFunctionPointers != 0;
-        {
+        let (running, handle) = {
             let mut state = state::lock();
             if state.runtime.is_none() {
                 let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -112,13 +112,12 @@ pub unsafe extern "C" fn SECoP_S_initLibrary(
                 }
             }
             state.default_callbacks = callbacks;
-            let entry = state
-                .contexts
-                .entry(context)
-                .or_insert_with(|| new_context(callbacks));
-            entry.refs += 1;
-            entry.callbacks = callbacks;
-        }
+            // as in SHALL, initializing a context again starts it afresh
+            let running = state.remove_context_nodes(&context);
+            state.contexts.insert(context, new_context(callbacks));
+            (running, state.handle())
+        };
+        state::stop(running, handle);
         if bGUI != 0 {
             status::show(true);
         }
@@ -128,16 +127,14 @@ pub unsafe extern "C" fn SECoP_S_initLibrary(
 
 fn new_context(callbacks: bool) -> Context {
     Context {
-        refs: 0,
         callbacks,
         current: None,
         queue: VecDeque::new(),
     }
 }
 
-/// Stops the nodes of a context. Unless `bNodeOnly`, also ends the context's use of the
-/// library; when no initialized context remains, all nodes stop and the library's
-/// threads end.
+/// Stops the nodes of a context and forgets the context (its queued requests are
+/// dropped). Unless `bNodeOnly`, the library's threads end when no context remains.
 ///
 /// # Safety
 /// `szContextID` must be NULL or a NUL-terminated string.
@@ -150,24 +147,17 @@ pub unsafe extern "C" fn SECoP_S_doneLibrary(bNodeOnly: c_int, szContextID: *con
             let mut state = state::lock();
             let handle = state.handle();
             let mut running = state.remove_context_nodes(&context);
+            state.contexts.remove(&context);
             let mut runtime = None;
-            if bNodeOnly == 0 {
-                if let Some(c) = state.contexts.get_mut(&context) {
-                    c.refs = c.refs.saturating_sub(1);
-                    if c.refs == 0 {
-                        state.contexts.remove(&context);
-                    }
+            if bNodeOnly == 0 && state.contexts.is_empty() {
+                // no context means no node; clear up anything left regardless
+                let all: Vec<usize> = (0..state.nodes.len()).rev().collect();
+                for i in all {
+                    running.extend(state.remove_node(i).running);
                 }
-                if !state.contexts.values().any(|c| c.refs > 0) {
-                    let others: Vec<String> = state.contexts.keys().cloned().collect();
-                    for other in others {
-                        running.extend(state.remove_context_nodes(&other));
-                    }
-                    state.contexts.clear();
-                    state.errors.clear();
-                    state.warnings.clear();
-                    runtime = state.runtime.take();
-                }
+                state.errors.clear();
+                state.warnings.clear();
+                runtime = state.runtime.take();
             }
             (std::mem::take(&mut running), handle, runtime)
         };
@@ -245,14 +235,18 @@ fn create_node(
     context: String,
 ) -> Result<c_int, c_int> {
     let mut state = initialized()?;
-    let id = id.filter(|id| valid_name(id)).ok_or(err::INVALID_NAME)?;
+    // SHALL's code for a missing or invalid node name
+    let id = id
+        .filter(|id| valid_name(id))
+        .ok_or(err::MISSING_MANDATORY)?;
     if state.node_index(&id).is_some() {
         return Err(err::NAME_ALREADY_USED);
     }
     let ip = match interface.trim() {
         "" => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         "localhost" => IpAddr::V4(Ipv4Addr::LOCALHOST),
-        other => other.parse().map_err(|_| err::INVALID_VALUE)?,
+        // as in SHALL, an interface that is not an IP address means all interfaces
+        other => other.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
     };
     let default_callbacks = state.default_callbacks;
     let ctx = state
@@ -751,65 +745,52 @@ struct Request {
     id: u64,
     action: c_int,
     name: String,
+    /// The value of a `change`, the argument of a `do`.
     value: Option<crate::variant::Node>,
-    hint: Option<crate::variant::Node>,
 }
 
-/// Takes the next polled request of a context. `fits` decides, given the request,
-/// whether the caller's buffers are large enough; if not, the request stays queued (and
-/// can still be answered by its id).
-fn next_request(
-    context: &str,
-    fits: impl FnOnce(&Request) -> bool,
-) -> Result<(Request, bool), c_int> {
+/// Takes the next polled request of a context; from now on it waits for its answer.
+fn next_request(context: &str) -> Result<Request, c_int> {
     let mut state = initialized()?;
     let ctx = state
         .contexts
         .get_mut(context)
         .ok_or(err::INVALID_CONTEXT_ID)?;
-    let (id, pending) = ctx.queue.front().ok_or(err::NO_DATA)?;
+    let (id, pending) = ctx.queue.pop_front().ok_or(err::NO_DATA)?;
     let request = Request {
-        id: *id,
+        id,
         action: pending.action,
         name: format!("{}:{}:{}", pending.node, pending.module, pending.accessible),
         value: pending.value.clone(),
-        hint: pending.hint.clone(),
     };
-    let fits = fits(&request);
-    if fits && let Some((id, pending)) = ctx.queue.pop_front() {
-        state.handed_out.insert(id, pending);
-    }
-    Ok((request, fits))
+    state.handed_out.insert(id, pending);
+    Ok(request)
 }
 
-/// The capacity of a caller's buffer from its `int*` size argument.
-///
-/// # Safety
-/// `size` must be NULL or valid for reads.
-unsafe fn capacity(size: *const c_int) -> usize {
-    if size.is_null() {
-        return 0;
-    }
-    // SAFETY: non-NULL and readable per the caller's contract
-    usize::try_from(unsafe { size.read() }).unwrap_or(0)
-}
-
-/// Writes `data` to a caller's buffer and its needed size to `size`.
+/// Writes `data` to a caller's buffer of `*size` bytes, NUL-terminated and cut if
+/// needed, and sets `*size` to the length of `data` (without NUL), as SHALL does.
+/// Returns whether it fit.
 ///
 /// # Safety
 /// `buffer` must be NULL or valid for writes of `*size` bytes; `size` NULL or valid.
-unsafe fn write_text(data: &[u8], buffer: *mut c_char, size: *mut c_int) {
+unsafe fn write_text(data: &[u8], buffer: *mut c_char, size: *mut c_int) -> bool {
     // SAFETY: forwarded caller contract
     unsafe {
-        let capacity = capacity(size);
+        let capacity = if size.is_null() {
+            0
+        } else {
+            usize::try_from(size.read()).unwrap_or(0)
+        };
         copy_out(data, buffer, capacity);
-        put(size, c_int::try_from(data.len() + 1).unwrap_or(c_int::MAX));
+        put(size, c_int::try_from(data.len()).unwrap_or(c_int::MAX));
+        data.len() < capacity
     }
 }
 
 /// Hands out the next polled request of a context: its id, action, name
 /// (`node:module:accessible`) and, as a new handle the caller destroys, the value of a
-/// `change`, the argument of a `do`, or a value of the parameter's type for a `read`.
+/// `change` or the argument of a `do` (NULL for a `read`). A name buffer that is too
+/// small gives `SECoP_S_WARNING_BUFFER_TOO_SMALL`; the request is handed out anyway.
 ///
 /// # Safety
 /// Pointers must be NULL or valid; `szParameter` for `*piParameterSize` bytes.
@@ -824,26 +805,19 @@ pub unsafe extern "C" fn SECoP_S_getStoredCommand(
 ) -> c_int {
     guard(err::INTERNAL, || {
         // SAFETY: forwarded caller contract
-        let (context, name_cap) = unsafe { (context_id(szContextID), capacity(piParameterSize)) };
-        let (request, fits) = match next_request(&context, |r| r.name.len() < name_cap) {
+        let context = unsafe { context_id(szContextID) };
+        let request = match next_request(&context) {
             Ok(r) => r,
             Err(e) => return e,
         };
-        let value = if fits {
-            request
-                .value
-                .or(request.hint)
-                .map_or(std::ptr::null_mut(), new_handle)
-        } else {
-            std::ptr::null_mut()
-        };
+        let value = request.value.map_or(std::ptr::null_mut(), new_handle);
         // SAFETY: forwarded caller contract
-        unsafe {
+        let fits = unsafe {
             put(pllId, request.id);
             put(piAction, request.action);
-            write_text(request.name.as_bytes(), szParameter, piParameterSize);
             put(ppValue, value);
-        }
+            write_text(request.name.as_bytes(), szParameter, piParameterSize)
+        };
         if fits {
             err::SUCCESS
         } else {
@@ -870,32 +844,24 @@ pub unsafe extern "C" fn SECoP_S_getStoredCommand2(
 ) -> c_int {
     guard(err::INTERNAL, || {
         // SAFETY: forwarded caller contract
-        let (context, name_cap, value_cap) = unsafe {
-            (
-                context_id(szContextID),
-                capacity(piParameterSize),
-                capacity(piValueSize),
-            )
-        };
-        let text = |r: &Request| {
-            r.value
-                .as_ref()
-                .map(|v| serde_json::to_vec(&v.export_value()).unwrap_or_default())
-                .unwrap_or_default()
-        };
-        let (request, fits) = match next_request(&context, |r| {
-            r.name.len() < name_cap && text(r).len() < value_cap
-        }) {
+        let context = unsafe { context_id(szContextID) };
+        let request = match next_request(&context) {
             Ok(r) => r,
             Err(e) => return e,
         };
+        let text = request
+            .value
+            .as_ref()
+            .map(|v| serde_json::to_vec(&v.export_value()).unwrap_or_default())
+            .unwrap_or_default();
         // SAFETY: forwarded caller contract
-        unsafe {
+        let fits = unsafe {
             put(pllId, request.id);
             put(piAction, request.action);
-            write_text(request.name.as_bytes(), szParameter, piParameterSize);
-            write_text(&text(&request), szValue, piValueSize);
-        }
+            let name = write_text(request.name.as_bytes(), szParameter, piParameterSize);
+            let value = write_text(&text, szValue, piValueSize);
+            name && value
+        };
         if fits {
             err::SUCCESS
         } else {
@@ -959,30 +925,21 @@ fn answer(
     sigma: Option<Json>,
     t: f64,
 ) -> Result<c_int, c_int> {
-    let pending: Option<Pending> = {
-        let mut state = initialized()?;
-        let issued = id != 0 && id <= state.next_id;
-        let pending = state.handed_out.remove(&id).or_else(|| {
-            state.contexts.values_mut().find_map(|c| {
-                let i = c.queue.iter().position(|(i, _)| *i == id)?;
-                c.queue.remove(i).map(|(_, p)| p)
-            })
-        });
-        if pending.is_none() {
-            // timed out (or answered) before, or never handed out
-            return Err(if issued { err::TIMEOUT } else { err::NO_DATA });
-        }
-        pending
-    };
+    // unknown: never handed out, answered before, or timed out
+    let pending: Pending = initialized()?
+        .handed_out
+        .remove(&id)
+        .ok_or(err::INVALID_NAME)?;
     let answer = Answer {
         code,
         value,
         sigma,
         t,
     };
-    if pending.is_some_and(|p| p.reply.send(answer).is_ok()) {
-        Ok(err::SUCCESS)
-    } else {
-        Err(err::TIMEOUT)
-    }
+    // the request may have timed out meanwhile
+    pending
+        .reply
+        .send(answer)
+        .map(|()| err::SUCCESS)
+        .map_err(|_| err::INVALID_NAME)
 }

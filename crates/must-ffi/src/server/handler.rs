@@ -202,7 +202,6 @@ impl ShallModule {
         action: c_int,
         accessible: &str,
         value: Option<variant::Node>,
-        hint: Option<variant::Node>,
     ) -> Result<Answer, SecopError> {
         let (reply, answer) = oneshot::channel();
         let id = state::enqueue(
@@ -213,7 +212,6 @@ impl ShallModule {
                 accessible: accessible.to_owned(),
                 action,
                 value,
-                hint,
                 reply,
             },
         )
@@ -258,8 +256,7 @@ impl ModuleHandler for ShallModule {
             let (name, value) = (full_name.clone(), proto.clone());
             blocking(move || call_getset(getter, &name, value, true)).await?
         } else {
-            self.request(action::READ, parameter, None, Some(proto.clone()))
-                .await?
+            self.request(action::READ, parameter, None).await?
         };
         answer.reading(info, parameter)
     }
@@ -285,9 +282,7 @@ impl ModuleHandler for ShallModule {
             let name = full_name.clone();
             blocking(move || call_getset(setter, &name, node, false)).await?
         } else {
-            let mut answer = self
-                .request(action::CHANGE, parameter, Some(node), Some(proto.clone()))
-                .await?;
+            let mut answer = self.request(action::CHANGE, parameter, Some(node)).await?;
             // an answer without value confirms the requested one
             answer.value.get_or_insert(json);
             answer
@@ -326,8 +321,7 @@ impl ModuleHandler for ShallModule {
             let argument = argument.unwrap_or_else(null);
             blocking(move || call_function(function, &name, argument, result)).await?
         } else {
-            self.request(action::DO, command, argument, result_type.clone())
-                .await?
+            self.request(action::DO, command, argument).await?
         };
         answer.check(command)?;
         let json = answer.value.clone().unwrap_or(Json::Null);
