@@ -64,5 +64,6 @@ pub mod server {
         pub fn ctest_server_missing_functions() -> c_int;
         pub fn ctest_server_polling(port: c_ushort) -> c_int;
         pub fn ctest_server_poll_step(step: c_int) -> c_int;
+        pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
     }
 }

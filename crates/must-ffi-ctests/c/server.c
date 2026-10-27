@@ -500,3 +500,21 @@ int ctest_server_poll_step(int step)
         return __LINE__;
     }
 }
+
+/* --- stress */
+
+int ctest_server_stress_build(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "stress"));
+    OK(SECoP_S_createNode2("snode", "stress", "127.0.0.1", port, "stress"));
+    OK(SECoP_S_addModule("m", "stress"));
+    OK(SECoP_S_addPropertyString("description", "stressed module", "stress"));
+    OK(SECoP_S_addReadableParameter("value", NULL, "stress"));
+    OK(SECoP_S_addPropertyString("description", "value", "stress"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "stress"));
+    OK(SECoP_S_addWritableParameter("target", NULL, NULL, "stress"));
+    OK(SECoP_S_addPropertyString("description", "target", "stress"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "stress"));
+    CHECK(complete("stress") >= 0);
+    return 0;
+}
