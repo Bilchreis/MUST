@@ -22,7 +22,8 @@ in this order:
 2. `add-sec-node-server` – SEC node library for Rust applications (`must-server`, done)
 3. `add-shall-c-abi` – drop-in replacement for SHALL's C interface: libraries named
    `SHALLserver64`/`32` and `SHALLvariant64`/`32` exporting the same `SECoP_S_*` and
-   `SECoP_V_*` functions, for C and LabVIEW callers (`must-ffi`, in progress)
+   `SECoP_V_*` functions, for C and LabVIEW callers (`must-ffi`, done; manual LabVIEW
+   smoke test pending)
 4. `add-node-monitoring` – per-process monitoring endpoint for status, clients, traffic
    and logs
 5. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
