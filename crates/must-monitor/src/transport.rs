@@ -268,6 +268,41 @@ mod imp {
         Ok(Box::new(client))
     }
 
+    /// A SID given as text (full `S-1-...` or an SDDL alias such as `LA` or `SY`) as full
+    /// `S-1-...` text, for tests.
+    #[cfg(test)]
+    pub(super) fn full_sid(text: &str) -> io::Result<String> {
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSidToStringSidW, ConvertStringSidToSidW,
+        };
+        use windows_sys::Win32::Security::PSID;
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sid: PSID = std::ptr::null_mut();
+        // SAFETY: NUL-terminated wide string, valid out pointer
+        if unsafe { ConvertStringSidToSidW(wide.as_ptr(), &raw mut sid) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut out: *mut u16 = std::ptr::null_mut();
+        // SAFETY: valid SID from above, valid out pointer
+        let ok = unsafe { ConvertSidToStringSidW(sid, &raw mut out) };
+        // SAFETY: allocated by ConvertStringSidToSidW with LocalAlloc
+        unsafe { LocalFree(sid.cast()) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: NUL-terminated wide string allocated with LocalAlloc
+        let full = unsafe {
+            let mut n = 0;
+            while *out.add(n) != 0 {
+                n += 1;
+            }
+            let s = String::from_utf16_lossy(std::slice::from_raw_parts(out, n));
+            LocalFree(out.cast());
+            s
+        };
+        Ok(full)
+    }
+
     /// The pipe's DACL as SDDL, for tests.
     #[cfg(test)]
     pub(super) fn dacl_of(
@@ -326,10 +361,23 @@ mod imp {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_lock,
+    reason = "the guard serializes whole tests"
+)]
 mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
+
+    /// The endpoint name is per process (on Windows the pipe is created exclusively), so
+    /// tests that bind it run one at a time.
+    static BIND: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn bind_lock() -> std::sync::MutexGuard<'static, ()> {
+        BIND.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir =
@@ -346,6 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn bind_accept_connect() {
+        let _bind = bind_lock();
         let dir = temp_dir("roundtrip");
         let (mut listener, description) = Listener::bind(&dir).unwrap();
         let server = tokio::spawn(async move {
@@ -394,6 +443,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn pipe_only_for_the_user() {
+        let _bind = bind_lock();
         let dir = temp_dir("dacl");
         let (mut listener, description) = Listener::bind(&dir).unwrap();
         let EndpointDescription::Pipe { name } = &description else {
@@ -415,11 +465,14 @@ mod tests {
         assert!(dacl.starts_with("D:P"), "{dacl}");
         let entries: Vec<&str> = dacl.split('(').skip(1).collect();
         assert_ne!(entries.len(), 0);
+        // SDDL may abbreviate well-known SIDs (e.g. `LA` for the built-in administrator)
+        let system = imp::full_sid("SY").unwrap();
         for entry in entries {
             let trustee = entry.trim_end_matches(')').rsplit(';').next().unwrap();
+            let trustee = imp::full_sid(trustee).unwrap();
             assert!(
-                trustee == sid || trustee == "SY",
-                "unexpected trustee in {dacl}"
+                trustee == sid || trustee == system,
+                "unexpected trustee {trustee} in {dacl}"
             );
         }
         // wrong pid: refused
