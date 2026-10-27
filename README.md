@@ -19,11 +19,10 @@ in this order:
 
 1. `add-secop-data-types` – SECoP data types: datainfo, values, identifiers, parameter
    postfixes (crate `must-types`, done)
-2. `add-sec-node-server` – SEC node library for Rust applications (`must-server`, in
-   progress)
+2. `add-sec-node-server` – SEC node library for Rust applications (`must-server`, done)
 3. `add-shall-c-abi` – drop-in replacement for SHALL's C interface: libraries named
    `SHALLserver64`/`32` and `SHALLvariant64`/`32` exporting the same `SECoP_S_*` and
-   `SECoP_V_*` functions, for C and LabVIEW callers
+   `SECoP_V_*` functions, for C and LabVIEW callers (`must-ffi`, in progress)
 4. `add-node-monitoring` – per-process monitoring endpoint for status, clients, traffic
    and logs
 5. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
@@ -47,6 +46,9 @@ CI builds and tests on all three.
 |---|---|
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
+| `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |
+| `crates/must-ffi-variant` | `SHALLvariant64`/`32`, forwarding to `SHALLserver` |
+| `crates/must-ffi-ctests` | C conformance tests of the C interface |
 
 ## Building
 
@@ -59,6 +61,21 @@ A simulated temperature controller to try with any SECoP client (port 2055 by de
 ```bash
 cargo run --example simple_node
 ```
+
+## Replacing SHALL
+
+Build the SHALL-named libraries and their headers into `dist/<target>/`:
+
+```bash
+cargo xtask dist                                 # this machine's target
+cargo xtask dist --target i686-pc-windows-msvc   # 32-bit Windows, e.g. for 32-bit LabVIEW
+cargo xtask check                                # exports, dependencies, cross-library calls
+```
+
+Then put `SHALLserver` and `SHALLvariant` in place of SHALL's files (both in one folder)
+and remove SHALL's Qt libraries. C programs and LabVIEW VIs that use SHALL's C functions
+run unchanged; see [COMPATIBILITY.md](COMPATIBILITY.md) for the details and the
+differences to SHALL.
 
 The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.
 

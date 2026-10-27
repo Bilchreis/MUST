@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,10 +11,13 @@ repository = "https://github.com/Bilchreis/MUST"
 authors = ["Peter Braun"]
 
 [workspace.dependencies]
+must-server = { path = "crates/must-server" }
 must-types = { path = "crates/must-types" }
 async-trait = "0.1"
 base64 = "0.22"
+cc = "1"
 indexmap = "2"
+libloading = "0.9"
 proptest = "1"
 serde = "1"
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

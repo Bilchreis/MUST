@@ -30,7 +30,8 @@ pub const DEFAULT_MAX_LINE_LENGTH: usize = 1 << 20;
 /// Default limit for data buffered for one connection; see [`NodeBuilder::max_outgoing_bytes`].
 pub const DEFAULT_MAX_OUTGOING_BYTES: usize = 16 << 20;
 
-const NODE_PROPERTIES: &[&str] = &[
+/// Node properties defined by SECoP 2.0.
+pub const NODE_PROPERTIES: &[&str] = &[
     "equipment_id",
     "description",
     "firmware",
@@ -39,7 +40,8 @@ const NODE_PROPERTIES: &[&str] = &[
     "systems",
     "schemata",
 ];
-const MODULE_PROPERTIES: &[&str] = &[
+/// Module properties defined by SECoP 2.0.
+pub const MODULE_PROPERTIES: &[&str] = &[
     "description",
     "interface_classes",
     "features",
@@ -50,7 +52,8 @@ const MODULE_PROPERTIES: &[&str] = &[
     "implementation",
     "acquisition_channels",
 ];
-const PARAMETER_PROPERTIES: &[&str] = &[
+/// Parameter properties defined by SECoP 2.0.
+pub const PARAMETER_PROPERTIES: &[&str] = &[
     "description",
     "readonly",
     "group",
@@ -59,7 +62,9 @@ const PARAMETER_PROPERTIES: &[&str] = &[
     "checkable",
     "constant",
 ];
-const COMMAND_PROPERTIES: &[&str] = &["description", "group", "visibility", "meaning", "checkable"];
+/// Command properties defined by SECoP 2.0.
+pub const COMMAND_PROPERTIES: &[&str] =
+    &["description", "group", "visibility", "meaning", "checkable"];
 /// Keys set by the structure itself, not as properties.
 const STRUCTURAL_PROPERTIES: &[&str] = &["modules", "accessibles", "datainfo"];
 

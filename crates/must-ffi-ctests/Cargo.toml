@@ -1,0 +1,25 @@
+[package]
+name = "must-ffi-ctests"
+description = "C conformance tests of must's SHALL-compatible C ABI"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+must-ffi = { path = "../must-ffi" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[build-dependencies]
+cc.workspace = true
+
+[lints.rust]
+# calling the C tests needs an unsafe extern block
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

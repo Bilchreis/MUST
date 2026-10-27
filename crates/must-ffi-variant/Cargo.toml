@@ -1,0 +1,28 @@
+[package]
+name = "must-ffi-variant"
+description = "SHALL-compatible variant library of must (built as SHALLvariant32/64), forwarding to SHALLserver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libloading.workspace = true
+
+[lints.rust]
+# a C ABI needs unsafe code; every unsafe operation must still be marked
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+undocumented_unsafe_blocks = "warn"

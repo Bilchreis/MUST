@@ -40,7 +40,7 @@ The library SHALL build nodes like SHALL: `SECoP_S_createNode[2]` starts a node,
 - **THEN** each property lands on the item of its own context
 
 #### Scenario: Validation failure
-- **WHEN** `SECoP_S_nodeComplete` is called for a node whose module has no description
+- **WHEN** `SECoP_S_nodeComplete` is called for a node with a parameter without datainfo
 - **THEN** it returns an error code (e.g. `SECoP_S_ERROR_MISSING_MANDATORY`), the port is not opened, and `SECoP_S_showErrors` prints the problem
 
 ### Requirement: Warnings instead of failures
@@ -49,6 +49,10 @@ The library SHALL report recoverable problems as SHALL's positive warning codes 
 #### Scenario: Custom property without underscore
 - **WHEN** `SECoP_S_addPropertyString("myprop", "x", ctx)` is called on a module
 - **THEN** it returns `SECoP_S_WARNING_CUSTOM_PROPERTY` and, as in SHALL, the property is published under the given name `myprop`
+
+#### Scenario: Automatic defaults
+- **WHEN** a module, parameter or command has no description, or a command no datainfo
+- **THEN** `SECoP_S_nodeComplete` succeeds with `SECoP_S_WARNING_MISS_PROPERTIES`, using SHALL's defaults (`"module without description"`, `{"type":"command"}`)
 
 #### Scenario: Poll interval property
 - **WHEN** `SECoP_S_addPropertyDouble("pollinterval", 2.0, ctx)` is called on a module in callback mode
@@ -74,11 +78,11 @@ The library SHALL, when function pointers are disabled, queue each `read`, `chan
 
 #### Scenario: Small buffers
 - **WHEN** `SECoP_S_getStoredCommand2` is called with a name buffer too small for the accessible name
-- **THEN** it returns `SECoP_S_WARNING_BUFFER_TOO_SMALL`, writes a NUL-terminated prefix and reports the needed size
+- **THEN** it returns `SECoP_S_WARNING_BUFFER_TOO_SMALL`, hands the request out anyway, writes a NUL-terminated prefix and reports the name's length, as SHALL does
 
 #### Scenario: Unanswered request
 - **WHEN** a polled request is not answered within 60 s
-- **THEN** the client receives an error reply with `TimeoutError` and a later answer with that id returns an error code
+- **THEN** the client receives an error reply with `TimeoutError` and a later answer with that id returns `SECoP_S_ERROR_INVALID_NAME`
 
 ### Requirement: Pushed updates
 The library SHALL send values passed to `SECoP_S_updateParameter[2]` (name `node:module:parameter`, value, optional sigma, timestamp or NaN) as updates to activated clients and store them for initial updates.
