@@ -66,10 +66,12 @@ pub(crate) async fn serve(
                 }
                 let line = out.line.trim_end_matches('\n');
                 debug!(id, "> {line}");
-                hub.emit(NodeEvent::MessageSent {
-                    id,
-                    line: line.into(),
-                });
+                if hub.observed() {
+                    hub.emit(NodeEvent::MessageSent {
+                        id,
+                        line: line.into(),
+                    });
+                }
             }
             let _ = writer.shutdown().await;
         })
@@ -163,10 +165,12 @@ impl Connection {
     async fn handle(&mut self, line: &str) {
         if !line.is_empty() {
             debug!(id = self.id, "< {line}");
-            self.hub.emit(NodeEvent::MessageReceived {
-                id: self.id,
-                line: line.into(),
-            });
+            if self.hub.observed() {
+                self.hub.emit(NodeEvent::MessageReceived {
+                    id: self.id,
+                    line: line.into(),
+                });
+            }
         }
         match parse_request(line) {
             Request::Empty => {}

@@ -8,7 +8,7 @@
 
 ## 2. Endpoint
 
-- [ ] 2.1 Add `NodeEvent::ClientActivated`/`ClientDeactivated` (with the module or `None` for the whole node) to `must-server`; verify a runtime test sees both for `activate t1`/`deactivate t1` and for a global `activate`
+- [x] 2.1 Add `NodeEvent::ClientActivated`/`ClientDeactivated` (with the module or `None` for the whole node) to `must-server`; verify a runtime test sees both for `activate t1`/`deactivate t1` and for a global `activate`
 
 - [ ] 2.2 Implement the transport seam (`Listener` yielding byte streams, `connect(&EndpointDescription)`) with the Unix domain socket (0600, in the 0700 registry directory) and the Windows named pipe (user-only security descriptor, first-instance flag, server pid check); verify the other-user scenarios (Linux: a test that changes to another uid where CI allows it, otherwise checks the socket's and directory's permission bits; Windows: a test that reads the pipe's DACL) and the not-on-the-network scenario on all three targets
 - [ ] 2.3 Implement the hello with version negotiation and multiple read-only monitors over the seam; verify the no-hello, version-mismatch and two-monitors scenarios

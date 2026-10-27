@@ -77,7 +77,7 @@ mod protocol;
 mod report;
 mod runtime;
 
-pub use events::{ConnectionId, NodeEvent};
+pub use events::{ConnectionId, LogLevel, NodeEvent};
 
 pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
 pub use model::{

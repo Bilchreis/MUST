@@ -14,12 +14,12 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::Hub;
 use super::actor::{ActorHandle, Job, spawn_actor};
 use super::connection;
-use crate::events::NodeEvent;
+use crate::events::{LogLevel, NodeEvent};
 use crate::handler::Reading;
 use crate::model::Node;
 
@@ -139,7 +139,11 @@ async fn accept_loop(
                     stop.clone(),
                 ));
             }
-            Err(e) => warn!(error = %e, "accepting a connection failed"),
+            Err(e) => hub.log(
+                LogLevel::Warn,
+                None,
+                format!("accepting a connection failed: {e}"),
+            ),
         }
     }
     // the listener is dropped here, closing the port

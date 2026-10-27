@@ -2,8 +2,8 @@
 
 ## 1. Node log records as events
 
-- [ ] 1.1 Add `NodeEvent::Log { level, module, message }` and an internal helper in `must-server` that emits both the `tracing` record and the event; switch the node's `info!`/`warn!`/`error!` calls in `runtime/` to it; verify a runtime test sees a `Log` event with module `t1` when a handler of `t1` fails, and that existing tests still pass
-- [ ] 1.2 Add the published message to `NodeEvent::Updated` (`line`, built once by the hub for all clients); verify a runtime test with two activated clients sees one `Updated` event per update carrying the same text both clients receive
+- [x] 1.1 Add `NodeEvent::Log { level, module, message }` and an internal helper in `must-server` that emits both the `tracing` record and the event; switch the node's `info!`/`warn!`/`error!` calls in `runtime/` to it; verify a runtime test sees a `Log` event with module `t1` when a handler of `t1` fails, and that existing tests still pass
+- [x] 1.2 Add the published message to `NodeEvent::Updated` (`line`, built once by the hub for all clients); verify a runtime test with two activated clients sees one `Updated` event per update carrying the same text both clients receive
 
 ## 2. Configuration and layout
 

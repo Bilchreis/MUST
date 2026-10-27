@@ -20,14 +20,18 @@ use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
 use serde_json::Value as Json;
 use tokio::sync::{Notify, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::debug;
 
-use crate::events::{ConnectionId, NodeEvent};
+use crate::events::{ConnectionId, LogLevel, NodeEvent};
 use crate::handler::Reading;
 use crate::model::NodeModel;
 use crate::protocol::{self, now};
 
 pub use node::{RunningNode, StartError};
+
+/// `tracing` target of the records a node logs about itself (also sent as
+/// [`NodeEvent::Log`]), so that log collectors can tell them apart.
+pub const NODE_LOG_TARGET: &str = "must_server::node";
 
 /// The last known state of a parameter.
 #[derive(Debug, Clone)]
@@ -151,6 +155,36 @@ impl Hub {
         let _ = self.events.send(event);
     }
 
+    /// Whether anyone listens to the node's events; lets callers skip building events.
+    pub(crate) fn observed(&self) -> bool {
+        self.events.receiver_count() > 0
+    }
+
+    /// Logs a record about this node: to `tracing` (target `must_server::node`, with the
+    /// node and module as fields) and as a [`NodeEvent::Log`].
+    pub(crate) fn log(&self, level: LogLevel, module: Option<&str>, message: String) {
+        let node = self.model.equipment_id.as_str();
+        let m = module.unwrap_or_default();
+        match level {
+            LogLevel::Error => {
+                tracing::error!(target: NODE_LOG_TARGET, node, module = m, "{message}");
+            }
+            LogLevel::Warn => {
+                tracing::warn!(target: NODE_LOG_TARGET, node, module = m, "{message}");
+            }
+            LogLevel::Info => {
+                tracing::info!(target: NODE_LOG_TARGET, node, module = m, "{message}");
+            }
+        }
+        if self.observed() {
+            self.emit(NodeEvent::Log {
+                level,
+                module: module.map(str::to_owned),
+                message,
+            });
+        }
+    }
+
     // --- connections
 
     pub(crate) fn register(
@@ -228,6 +262,11 @@ impl Hub {
             }
         }
         conn.push(protocol::activation(true, module).into(), false);
+        drop(state);
+        self.emit(NodeEvent::ClientActivated {
+            id,
+            module: module.map(str::to_owned),
+        });
     }
 
     /// Deactivates updates for one or all modules and queues the `inactive` reply.
@@ -246,6 +285,11 @@ impl Hub {
             }
         }
         conn.push(protocol::activation(false, module).into(), false);
+        drop(state);
+        self.emit(NodeEvent::ClientDeactivated {
+            id,
+            module: module.map(str::to_owned),
+        });
     }
 
     // --- values
@@ -280,7 +324,11 @@ impl Hub {
             .get(module)
             .and_then(|m| m.parameter(parameter))
         else {
-            error!(module, parameter, "update for an unknown parameter ignored");
+            self.log(
+                LogLevel::Error,
+                Some(module),
+                format!("update for unknown parameter `{parameter}` ignored"),
+            );
             return Err(SecopError::new(
                 ErrorClass::InternalError,
                 format!("`{module}:{parameter}` is not a parameter"),
@@ -289,7 +337,11 @@ impl Hub {
         let json = match param.datainfo.encode(&reading.value) {
             Ok(json) => json,
             Err(e) => {
-                error!(module, parameter, error = %e, "value does not fit the parameter's datainfo");
+                self.log(
+                    LogLevel::Error,
+                    Some(module),
+                    format!("value of `{parameter}` does not fit its datainfo: {e}"),
+                );
                 let error = SecopError::new(
                     ErrorClass::InternalError,
                     format!("the node produced an invalid value: {e}"),
@@ -323,9 +375,10 @@ impl Hub {
             .and_then(|m| m.parameter(parameter))
             .is_some();
         if !known {
-            error!(
-                module,
-                parameter, "error update for an unknown parameter ignored"
+            self.log(
+                LogLevel::Error,
+                Some(module),
+                format!("error update for unknown parameter `{parameter}` ignored"),
             );
             return;
         }
@@ -335,6 +388,7 @@ impl Hub {
     fn store(&self, module: &str, parameter: &str, entry: CacheEntry) {
         let line: Arc<str> = update_line(module, parameter, &entry).into();
         let limit = self.model.options.max_outgoing_bytes;
+        let mut closed = Vec::new();
         {
             let mut state = self.lock();
             state
@@ -351,19 +405,29 @@ impl Hub {
                     conn.push(line.clone(), true);
                 }
             }
-            for id in overflowing {
-                if let Some(conn) = state.conns.remove(&id) {
-                    warn!(peer = %conn.peer, limit, "closing connection: too much unread data");
+            for id in &overflowing {
+                if let Some(conn) = state.conns.remove(id) {
                     conn.stats.overflowed.store(true, Ordering::Release);
                     conn.close.cancel();
+                    closed.push(conn.peer);
                 }
             }
         }
+        for peer in closed {
+            self.log(
+                LogLevel::Warn,
+                None,
+                format!("closing connection of {peer}: more than {limit} bytes of unread updates"),
+            );
+        }
         debug!(module, parameter, "updated");
-        self.emit(NodeEvent::Updated {
-            module: module.to_owned(),
-            parameter: parameter.to_owned(),
-        });
+        if self.observed() {
+            self.emit(NodeEvent::Updated {
+                module: module.to_owned(),
+                parameter: parameter.to_owned(),
+                line: line.trim_end_matches('\n').into(),
+            });
+        }
     }
 }
 
