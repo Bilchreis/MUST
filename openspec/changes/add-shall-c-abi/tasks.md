@@ -31,7 +31,7 @@
 
 - [ ] 5.1 Port the scenarios of SHALL's `tst_contextid.cpp` and `tst_protocol.cpp` to C tests against must (adapting expected wire output to SECoP 2.0); verify they pass on all three targets
 - [x] 5.2 Add a runtime-binding test (`LoadLibrary`/`dlopen` + symbol lookup by name, cdecl calls) for `SHALLserver32.dll` on i686; verify it passes
-- [ ] 5.3 Write `COMPATIBILITY.md` (differences to SHALL: SECoP 2.0 wire protocol, removed C++ API, error class mapping, status TUI instead of Qt window) and a README section on replacing SHALL; verify the documented replacement steps work with the C example
+- [x] 5.3 Write `COMPATIBILITY.md` (differences to SHALL: SECoP 2.0 wire protocol, removed C++ API, error class mapping, status TUI instead of Qt window) and a README section on replacing SHALL; verify the documented replacement steps work with the C example
 - [ ] 5.4 Document a manual LabVIEW smoke test (32-bit and 64-bit) with a minimal VI calling init, create node, add module/parameter, complete, poll and answer; verify it once on a Windows machine with LabVIEW and record the result in the PR
 
 ## Workflow follow-up
