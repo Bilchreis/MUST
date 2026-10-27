@@ -212,7 +212,12 @@ async fn large_reply_while_updates_are_queued() {
     });
     c.send("do t1:big").await;
     let done = loop {
-        let line = c.line().await;
+        // reading the 50 MiB line can take more than the usual 5 s on slow runners
+        // (debug build, 32-bit Windows)
+        let line = c
+            .try_line(Duration::from_secs(60))
+            .await
+            .expect("the reply within 60 s");
         if line.starts_with("done ") {
             break line;
         }
