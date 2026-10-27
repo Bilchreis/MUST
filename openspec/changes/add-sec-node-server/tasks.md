@@ -12,6 +12,7 @@
 - [x] 2.3 Implement interface-class rules (Readable/Writable/Drivable) and the status tuple shape check; verify the interface-class and status scenarios pass
 - [x] 2.4 Implement module-level postfix rules using `must-types` postfix helpers (parent present, datainfo match, `_limits` vs `_min`/`_max` exclusivity); verify the postfix scenarios pass
 - [x] 2.5 Implement structure report generation keeping declaration order; verify a golden-file test against a hand-written expected report
+- [x] 2.6 Restrict interface class names to the SECoP 2.0 classes and `_` names, and publish default `features` (`[]`) and `implementation` (handler type name) that applications can override; verify the interface-class-names and default-module-properties scenarios pass
 
 ## 3. Protocol
 
@@ -32,7 +33,8 @@
 
 - [x] 5.1 Add `examples/simple_node.rs` (a simulated temperature Drivable) and document the crate API with rustdoc; verify `cargo run --example simple_node` serves a node that a SECoP client (e.g. frappy-gui or netcat) can `describe`, `activate` and `change`
 - [ ] 5.2 Add an interoperability test that runs the example node and drives it with the Frappy Python client in CI (Linux job); verify it passes
-- [ ] 5.3 Run the full CI matrix (Linux x86_64, Windows x86_64, Windows i686); verify all jobs are green
+- [ ] 5.3 Add secop-checker (the code of SampleEnvironment/secop-checker#1, pinned) to the CI interop job, checking the example node's `describe` and failing on any ERROR; verify the job reports no errors
+- [ ] 5.4 Run the full CI matrix (Linux x86_64, Windows x86_64, Windows i686); verify all jobs are green
 
 ## Workflow follow-up
 

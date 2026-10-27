@@ -58,6 +58,11 @@ Split at the first space (action) and the next space (specifier); the rest is da
 ### Constant parameters
 The spec says a constant parameter "can neither be read nor written". must answers a `read` with the constant value (no handler call) and a `change` with `ReadOnly`, and leaves it out of initial updates. Answering reads is harmless and friendlier to clients that read every parameter.
 
+### Checked against secop-checker
+The `describe` output of the example node is checked in CI with secop-checker (the code of SampleEnvironment/secop-checker#1, pinned), which validates against the spec's machine-readable schema. Two rules follow from it:
+- **Interface class names:** only the seven SECoP 2.0 classes or custom `_` names are accepted; anything else is a build error, since the checker reports it as an error and clients cannot know it.
+- **`features` and `implementation`:** the prose lists both as optional module properties, but `schema/properties.yaml` (identical in the pinned spec and the checker) gives them no `optional: true`, so the checker requires them. must publishes them always: `features` defaults to `[]`, `implementation` to `std::any::type_name` of the module's handler; values set by the application replace the defaults. This satisfies both readings without work for applications or ported SHALL code.
+
 ### Startup reads and the cache
 Initial updates on `activate` come from the cache only. So that every parameter has a value to send, the node reads each non-constant, non-cached parameter once in the background when it starts (option `initial_read`, default on); parameters can also be seeded with `initial_value`. A parameter without a value yet is left out of the initial updates.
 

@@ -331,14 +331,85 @@ fn writable_needs_writable_target() {
 }
 
 #[test]
-fn unknown_class_before_base_class() {
-    let module = sensor("t1").interface_classes(["MyHeater", "Readable"]);
+fn custom_class_before_base_class() {
+    let module = sensor("t1").interface_classes(["_MyHeater", "Readable"]);
     assert!(node().module(module).unwrap().build().is_ok());
     let module = Module::new("t1", "x").interface_classes(["Readable"]);
     assert_eq!(
         kinds(node().module(module).unwrap()).len(),
         2,
         "value and status missing"
+    );
+}
+
+#[test]
+fn non_standard_class_without_underscore() {
+    let module = sensor("t1").interface_classes(["MyHeater", "Readable"]);
+    let e = errors(node().module(module).unwrap());
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert_eq!(e[0].path, "t1.interface_classes");
+    assert_eq!(
+        e[0].kind,
+        ModelErrorKind::UnknownInterfaceClass("MyHeater".into())
+    );
+    assert!(e[0].to_string().contains("`_MyHeater`"), "{}", e[0]);
+    // every SECoP 2.0 class is accepted
+    for class in INTERFACE_CLASSES {
+        let module = sensor("t1").interface_classes([*class, "Readable"]);
+        assert!(node().module(module).unwrap().build().is_ok(), "{class}");
+    }
+}
+
+// --- default module properties
+
+struct MyDriver;
+
+#[async_trait::async_trait]
+impl ModuleHandler for MyDriver {}
+
+#[test]
+fn default_module_properties() {
+    let built = node()
+        .module(sensor("t1").handler(MyDriver))
+        .unwrap()
+        .build()
+        .unwrap();
+    let t1 = &built.structure_report()["modules"]["t1"];
+    assert_eq!(t1["features"], json!([]));
+    assert_eq!(
+        t1["implementation"],
+        json!("must_server::model::tests::MyDriver")
+    );
+
+    // also through an `Arc<dyn ModuleHandler>`
+    let shared: Arc<dyn ModuleHandler> = Arc::new(MyDriver);
+    let built = node()
+        .module(sensor("t1").handler_arc(shared))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(
+        built.structure_report()["modules"]["t1"]["implementation"],
+        json!("must_server::model::tests::MyDriver")
+    );
+}
+
+#[test]
+fn application_values_win() {
+    let module = sensor("t1")
+        .features(["HasOffset"])
+        .implementation("lakeshore.Model336")
+        .handler(MyDriver);
+    let built = node().module(module).unwrap().build().unwrap();
+    let t1 = &built.structure_report()["modules"]["t1"];
+    assert_eq!(t1["features"], json!(["HasOffset"]));
+    assert_eq!(t1["implementation"], json!("lakeshore.Model336"));
+    // the same through the generic property setter
+    let module = sensor("t1").property("implementation", "x").unwrap();
+    let built = node().module(module).unwrap().build().unwrap();
+    assert_eq!(
+        built.structure_report()["modules"]["t1"]["implementation"],
+        json!("x")
     );
 }
 
@@ -423,8 +494,8 @@ fn postfix_datainfo_must_match_parent() {
             "e",
         ))
         .unwrap();
-    let node = node().module(module).unwrap().build().unwrap();
-    let t1 = &node.model.modules["t1"];
+    let built = node().module(module).unwrap().build().unwrap();
+    let t1 = &built.model.modules["t1"];
     let names: Vec<&str> = t1
         .parameter("target")
         .unwrap()
@@ -454,7 +525,7 @@ fn string_parent_cannot_have_limits() {
 
 #[test]
 fn structure_report_golden() {
-    let node = node()
+    let built = node()
         .firmware("must-0.1.0")
         .property("_site", "lab 3")
         .unwrap()
@@ -472,6 +543,8 @@ fn structure_report_golden() {
                 "description": "a temperature controller",
                 "interface_classes": ["Drivable"],
                 "group": "cryostat",
+                "features": [],
+                "implementation": "must_server::handler::NoHandler",
                 "accessibles": {
                     "value": {
                         "description": "temperature",
@@ -498,7 +571,7 @@ fn structure_report_golden() {
             }
         }
     });
-    let report = node.structure_report();
+    let report = built.structure_report();
     assert_eq!(report, expected);
     // declaration order is kept, also in the serialized text
     let text = report.to_string();

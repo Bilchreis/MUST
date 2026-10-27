@@ -132,7 +132,7 @@ fn build(
         "cryo",
         "simulated cryostat\n\nRamps the temperature towards the target.",
     )
-    .interface_classes(["TemperatureController", "Drivable"])
+    .interface_classes(["Drivable"])
     .parameter(Parameter::new(
         "value",
         kelvin.clone(),

@@ -90,6 +90,12 @@ impl Ctx {
 /// The node calls the handler of a module for one request at a time.
 #[async_trait]
 pub trait ModuleHandler: Send + Sync {
+    /// The module's `implementation` property unless the module sets one: by default the
+    /// Rust type name of the handler, e.g. `"simple_node::Handler"`.
+    fn implementation(&self) -> String {
+        std::any::type_name::<Self>().to_owned()
+    }
+
     /// Reads `parameter` from the hardware.
     async fn read(&self, ctx: &Ctx, parameter: &str) -> HandlerResult {
         let _ = ctx;

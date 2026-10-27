@@ -63,6 +63,17 @@ const COMMAND_PROPERTIES: &[&str] = &["description", "group", "visibility", "mea
 /// Keys set by the structure itself, not as properties.
 const STRUCTURAL_PROPERTIES: &[&str] = &["modules", "accessibles", "datainfo"];
 
+/// The interface classes defined by SECoP 2.0.
+pub const INTERFACE_CLASSES: &[&str] = &[
+    "Readable",
+    "Writable",
+    "Drivable",
+    "Communicator",
+    "AcquisitionController",
+    "AcquisitionChannel",
+    "Acquisition",
+];
+
 const VISIBILITIES: &[&str] = &[
     "www", "wwr", "ww-", "wrr", "wr-", "w--", "rrr", "rr-", "r--", "---", "user", "advanced",
     "expert",
@@ -144,6 +155,11 @@ pub enum ModelErrorKind {
         /// The `_min` or `_max` parameter.
         other: String,
     },
+    /// An interface class is neither defined by SECoP nor a custom `_` name.
+    #[error(
+        "`{0}` is not a SECoP interface class; custom classes start with an underscore, e.g. `_{0}`"
+    )]
+    UnknownInterfaceClass(String),
 }
 
 impl ModelError {
@@ -393,11 +409,26 @@ impl Module {
         }
     }
 
-    /// Sets `interface_classes`, highest class first, e.g. `["TemperatureController",
-    /// "Drivable"]`.
+    /// Sets `interface_classes`, highest class first, ending with a SECoP base class,
+    /// e.g. `["Drivable"]` or `["_MyController", "Drivable"]`. Names other than the SECoP
+    /// classes ([`INTERFACE_CLASSES`]) must start with an underscore.
     pub fn interface_classes<'a>(mut self, classes: impl IntoIterator<Item = &'a str>) -> Self {
         let classes: Vec<Json> = classes.into_iter().map(Json::from).collect();
         self.props.set("interface_classes", classes.into());
+        self
+    }
+
+    /// Sets `features`; published as `[]` if not set.
+    pub fn features<'a>(mut self, features: impl IntoIterator<Item = &'a str>) -> Self {
+        let features: Vec<Json> = features.into_iter().map(Json::from).collect();
+        self.props.set("features", features.into());
+        self
+    }
+
+    /// Sets `implementation`, e.g. a driver name; published as the handler's
+    /// [`ModuleHandler::implementation`] if not set.
+    pub fn implementation(mut self, implementation: &str) -> Self {
+        self.props.set("implementation", implementation.into());
         self
     }
 
@@ -837,11 +868,20 @@ fn finish_module(m: Module) -> ModuleModel {
             (name, model)
         })
         .collect();
+    let handler = m.handler.unwrap_or_else(|| Arc::new(NoHandler));
+    // required by the spec's machine-readable schema, optional in its prose: always publish
+    let mut props = m.props.values;
+    props
+        .entry("features".into())
+        .or_insert_with(|| Json::Array(Vec::new()));
+    props
+        .entry("implementation".into())
+        .or_insert_with(|| handler.implementation().into());
     ModuleModel {
         name: m.name,
-        props: m.props.values,
+        props,
         accessibles,
-        handler: m.handler.unwrap_or_else(|| Arc::new(NoHandler)),
+        handler,
     }
 }
 
@@ -901,7 +941,22 @@ impl Validator {
                 path,
                 ModelErrorKind::MissingProperty("interface_classes"),
             )),
-            Some(_) => self.check_string_list(p, path, "interface_classes"),
+            Some(classes) => {
+                self.check_string_list(p, path, "interface_classes");
+                let names = classes
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Json::as_str);
+                for name in names {
+                    if !INTERFACE_CLASSES.contains(&name) && !name.starts_with('_') {
+                        self.error(ModelError::new(
+                            format!("{path}.interface_classes"),
+                            ModelErrorKind::UnknownInterfaceClass(name.to_owned()),
+                        ));
+                    }
+                }
+            }
         }
         self.check_string_list(p, path, "features");
         for key in ["implementor", "implementation"] {
