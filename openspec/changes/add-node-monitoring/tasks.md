@@ -8,12 +8,15 @@
 
 ## 2. Endpoint
 
-- [ ] 2.1 Implement the loopback listener, token-checked hello with version negotiation and multiple read-only monitors; verify the wrong-token, version-mismatch and two-monitors scenarios
-- [ ] 2.2 Implement the per-process `Monitor` singleton started and stopped with the first/last node in `must-server`, honoring `MUST_MONITOR=0`; verify the one-endpoint, last-node-stops and disabled scenarios
-- [ ] 2.3 Implement snapshot assembly from node models and module caches (no hardware reads); verify the snapshot-content scenario and that no handler read happens during a snapshot
-- [ ] 2.4 Implement event fan-out from `NodeEvent` with bounded queues, `lagged`, per-node traffic subscription, 4 KiB truncation and per-second counters; verify the traffic, disconnect, not-subscribed, long-describe and stalled-monitor scenarios (latency check: node reply time unchanged within tolerance while a monitor is stalled)
-- [ ] 2.5 Implement coalesced parameter updates (per-monitor latest-value map flushed every interval, interval from `hello`) and the per-node `subscribe_updates` "all" mode; verify the fast-polled-parameter, last-value-not-lost and every-update scenarios
-- [ ] 2.6 Implement the `tracing` layer with a 2000-record ring buffer and node/module attribution, and the default subscriber installation; verify the handler-error-logged scenario and that an existing global subscriber is not replaced
+- [ ] 2.1 Add `NodeEvent::ClientActivated`/`ClientDeactivated` (with the module or `None` for the whole node) to `must-server`; verify a runtime test sees both for `activate t1`/`deactivate t1` and for a global `activate`
+
+- [ ] 2.2 Implement the loopback listener, token-checked hello with version negotiation and multiple read-only monitors; verify the wrong-token, version-mismatch and two-monitors scenarios
+- [ ] 2.3 Implement the per-process `Monitor` singleton with its node registry (open with the first registered node, close with the last), Rust nodes registering when they start, honoring `MUST_MONITOR=0`; verify the one-endpoint, last-node-stops and disabled scenarios
+- [ ] 2.4 Register C ABI nodes from `SECoP_S_createNode` with their context ID, report `nodeComplete` results (failed with messages, or running) and remove them on `deleteNode`/`doneLibrary`; verify the C-ABI-node-being-built, nodeComplete-fails, fixed-and-completed and two-LabVIEW-contexts scenarios with C tests
+- [ ] 2.5 Implement snapshot assembly from node models and module caches (no hardware reads); verify the snapshot-content scenario and that no handler read happens during a snapshot
+- [ ] 2.6 Implement event fan-out from `NodeEvent` with bounded queues, `lagged`, per-node traffic subscription, 4 KiB truncation and per-second counters; verify the traffic, disconnect, not-subscribed, long-describe and stalled-monitor scenarios (latency check: node reply time unchanged within tolerance while a monitor is stalled)
+- [ ] 2.7 Implement coalesced parameter updates (per-monitor latest-value map flushed every interval, interval from `hello`) and the per-node `subscribe_updates` "all" mode; verify the fast-polled-parameter, last-value-not-lost and every-update scenarios
+- [ ] 2.8 Implement the `tracing` layer with a 2000-record ring buffer and node/module attribution, and the default subscriber installation; verify the handler-error-logged scenario and that an existing global subscriber is not replaced
 
 ## 3. Client library, docs and integration
 
