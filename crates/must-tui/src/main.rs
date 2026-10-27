@@ -2,6 +2,7 @@
 
 //! `must-tui`: shows all must SEC nodes running for the user. See the library crate.
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -70,6 +71,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // a TUI needs a terminal to draw in and read keys from (not a pipe or a file)
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        eprintln!("must-tui needs a terminal: run it in a terminal window.");
+        return ExitCode::FAILURE;
+    }
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)

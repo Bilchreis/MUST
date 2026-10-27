@@ -24,6 +24,8 @@ jobs:
   test:
     name: test ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # a hanging test must not block CI for hours
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +86,7 @@ jobs:
   dist:
     name: dist ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

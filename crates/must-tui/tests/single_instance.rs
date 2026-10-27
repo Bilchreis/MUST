@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Only one `must-tui` runs per user.
+//! Only one `must-tui` runs per user, and only in a terminal.
 
 use std::process::Command;
 
@@ -21,14 +21,14 @@ fn second_instance_exits_with_a_message() {
     assert!(message.contains("already running"), "{message}");
     assert!(second.stdout.is_empty(), "the terminal is not touched");
 
-    // once the first is gone, a new one may start (it then fails here only for lack of
-    // a terminal, after taking the lock)
+    // once the first is gone, a new one may start (here it then stops for lack of a
+    // terminal)
     drop(first);
     let third = Command::new(env!("CARGO_BIN_EXE_must-tui"))
         .env(must_monitor::registry::DIR_VARIABLE, &dir)
         .output()
         .unwrap();
     let message = String::from_utf8_lossy(&third.stderr);
-    assert!(!message.contains("already running"), "{message}");
+    assert!(message.contains("needs a terminal"), "{message}");
     let _ = std::fs::remove_dir_all(&dir);
 }
