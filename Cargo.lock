@@ -317,10 +317,12 @@ dependencies = [
 name = "must-ffi"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "must-server",
  "must-types",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

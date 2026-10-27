@@ -18,6 +18,8 @@ base64.workspace = true
 must-server.workspace = true
 must-types.workspace = true
 serde_json.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
 
 [lints.rust]
 # a C ABI needs unsafe code; every unsafe operation must still be marked

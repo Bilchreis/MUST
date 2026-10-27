@@ -155,8 +155,34 @@ mod tests {
 
     #[test]
     fn mapped_classes() {
-        assert_eq!(error_class(err::IS_BUSY), ErrorClass::IsBusy);
-        assert_eq!(error_class(err::COMMAND_FAILED), ErrorClass::HardwareError);
-        assert_eq!(error_class(err::NO_MEMORY), ErrorClass::InternalError);
+        // the design's mapping table
+        let table = [
+            (err::INVALID_MODULE, ErrorClass::NoSuchModule),
+            (err::INVALID_PARAMETER, ErrorClass::NoSuchParameter),
+            (err::INVALID_COMMAND, ErrorClass::NoSuchCommand),
+            (err::READONLY, ErrorClass::ReadOnly),
+            (err::INVALID_VALUE, ErrorClass::WrongType),
+            (err::OUT_OF_RANGE, ErrorClass::RangeError),
+            (err::NOT_IMPLEMENTED, ErrorClass::NotImplemented),
+            (err::TIMEOUT, ErrorClass::TimeoutError),
+            (err::COMM_FAILED, ErrorClass::CommunicationFailed),
+            (err::COMMAND_FAILED, ErrorClass::HardwareError),
+            (err::COMMAND_RUNNING, ErrorClass::CommandRunning),
+            (err::IS_BUSY, ErrorClass::IsBusy),
+            (err::IS_ERROR, ErrorClass::IsError),
+            (err::DISABLED, ErrorClass::Disabled),
+            (err::SYNTAX, ErrorClass::ProtocolError),
+            (err::INTERNAL, ErrorClass::InternalError),
+        ];
+        for (code, class) in table {
+            assert_eq!(error_class(code), class, "code {code}");
+        }
+        for code in -40..0 {
+            if !table.iter().any(|(c, _)| *c == code) {
+                assert_eq!(error_class(code), ErrorClass::InternalError, "code {code}");
+            }
+        }
+        let error = to_secop(err::IS_BUSY, "target");
+        assert!(error.to_string().contains("target"));
     }
 }

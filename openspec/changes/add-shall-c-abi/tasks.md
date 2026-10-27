@@ -16,15 +16,15 @@
 
 ## 3. Server ABI: building nodes
 
-- [ ] 3.1 Implement global state with context IDs, `SECoP_S_initLibrary`/`doneLibrary`/`setManyThreads`/`getErrorString`, and the shared runtime lifecycle; verify the initialization and done-for-one-context scenarios as C tests
-- [ ] 3.2 Implement focus-based building (`createNode[2]`, `deleteNode`, `addModule`, `addCommand`, `add*Parameter`, `addProperty*`, `setAddFocus`) with warning codes, and `nodeComplete`/`showErrors` with error mapping; verify the building, two-contexts, warnings and validation-failure scenarios pass
+- [x] 3.1 Implement global state with context IDs, `SECoP_S_initLibrary`/`doneLibrary`/`setManyThreads`/`getErrorString`, and the shared runtime lifecycle; verify the initialization and done-for-one-context scenarios as C tests
+- [x] 3.2 Implement focus-based building (`createNode[2]`, `deleteNode`, `addModule`, `addCommand`, `add*Parameter`, `addProperty*`, `setAddFocus`) with warning codes, and `nodeComplete`/`showErrors` with error mapping; verify the building, two-contexts, warnings and validation-failure scenarios pass
 
 ## 4. Server ABI: runtime
 
-- [ ] 4.1 Implement the callback-mode handler on the blocking pool, including `pollinterval`; verify the getter-callback, callbacks-from-any-thread and poll-interval scenarios pass
-- [ ] 4.2 Implement the polling-mode queue, `getStoredCommand[2]`, `putCommandAnswer[2]` and the 60 s timeout sweeper; verify the poll-and-answer, small-buffer and unanswered-request scenarios pass (timeout tested with a shortened test-only interval)
+- [x] 4.1 Implement the callback-mode handler on the blocking pool, including `pollinterval`; verify the getter-callback, callbacks-from-any-thread and poll-interval scenarios pass
+- [x] 4.2 Implement the polling-mode queue, `getStoredCommand[2]`, `putCommandAnswer[2]` and the 60 s timeout sweeper; verify the poll-and-answer, small-buffer and unanswered-request scenarios pass (timeout tested with a shortened test-only interval)
 - [ ] 4.3 Implement `updateParameter[2]` and the error code mapping table; verify the pushed-update and busy-hardware scenarios, the cross-library handle scenario with a handle from `SHALLvariant`, and a table-driven test over all mapped codes pass
-- [ ] 4.4 Implement the no-op status display hook for `bGUI` and `SECoP_S_showStatusWindow`; verify the GUI-requested scenario passes
+- [x] 4.4 Implement the no-op status display hook for `bGUI` and `SECoP_S_showStatusWindow`; verify the GUI-requested scenario passes
 - [ ] 4.5 Add a stress test with eight threads mixing pushes, polls and answers for 10 s; verify no crash, deadlock or unanswered request on all three targets
 
 ## 5. Conformance, docs and integration

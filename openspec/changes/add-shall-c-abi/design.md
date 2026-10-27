@@ -36,11 +36,11 @@ A global `Mutex<State>` maps context IDs to `{ nodes, focus cursor, stored-reque
 ### Handlers for callbacks and polling
 One `ModuleHandler` implementation per module:
 - Callback mode: run the C getter/setter/command function on tokio's blocking pool (`spawn_blocking`), so a slow LabVIEW callback never stalls the runtime; convert `CSECoPbaseType**` in/out through handles.
-- Polling mode: push `StoredRequest { id, action, name, value, created }` into the context's queue and await a oneshot; `SECoP_S_getStoredCommand[2]` pops, `SECoP_S_putCommandAnswer[2]` completes. A sweeper fails requests older than 60 s with `TimeoutError` (`SECoP_S_ERROR_TIMEOUT` toward the application).
+- Polling mode: push `StoredRequest { id, action, name, value, created }` into the context's queue and await a oneshot; `SECoP_S_getStoredCommand[2]` pops, `SECoP_S_putCommandAnswer[2]` completes. Each request waits at most 60 s for its answer; then the client gets `TimeoutError` and a late answer is refused with `SECoP_S_ERROR_TIMEOUT`. A request whose buffers were too small for `SECoP_S_getStoredCommand[2]` stays queued (so the call can be repeated) but can already be answered by its id.
 Module property `pollinterval` (SHALL's polling mechanism) maps to `must-server` polling.
 
 ### Build model to `must-server`
-The focus API drives `must-server` builders. Unknown non-underscore properties are added as non-standard properties (allowed explicitly by `sec-node-model`) and return `SECoP_S_WARNING_CUSTOM_PROPERTY`. `SECoP_S_nodeComplete` maps `ModelError`s to SHALL codes (missing mandatory → `SECoP_S_ERROR_MISSING_MANDATORY`, bad name → `SECoP_S_ERROR_INVALID_NAME`, duplicate → `SECoP_S_ERROR_NAME_ALREADY_USED`, …) and keeps the full list for `SECoP_S_showErrors`, which logs it and prints to stderr.
+The focus API drives `must-server` builders. Unknown non-underscore properties are added as non-standard properties (allowed explicitly by `sec-node-model`) and return `SECoP_S_WARNING_CUSTOM_PROPERTY`. A module without `interface_classes` (mandatory in SECoP 2.0, unknown to SHALL) gets the highest base class its accessibles satisfy (`Drivable`, `Writable`, `Readable`) or an empty list, and `SECoP_S_nodeComplete` returns `SECoP_S_WARNING_MISS_PROPERTIES`. `SECoP_S_nodeComplete` maps `ModelError`s to SHALL codes (missing mandatory → `SECoP_S_ERROR_MISSING_MANDATORY`, bad name → `SECoP_S_ERROR_INVALID_NAME`, duplicate → `SECoP_S_ERROR_NAME_ALREADY_USED`, …) and keeps the full list for `SECoP_S_showErrors`, which logs it and prints to stderr.
 
 ### Error code mapping toward clients
 

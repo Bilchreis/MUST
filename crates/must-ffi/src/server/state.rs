@@ -51,6 +51,8 @@ pub(crate) struct Pending {
 /// A context ID of `SECoP_S_initLibrary`: an application (or LabVIEW VI) using the
 /// library independently of others in the same process.
 pub(crate) struct Context {
+    /// Number of `SECoP_S_initLibrary` calls not yet matched by `SECoP_S_doneLibrary`.
+    pub refs: usize,
     /// Function pointers (true) or polling (false).
     pub callbacks: bool,
     /// The node that `SECoP_S_add*` calls of this context apply to.

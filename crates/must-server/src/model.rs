@@ -63,7 +63,8 @@ pub const PARAMETER_PROPERTIES: &[&str] = &[
     "constant",
 ];
 /// Command properties defined by SECoP 2.0.
-pub const COMMAND_PROPERTIES: &[&str] = &["description", "group", "visibility", "meaning", "checkable"];
+pub const COMMAND_PROPERTIES: &[&str] =
+    &["description", "group", "visibility", "meaning", "checkable"];
 /// Keys set by the structure itself, not as properties.
 const STRUCTURAL_PROPERTIES: &[&str] = &["modules", "accessibles", "datainfo"];
 

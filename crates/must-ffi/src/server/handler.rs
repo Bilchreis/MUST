@@ -10,7 +10,8 @@ use std::ptr;
 
 use async_trait::async_trait;
 use must_server::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
-use must_types::{CommandInfo, DataInfo, ErrorClass, Mode, SecopError, Value};
+use must_types::datainfo::CommandInfo;
+use must_types::{DataInfo, ErrorClass, Mode, SecopError, Value};
 use serde_json::Value as Json;
 use tokio::sync::oneshot;
 
@@ -126,7 +127,15 @@ fn call_getset(function: GetSet, name: &CString, value: variant::Node, with_sigm
     };
     // SAFETY: an application function with SHALL's getter/setter signature; the name and
     // all out pointers are valid for the duration of the call
-    unsafe { function(name.as_ptr(), &raw mut code, &raw mut data, sigma_ptr, &raw mut t) };
+    unsafe {
+        function(
+            name.as_ptr(),
+            &raw mut code,
+            &raw mut data,
+            sigma_ptr,
+            &raw mut t,
+        );
+    };
     collect(code, handle, data, sigma, t)
 }
 
@@ -144,7 +153,15 @@ fn call_function(
     let mut t = f64::NAN;
     // SAFETY: an application function with SHALL's command signature; the name, the
     // argument and all out pointers are valid for the duration of the call
-    unsafe { function(name.as_ptr(), argument, &raw mut code, &raw mut data, &raw mut t) };
+    unsafe {
+        function(
+            name.as_ptr(),
+            argument,
+            &raw mut code,
+            &raw mut data,
+            &raw mut t,
+        );
+    };
     destroy_handle(argument);
     collect(code, handle, data, ptr::null_mut(), t)
 }
@@ -268,8 +285,12 @@ impl ModuleHandler for ShallModule {
             let name = full_name.clone();
             blocking(move || call_getset(setter, &name, node, false)).await?
         } else {
-            self.request(action::CHANGE, parameter, Some(node), Some(proto.clone()))
-                .await?
+            let mut answer = self
+                .request(action::CHANGE, parameter, Some(node), Some(proto.clone()))
+                .await?;
+            // an answer without value confirms the requested one
+            answer.value.get_or_insert(json);
+            answer
         };
         answer.reading(info, parameter)
     }

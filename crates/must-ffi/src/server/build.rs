@@ -11,9 +11,7 @@ use std::time::Duration;
 use must_server::model::{
     COMMAND_PROPERTIES, MODULE_PROPERTIES, NODE_PROPERTIES, PARAMETER_PROPERTIES,
 };
-use must_server::{
-    Command, ModelError, ModelErrorKind, Module, Node, NodeBuilder, Parameter,
-};
+use must_server::{Command, ModelError, ModelErrorKind, Module, Node, NodeBuilder, Parameter};
 use must_types::{DataInfo, Mode};
 use serde_json::{Map, Value as Json};
 
@@ -241,7 +239,7 @@ impl DraftNode {
             return err::INVALID_NAME;
         }
         let lower = key.to_ascii_lowercase();
-        if lower == "description" && !value.as_str().is_some_and(|s| !s.is_empty()) {
+        if lower == "description" && value.as_str().is_none_or(str::is_empty) {
             return err::INVALID_VALUE;
         }
         match self.focus {
@@ -306,10 +304,15 @@ impl DraftNode {
         }
     }
 
-    /// Validates the node and turns it into a `must-server` node; on failure all problems
-    /// are listed.
-    pub(crate) fn build(&self, context: &str, callbacks: bool) -> Result<Node, Vec<Problem>> {
+    /// Validates the node and turns it into a `must-server` node, with remarks on what
+    /// was filled in; on failure all problems are listed.
+    pub(crate) fn build(
+        &self,
+        context: &str,
+        callbacks: bool,
+    ) -> Result<(Node, Vec<String>), Vec<Problem>> {
         let mut problems = Vec::new();
+        let mut notes = Vec::new();
         let mut props = self.props.clone();
         let description = take_string(&mut props, "description");
         let mut node = NodeBuilder::new(&self.name, &description)
@@ -326,6 +329,14 @@ impl DraftNode {
             };
         }
         for module in &self.modules {
+            if !module.props.contains_key("interface_classes") {
+                notes.push(format!(
+                    "{}:{}: no interface_classes given (needed by SECoP 2.0), using {}",
+                    self.name,
+                    module.name,
+                    module.default_interface_classes()
+                ));
+            }
             let Some(built) = self.build_module(module, context, callbacks, &mut problems) else {
                 continue;
             };
@@ -341,9 +352,11 @@ impl DraftNode {
             return Err(problems);
         }
         node.build()
+            .map(|node| (node, notes))
             .map_err(|e| e.0.iter().map(|e| problem(&self.name, e)).collect())
     }
 
+    #[allow(clippy::too_many_lines, reason = "one arm per accessible kind")]
     fn build_module(
         &self,
         draft: &DraftModule,
@@ -352,6 +365,9 @@ impl DraftNode {
         problems: &mut Vec<Problem>,
     ) -> Option<Module> {
         let mut props = draft.props.clone();
+        props
+            .entry("interface_classes")
+            .or_insert_with(|| draft.default_interface_classes());
         let description = take_string(&mut props, "description");
         let mut module = Module::new(&draft.name, &description);
         if let Some(interval) = draft.poll {
@@ -471,10 +487,9 @@ impl DraftNode {
                         continue; // datainfo was checked to be a command when it was set
                     };
                     let (argument, result) = match &proto.kind {
-                        Kind::Command { argument, result } => (
-                            argument.as_deref().cloned(),
-                            result.as_deref().cloned(),
-                        ),
+                        Kind::Command { argument, result } => {
+                            (argument.as_deref().cloned(), result.as_deref().cloned())
+                        }
                         _ => (None, None),
                     };
                     let mut command = Command::new(&acc.name, info.clone(), &description);
@@ -522,6 +537,30 @@ impl DraftNode {
 }
 
 impl DraftModule {
+    /// `interface_classes` for a module that sets none (SHALL did not require it): the
+    /// highest base class whose accessibles the module has, else none.
+    pub(crate) fn default_interface_classes(&self) -> Json {
+        let find = |name: &str| self.accessibles.iter().find(|a| a.name == name);
+        let parameter = |name: &str| match find(name).map(|a| &a.kind) {
+            Some(AccessibleKind::Parameter { writable, .. }) => Some(*writable),
+            _ => None,
+        };
+        let readable = parameter("value").is_some() && parameter("status").is_some();
+        let writable = readable && parameter("target") == Some(true);
+        let drivable = writable
+            && matches!(
+                find("stop").map(|a| &a.kind),
+                Some(AccessibleKind::Command { .. })
+            );
+        let class = match (drivable, writable, readable) {
+            (true, _, _) => Some("Drivable"),
+            (_, true, _) => Some("Writable"),
+            (_, _, true) => Some("Readable"),
+            _ => None,
+        };
+        Json::Array(class.into_iter().map(Json::from).collect())
+    }
+
     pub(crate) fn accessible_index(&self, name: &str) -> Option<usize> {
         self.accessibles
             .iter()
@@ -633,16 +672,28 @@ mod tests {
     fn properties_follow_shall() {
         let mut node = DraftNode::new("n", "a node", "127.0.0.1:0".parse().unwrap());
         assert_eq!(node.add_property("firmware", "x".into()), err::SUCCESS);
-        assert_eq!(node.add_property("Firmware", "y".into()), err::NAME_ALREADY_USED);
-        assert_eq!(node.add_property("myprop", "x".into()), err::WARNING_CUSTOM_PROPERTY);
-        assert_eq!(node.add_property("description", "".into()), err::INVALID_VALUE);
+        assert_eq!(
+            node.add_property("Firmware", "y".into()),
+            err::NAME_ALREADY_USED
+        );
+        assert_eq!(
+            node.add_property("myprop", "x".into()),
+            err::WARNING_CUSTOM_PROPERTY
+        );
+        assert_eq!(
+            node.add_property("description", "".into()),
+            err::INVALID_VALUE
+        );
         assert_eq!(node.add_property("bad-name", 1.into()), err::INVALID_NAME);
         assert_eq!(node.add_module("m"), err::SUCCESS);
         assert_eq!(
             node.add_property("interface_classes", "Readable".into()),
             err::SUCCESS
         );
-        assert_eq!(node.modules[0].props["interface_classes"], serde_json::json!(["Readable"]));
+        assert_eq!(
+            node.modules[0].props["interface_classes"],
+            serde_json::json!(["Readable"])
+        );
         assert_eq!(node.add_property("pollinterval", 2.0.into()), err::SUCCESS);
         assert_eq!(node.modules[0].poll, Some(Duration::from_secs(2)));
         assert_eq!(node.add_property("visibility", 3.into()), err::SUCCESS);
