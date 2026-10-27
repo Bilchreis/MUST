@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_int, c_longlong, c_ulonglong, c_ushort, c_void};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use must_server::Reading;
+use must_server::monitor::ExternalNode;
 use must_types::Mode;
 use serde_json::Value as Json;
 
@@ -118,6 +119,8 @@ pub unsafe extern "C" fn SECoP_S_initLibrary(
             (running, state.handle())
         };
         state::stop(running, handle);
+        // C and LabVIEW hosts have no tracing subscriber: capture logs for monitoring
+        must_server::monitor::install_log_capture();
         if bGUI != 0 {
             status::show(true);
         }
@@ -255,11 +258,13 @@ fn create_node(
         .or_insert_with(|| new_context(default_callbacks));
     ctx.current = Some(id.clone());
     let callbacks = ctx.callbacks;
+    let monitor = ExternalNode::new(&id, Some(context.as_str()).filter(|c| !c.is_empty()));
     state.nodes.push(NodeEntry {
         context,
         callbacks,
         draft: DraftNode::new(&id, desc, SocketAddr::new(ip, port)),
         running: None,
+        monitor,
     });
     if desc.is_empty() {
         let code = err::WARNING_NO_DESCRIPTION;
@@ -589,6 +594,10 @@ fn complete(context: &str) -> Result<c_int, c_int> {
             Ok(built) => (built, name, state.handle().ok_or(err::NOT_INITIALIZED)?),
             Err(problems) => {
                 let code = problems.first().map_or(err::INTERNAL, |p| p.code);
+                let messages = problems.iter().map(|p| p.message.clone()).collect();
+                if let Some(monitor) = &entry.monitor {
+                    monitor.failed(messages);
+                }
                 for p in problems {
                     state.note(p.code, p.message);
                 }
@@ -600,12 +609,24 @@ fn complete(context: &str) -> Result<c_int, c_int> {
     warnings.extend(node.warnings().iter().map(ToString::to_string));
     // started without the lock: the node may call the application at once
     let running = node.spawn(&handle).map_err(|e| {
-        state::lock().note(err::COMM_FAILED, format!("{name}: {e}"));
+        let message = format!("{name}: {e}");
+        let mut state = state::lock();
+        if let Some(i) = state.node_index(&name)
+            && let Some(monitor) = &state.nodes[i].monitor
+        {
+            monitor.failed(vec![message.clone()]);
+        }
+        state.note(err::COMM_FAILED, message);
         err::COMM_FAILED
     })?;
     let mut state = state::lock();
     match state.node_index(&name) {
-        Some(i) if state.nodes[i].running.is_none() => state.nodes[i].running = Some(running),
+        Some(i) if state.nodes[i].running.is_none() => {
+            if let Some(monitor) = &state.nodes[i].monitor {
+                monitor.running(&running, warnings.clone());
+            }
+            state.nodes[i].running = Some(running);
+        }
         _ => {
             // deleted (or completed by another thread) meanwhile
             drop(state);

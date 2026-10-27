@@ -9,9 +9,9 @@ use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
 use serde_json::Value as Json;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
 
 use super::Hub;
+use crate::events::LogLevel;
 use crate::handler::{Ctx, ModuleHandler, Reading};
 use crate::protocol::now;
 
@@ -117,7 +117,11 @@ async fn read(
     match result {
         Ok(reading) => hub.publish_value(module, parameter, reading),
         Err(error) => {
-            debug!(module, parameter, %error, "read failed");
+            hub.log(
+                LogLevel::Warn,
+                Some(module),
+                format!("reading `{parameter}` failed: {error}"),
+            );
             hub.publish_error(module, parameter, error.clone());
             Err(error)
         }
@@ -143,7 +147,11 @@ async fn guarded<T: Send + 'static>(
     match tokio::time::timeout(timeout, task).await {
         Ok(Ok(result)) => result,
         Ok(Err(join_error)) => {
-            warn!(error = %join_error, "handler panicked");
+            hub.log(
+                LogLevel::Error,
+                None,
+                format!("handler panicked: {join_error}"),
+            );
             Err(SecopError::new(
                 ErrorClass::InternalError,
                 "the handler panicked",

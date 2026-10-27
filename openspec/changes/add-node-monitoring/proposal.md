@@ -6,7 +6,9 @@ SHALL shows node status in a Qt window inside the host process. must replaces th
 
 ## What Changes
 
-- Each process hosting at least one must node opens one local monitoring endpoint covering all its nodes, on loopback only.
+- Each process hosting at least one must node opens one local monitoring endpoint covering all its nodes, on by default: a Unix domain socket on Linux and a named pipe on Windows, which the operating system restricts to the user. The registration describes the endpoint by kind, so another transport (e.g. local TCP) can be added later without changing the protocol or its readers.
+- Nodes are shown from creation on, with a state (building, failed, running, stopped); nodes built through the SHALL C ABI show their context ID and, when `SECoP_S_nodeComplete` failed, its errors and warnings.
+- `must-server` reports client activation and deactivation as node events.
 - The endpoint is registered in a per-user runtime directory, so tools can discover every running must process; stale registrations are recognized and cleaned up.
 - A versioned, line-delimited JSON monitoring protocol: on connect a snapshot (process, nodes, modules, parameter values, clients, recent logs), then a stream of events (nodes started/stopped, clients connected/disconnected, message traffic, parameter updates, log records).
 - Log records of the library (and of the host application, if it logs through `tracing`) are captured in a bounded per-process buffer.
@@ -27,4 +29,5 @@ SHALL shows node status in a Qt window inside the host process. must replaces th
 - New crate `crates/must-monitor` (endpoint server, registry, client library); `must-server` starts/stops the endpoint with its nodes and feeds it from the `NodeEvent` stream and `tracing` (both defined in `add-sec-node-server`).
 - The C ABI (`add-shall-c-abi`) gets monitoring automatically, since it uses `must-server`.
 - New files at runtime: one registration file per process in the per-user runtime directory.
-- Depends on `add-sec-node-server`.
+- `must-ffi` (C ABI) registers its nodes with the monitor from `SECoP_S_createNode` on, with context ID and build results.
+- Depends on `add-sec-node-server` and `add-shall-c-abi` (archived) and on `add-node-log-files` (values in update events, per-node log records).

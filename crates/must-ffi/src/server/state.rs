@@ -12,6 +12,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use must_server::RunningNode;
+use must_server::monitor::ExternalNode;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::oneshot;
 
@@ -62,6 +63,9 @@ pub(crate) struct NodeEntry {
     pub callbacks: bool,
     pub draft: DraftNode,
     pub running: Option<RunningNode>,
+    /// The node's entry at the monitoring endpoint, from creation on; dropping it
+    /// removes the node there.
+    pub monitor: Option<ExternalNode>,
 }
 
 #[derive(Default)]

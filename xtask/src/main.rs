@@ -297,11 +297,54 @@ fn check(o: &Options) -> Result<()> {
         .env("MUST_DIST_DIR", &out)
         .current_dir(root());
         run(&mut test).map_err(|e| format!("cross-library test failed: {e}"))?;
+        cross_process(o, &out)?;
         println!("check passed");
         Ok(())
     } else {
         Err(problems.join("\n"))
     }
+}
+
+/// A host process for the target (`examples/c_host.rs`, e.g. 32-bit) using the dist
+/// libraries is discovered and read by the monitoring client built for this machine
+/// (e.g. 64-bit).
+fn cross_process(o: &Options, out: &Path) -> Result<()> {
+    run(Command::new(cargo())
+        .args([
+            "build",
+            "-p",
+            "must-ffi-variant",
+            "--example",
+            "c_host",
+            "--target",
+            &o.target,
+        ])
+        .current_dir(root()))?;
+    let exe = root()
+        .join("target")
+        .join(&o.target)
+        .join("debug")
+        .join("examples")
+        .join(if o.target.contains("windows") {
+            "c_host.exe"
+        } else {
+            "c_host"
+        });
+    let mut test = Command::new(cargo());
+    test.args([
+        "test",
+        "-p",
+        "must-ffi-variant",
+        "--test",
+        "cross_process",
+        "--",
+        "--include-ignored",
+        "--nocapture",
+    ])
+    .env("MUST_HOST_EXE", &exe)
+    .env("MUST_DIST_DIR", out)
+    .current_dir(root());
+    run(&mut test).map_err(|e| format!("cross-process monitoring test failed: {e}"))
 }
 
 fn allowed_dependency(name: &str, windows: bool) -> bool {

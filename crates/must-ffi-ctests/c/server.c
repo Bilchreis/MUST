@@ -538,3 +538,13 @@ int ctest_server_stress_build(unsigned short port)
     CHECK(complete("stress") >= 0);
     return 0;
 }
+
+/* --- monitoring: a node that is created but not complete */
+
+int ctest_monitor_building(void)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "mon"));
+    OK(SECoP_S_createNode2("mnode", "being built", "127.0.0.1", 0, "mon"));
+    OK(SECoP_S_addModule("m", "mon"));
+    return 0;
+}

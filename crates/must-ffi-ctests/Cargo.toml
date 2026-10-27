@@ -11,7 +11,10 @@ publish = false
 must-ffi = { path = "../must-ffi" }
 
 [dev-dependencies]
+must-monitor.workspace = true
+must-server.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [build-dependencies]
 cc.workspace = true
