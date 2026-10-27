@@ -13,6 +13,7 @@ name = "must-tui"
 path = "src/main.rs"
 
 [dependencies]
+chrono.workspace = true
 indexmap.workspace = true
 must-monitor.workspace = true
 must-types.workspace = true

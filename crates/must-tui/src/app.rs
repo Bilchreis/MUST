@@ -131,6 +131,8 @@ pub struct Node {
     pub tx_per_second: f64,
     /// Messages while the traffic view of this node is open.
     pub traffic: VecDeque<TrafficLine>,
+    /// Messages received into `traffic` in total (counts the ones pushed out, too).
+    pub traffic_total: u64,
 }
 
 /// A message on the wire.
@@ -170,6 +172,105 @@ pub enum View {
     Logs,
 }
 
+/// Minimum level of the log view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LevelFilter {
+    /// Everything.
+    #[default]
+    All,
+    /// INFO, WARN and ERROR.
+    Info,
+    /// WARN and ERROR.
+    Warn,
+    /// ERROR only.
+    Error,
+}
+
+impl LevelFilter {
+    /// Whether a record of `level` (`ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`) passes.
+    pub fn passes(self, level: &str) -> bool {
+        let rank = match level {
+            "ERROR" => 3,
+            "WARN" => 2,
+            "INFO" => 1,
+            _ => 0,
+        };
+        rank >= self as u8
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::All => Self::Info,
+            Self::Info => Self::Warn,
+            Self::Warn => Self::Error,
+            Self::Error => Self::All,
+        }
+    }
+
+    /// `all`, `≥INFO`, ...
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Info => "INFO+",
+            Self::Warn => "WARN+",
+            Self::Error => "ERROR",
+        }
+    }
+}
+
+/// Scrolling, filters and pause of the views.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UiState {
+    /// Lines scrolled: from the top in the detail view, back from the newest in the
+    /// traffic and log views.
+    pub scroll: usize,
+    /// Text filter of the traffic and log views.
+    pub filter: String,
+    /// Whether keys go into the filter.
+    pub editing_filter: bool,
+    /// The traffic view is paused: how many messages the node had received then.
+    pub paused_at: Option<u64>,
+    /// Minimum level in the log view.
+    pub log_level: LevelFilter,
+    /// Only records of the selected node.
+    pub log_node_only: bool,
+    /// Only records of the selected node's process.
+    pub log_process_only: bool,
+}
+
+impl View {
+    fn next(self) -> Self {
+        match self {
+            Self::Overview => Self::Detail,
+            Self::Detail => Self::Traffic,
+            Self::Traffic => Self::Logs,
+            Self::Logs => Self::Overview,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Overview => Self::Logs,
+            Self::Detail => Self::Overview,
+            Self::Traffic => Self::Detail,
+            Self::Logs => Self::Traffic,
+        }
+    }
+
+    /// The tab title.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Detail => "Detail",
+            Self::Traffic => "Traffic",
+            Self::Logs => "Logs",
+        }
+    }
+
+    /// All views in tab order.
+    pub const ALL: [View; 4] = [Self::Overview, Self::Detail, Self::Traffic, Self::Logs];
+}
+
 /// The whole state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
@@ -189,6 +290,8 @@ pub struct App {
     pub now: f64,
     /// Whether the user asked to quit.
     pub quit: bool,
+    /// Scrolling, filters and pause of the views.
+    pub ui: UiState,
     /// The node whose traffic is subscribed.
     traffic_node: Option<(ProcessKey, NodeId)>,
 }
@@ -205,6 +308,7 @@ impl App {
             focus_pid,
             now,
             quit: false,
+            ui: UiState::default(),
             traffic_node: None,
         }
     }
@@ -249,11 +353,180 @@ impl App {
             self.quit = true;
             return;
         }
+        if self.ui.editing_filter {
+            match key.code {
+                KeyCode::Enter => self.ui.editing_filter = false,
+                KeyCode::Esc => {
+                    self.ui.editing_filter = false;
+                    self.ui.filter.clear();
+                }
+                KeyCode::Backspace => {
+                    self.ui.filter.pop();
+                }
+                KeyCode::Char(c) => self.ui.filter.push(c),
+                _ => {}
+            }
+            self.ui.scroll = 0;
+            return;
+        }
+        if self.help {
+            // any key closes the help
+            self.help = false;
+            return;
+        }
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Down => self.move_selection(1),
-            KeyCode::Up => self.move_selection(-1),
+            KeyCode::Char('?') => self.help = true,
+            KeyCode::Tab => self.switch(self.view.next()),
+            KeyCode::BackTab => self.switch(self.view.previous()),
+            KeyCode::Char('1') | KeyCode::Esc => self.switch(View::Overview),
+            KeyCode::Char('2') => self.switch(View::Detail),
+            KeyCode::Char('3') => self.switch(View::Traffic),
+            KeyCode::Char('4') => self.switch(View::Logs),
+            KeyCode::Enter if self.view == View::Overview => self.switch(View::Detail),
+            KeyCode::Up | KeyCode::Char('k') => self.vertical(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.vertical(1),
+            KeyCode::PageUp => self.vertical(-10),
+            KeyCode::PageDown => self.vertical(10),
+            KeyCode::Home => self.ui.scroll = self.scroll_home(),
+            KeyCode::End => self.ui.scroll = 0,
+            KeyCode::Left => self.move_selection(-1),
+            KeyCode::Right => self.move_selection(1),
+            KeyCode::Char('/') if matches!(self.view, View::Traffic | View::Logs) => {
+                self.ui.editing_filter = true;
+            }
+            KeyCode::Char('p') if self.view == View::Traffic => self.toggle_pause(),
+            KeyCode::Char('l') if self.view == View::Logs => {
+                self.ui.log_level = self.ui.log_level.next();
+                self.ui.scroll = 0;
+            }
+            KeyCode::Char('n') if self.view == View::Logs => {
+                self.ui.log_node_only = !self.ui.log_node_only;
+                self.ui.scroll = 0;
+            }
+            KeyCode::Char('o') if self.view == View::Logs => {
+                self.ui.log_process_only = !self.ui.log_process_only;
+                self.ui.scroll = 0;
+            }
+            KeyCode::Char('P') => {
+                if let Some((key, _)) = self.selected
+                    && let Some(p) = self.processes.get_mut(&key)
+                {
+                    p.pinned = !p.pinned;
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn switch(&mut self, view: View) {
+        if view != self.view {
+            self.view = view;
+            self.ui.scroll = 0;
+            self.ui.paused_at = None;
+        }
+    }
+
+    /// Up and down: the selection in the overview, scrolling elsewhere.
+    fn vertical(&mut self, step: isize) {
+        match self.view {
+            View::Overview => self.move_selection(step),
+            // the detail view scrolls down from the top
+            View::Detail => self.ui.scroll = self.ui.scroll.saturating_add_signed(step),
+            // traffic and logs scroll back from the newest line
+            View::Traffic | View::Logs => {
+                self.ui.scroll = self
+                    .ui
+                    .scroll
+                    .saturating_add_signed(-step)
+                    .min(self.scroll_home());
+            }
+        }
+    }
+
+    /// The scroll position showing the oldest line.
+    fn scroll_home(&self) -> usize {
+        match self.view {
+            View::Traffic => self.selected_node().map_or(0, |n| n.traffic.len()),
+            View::Logs => self.logs.len(),
+            View::Overview | View::Detail => 0,
+        }
+    }
+
+    fn toggle_pause(&mut self) {
+        self.ui.paused_at = match self.ui.paused_at {
+            Some(_) => None,
+            None => Some(self.selected_node().map_or(0, |n| n.traffic_total)),
+        };
+    }
+
+    /// The selected node's process.
+    pub fn selected_process(&self) -> Option<&Process> {
+        self.processes.get(&self.selected?.0)
+    }
+
+    /// The selected node's messages that the traffic view shows: without those that
+    /// arrived since a pause, matching the filter, oldest first.
+    pub fn visible_traffic(&self) -> Vec<&TrafficLine> {
+        let Some(node) = self.selected_node() else {
+            return Vec::new();
+        };
+        let held_back = self
+            .ui
+            .paused_at
+            .map_or(0, |at| node.traffic_total.saturating_sub(at));
+        let shown = node
+            .traffic
+            .len()
+            .saturating_sub(usize::try_from(held_back).unwrap_or(usize::MAX));
+        node.traffic
+            .iter()
+            .take(shown)
+            .filter(|line| self.ui.filter.is_empty() || line.text.contains(&self.ui.filter))
+            .collect()
+    }
+
+    /// Messages that arrived since the traffic view was paused.
+    pub fn held_back(&self) -> u64 {
+        match (self.ui.paused_at, self.selected_node()) {
+            (Some(at), Some(node)) => node.traffic_total.saturating_sub(at),
+            _ => 0,
+        }
+    }
+
+    /// The log records the log view shows, oldest first.
+    pub fn visible_logs(&self) -> Vec<&LogLine> {
+        let (selected_key, selected_node) = match self.selected {
+            Some((key, node)) => (Some(key), Some(node)),
+            None => (None, None),
+        };
+        self.logs
+            .iter()
+            .filter(|l| self.ui.log_level.passes(&l.record.level))
+            .filter(|l| !self.ui.log_process_only || Some(l.key) == selected_key)
+            .filter(|l| {
+                !self.ui.log_node_only
+                    || (Some(l.key) == selected_key && l.record.node == selected_node)
+            })
+            .filter(|l| {
+                self.ui.filter.is_empty()
+                    || l.record.message.contains(&self.ui.filter)
+                    || l.record
+                        .module
+                        .as_deref()
+                        .is_some_and(|m| m.contains(&self.ui.filter))
+            })
+            .collect()
+    }
+
+    /// The name of a node for display, also of a process that is gone.
+    pub fn node_name(&self, key: ProcessKey, node: Option<NodeId>) -> String {
+        let process = self.processes.get(&key);
+        let node = node.and_then(|id| process?.nodes.get(&id));
+        match (process, node) {
+            (_, Some(n)) => n.info.equipment_id.clone(),
+            (Some(p), None) => p.name.clone(),
+            (None, None) => format!("pid {}", key.0),
         }
     }
 
@@ -267,7 +540,13 @@ impl App {
             .and_then(|s| keys.iter().position(|k| *k == s))
             .unwrap_or(0);
         let next = current.saturating_add_signed(step).min(keys.len() - 1);
-        self.selected = Some(keys[next]);
+        if self.selected != Some(keys[next]) {
+            self.selected = Some(keys[next]);
+            if self.view != View::Overview {
+                self.ui.scroll = 0;
+                self.ui.paused_at = None;
+            }
+        }
     }
 
     /// Keeps the selection on an existing node; applies `--focus-pid`.
@@ -432,6 +711,7 @@ impl Node {
             rx_per_second: 0.0,
             tx_per_second: 0.0,
             traffic: VecDeque::new(),
+            traffic_total: 0,
         }
     }
 }
@@ -532,6 +812,7 @@ impl Process {
                         truncated,
                     };
                     push_bounded(&mut n.traffic, line, TRAFFIC_CAPACITY);
+                    n.traffic_total += 1;
                 }
             }
             Event::Update { node, state } => {

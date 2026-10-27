@@ -1,0 +1,16 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: shown
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   2 processes, 4 nodes       "
+"┌ Traffic: cryo ───────────────────────────────────────────────────────────────┐"
+"│17:23:20.000 > [3] read t1:value                                              │"
+"│17:23:20.002 < [3] reply t1:value [4.2,{"t":1.0}]                             │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" / filter · p pause · ←→ node · ↑↓ scroll · ? help · q quit                     "

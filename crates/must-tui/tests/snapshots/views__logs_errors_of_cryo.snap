@@ -1,0 +1,14 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: screen
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   2 processes, 4 nodes                           "
+"┌ Logs | level ERROR | node cryo ──────────────────────────────────────────────────────────────────┐"
+"│17:22:50.000 ERROR cryo t1: sensor disconnected                                                   │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" / filter · l level · n node · o process · ↑↓ scroll · ? help · q quit                              "

@@ -1,0 +1,28 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: shown
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   2 processes, 4 nodes       "
+"┌ Nodes ───────────────────────────────────────────────────────────────────────┐"
+"│N┌ Keys ────────────────────────────────────────────────────────────────────┐ │"
+"│L│ Tab / Shift+Tab   next / previous view                                   │ │"
+"│ │ 1 2 3 4           overview, detail, traffic, logs                        │ │"
+"│ │ Up / Down, j / k  select a node (overview), scroll (other views)         │ │"
+"│ │ Left / Right      previous / next node                                   │ │"
+"│p│ PgUp / PgDn       scroll by 10 lines                                     │ │"
+"│ │ Home / End        oldest / newest lines                                  │ │"
+"│ │ Enter             details of the selected node                           │ │"
+"│ │ Esc               back to the overview                                   │ │"
+"│ │ /                 filter (traffic, logs): Enter keeps it, Esc clears it  │ │"
+"│ │ p                 pause / resume the traffic view                        │ │"
+"│ │ l                 log level: all, INFO+, WARN+, ERROR                    │ │"
+"│ │ n                 logs of the selected node only, or of all              │ │"
+"│ │ o                 logs of the selected process only, or of all           │ │"
+"│ │ P                 pin the selected process (kept when it is gone)        │ │"
+"│ │ ?                 this help                                              │ │"
+"│ │ q, Ctrl+C         quit                                                   │ │"
+"│ │                                                                          │ │"
+"│ │ Read-only: nothing here changes a node. Any key closes this help.        │ │"
+"│ └──────────────────────────────────────────────────────────────────────────┘ │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" ↑↓ select · Enter details · Tab views · P pin · ? help · q quit                "

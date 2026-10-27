@@ -1,0 +1,28 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: small
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   2 processes, 4 nodes       "
+"┌ Nodes ───────────────────────────────────────────────────────────────────────┐"
+"│NODE                         CONTEXT    STATE    CL  MSG/S  STATUS            │"
+"│LabVIEW.exe (4242)  must 0.1.0                                                │"
+"│  cryo                       lv_a       running  1   5.5    BUSY t1           │"
+"│  magnet                     lv_a       failed                                │"
+"│  probe                      lv_b       building                              │"
+"│python3 (777)  must 0.1.0                                                     │"
+"│  test                                  running  0   0.0    IDLE s            │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" ↑↓ select · Enter details · Tab views · P pin · ? help · q quit                "

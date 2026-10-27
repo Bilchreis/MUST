@@ -13,12 +13,12 @@
 
 ## 3. Views
 
-- [ ] 3.1 Implement the overview table grouped by process, with context IDs and building/failed states; verify the several-hosts and node-being-built-and-failed-node scenarios with `TestBackend` snapshot tests (insta)
-- [ ] 3.2 Implement the node detail view with formatted values, status colors plus labels, errors, the clients pane, build messages and the log file path; verify the busy-module, parameter-error, failed-node, log-file and file-logging-off scenarios with snapshot tests, also with `NO_COLOR`
-- [ ] 3.3 Implement the traffic view with on-demand subscription, pause, filter and the mark for shortened messages; verify the live-traffic and pause scenarios
-- [ ] 3.4 Implement the log view with level/process/node/text filters; verify the filter-errors-of-one-node scenario
-- [ ] 3.5 Implement lag, connection and version error indicators; verify the incompatible-endpoint scenario with a fake endpoint
-- [ ] 3.6 Implement key bindings and the help overlay; verify the help scenario, and the read-only scenario with a test that records everything the TUI sends to a fake endpoint (only hello and subscriptions)
+- [x] 3.1 Implement the overview table grouped by process, with context IDs and building/failed states; verify the several-hosts and node-being-built-and-failed-node scenarios with `TestBackend` snapshot tests (insta)
+- [x] 3.2 Implement the node detail view with formatted values, status colors plus labels, errors, the clients pane, build messages and the log file path; verify the busy-module, parameter-error, failed-node, log-file and file-logging-off scenarios with snapshot tests, also with `NO_COLOR`
+- [x] 3.3 Implement the traffic view with on-demand subscription, pause, filter and the mark for shortened messages; verify the live-traffic and pause scenarios
+- [x] 3.4 Implement the log view with level/process/node/text filters; verify the filter-errors-of-one-node scenario
+- [x] 3.5 Implement lag, connection and version error indicators; verify the incompatible-endpoint scenario with a fake endpoint
+- [x] 3.6 Implement key bindings and the help overlay; verify the help scenario, and the read-only scenario with a test that records everything the TUI sends to a fake endpoint (only hello and subscriptions)
 - [ ] 3.7 Verify resize handling and the 80×24 layout with snapshot tests at 80×24 and 120×40, and manually in Windows Terminal, conhost and a Linux terminal
 
 ## 4. Launching from the library

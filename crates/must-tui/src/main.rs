@@ -148,7 +148,8 @@ async fn run(
     });
 
     let mut app = App::new(now(), focus_pid);
-    tui.draw(|frame| ui::draw(frame, &app))?;
+    let theme = ui::Theme::from_env();
+    tui.draw(|frame| ui::draw(frame, &app, theme))?;
     while let Some(msg) = rx.recv().await {
         for effect in app.update(msg) {
             let _ = effects_tx.send(effect);
@@ -162,7 +163,7 @@ async fn run(
         if app.quit {
             break;
         }
-        tui.draw(|frame| ui::draw(frame, &app))?;
+        tui.draw(|frame| ui::draw(frame, &app, theme))?;
     }
     Ok(())
 }

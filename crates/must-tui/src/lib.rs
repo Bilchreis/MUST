@@ -8,5 +8,6 @@
 
 pub mod app;
 pub mod discovery;
+pub mod format;
 pub mod terminal;
 pub mod ui;
