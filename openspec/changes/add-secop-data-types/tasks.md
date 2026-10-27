@@ -5,7 +5,7 @@
 - [x] 1.1 Create the root `Cargo.toml` workspace (edition 2024, resolver 3, shared `[workspace.package]`, `[workspace.dependencies]` and `[workspace.lints]` with clippy pedantic warnings) and an empty `crates/must-types` library; verify `cargo build --workspace` succeeds
 - [x] 1.2 Add `rust-toolchain.toml`, `rustfmt.toml` and a `.gitignore` for `target/`; verify `cargo fmt --check` passes
 - [x] 1.3 Add the license: `COPYING.LESSER` (LGPL-3.0 text), `COPYING` (GPL-3.0 text), `license = "LGPL-3.0-or-later"` in `[workspace.package]` inherited by every crate, and a `deny.toml` allowing only LGPL-compatible dependency licenses; verify `cargo metadata` reports the license for `must-types` and `cargo deny check licenses` passes
-- [ ] 1.4 Add a GitHub Actions workflow: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo deny check licenses` on Linux, plus `cargo build` and `cargo test --workspace` on a target matrix of `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`; verify all jobs pass on a push and the i686 job actually runs the tests
+- [x] 1.4 Add a GitHub Actions workflow: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo deny check licenses` on Linux, plus `cargo build` and `cargo test --workspace` on a target matrix of `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc` and `i686-pc-windows-msvc`; verify all jobs pass on a push and the i686 job actually runs the tests
 - [x] 1.5 Write a top-level `README.md` describing must (Rust rewrite of SHALL without Qt, SECoP 2.0 target, supported platforms, crate layout, roadmap incl. C ABI drop-in and status TUI, LGPL-3.0-or-later license); verify it links to SHALL and the SECoP spec
 
 ## 2. Identifiers
@@ -40,7 +40,7 @@
 ## 6. Documentation and integration check
 
 - [x] 6.1 Write crate-level rustdoc for `must-types` with a runnable example (parse a datainfo, decode a request value with dynamic limits, handle a `RangeError`), noting the pinned SECoP spec commit and the scaled `fmtstr` default conflict between prose and schema; verify `cargo test --doc -p must-types` and `cargo doc --no-deps` succeed without warnings
-- [ ] 6.2 Run the full CI command set locally (`fmt --check`, `clippy -D warnings`, `test --workspace`, `deny check licenses`) and verify all pass; verify the CI matrix is green on all three targets
+- [x] 6.2 Run the full CI command set locally (`fmt --check`, `clippy -D warnings`, `test --workspace`, `deny check licenses`) and verify all pass; verify the CI matrix is green on all three targets
 
 ## Workflow follow-up
 
