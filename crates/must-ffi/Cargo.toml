@@ -1,0 +1,32 @@
+[package]
+name = "must-ffi"
+description = "SHALL-compatible C ABI of must (built as SHALLserver32/64)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+# cdylib: the shipped SHALLserver library; rlib: linked into the C conformance tests
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64.workspace = true
+must-server.workspace = true
+must-types.workspace = true
+serde_json.workspace = true
+
+[lints.rust]
+# a C ABI needs unsafe code; every unsafe operation must still be marked
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+undocumented_unsafe_blocks = "warn"
