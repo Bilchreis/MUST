@@ -363,9 +363,11 @@ impl DraftNode {
         let mut problems = Vec::new();
         let mut props = self.props.clone();
         let description = take_string(&mut props, "description");
+        // the C ABI registers its nodes with the monitor itself, from creation on
         let mut node = NodeBuilder::new(&self.name, &description)
             .bind(self.bind)
-            .initial_read(callbacks);
+            .initial_read(callbacks)
+            .monitored(false);
         for (key, value) in props {
             node = if is_settable(Level::Node, &key) {
                 match node.property(&key, value) {

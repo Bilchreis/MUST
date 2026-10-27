@@ -331,7 +331,10 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "must-ffi",
+ "must-monitor",
+ "must-server",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -339,6 +342,8 @@ name = "must-ffi-variant"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "must-monitor",
+ "tokio",
 ]
 
 [[package]]

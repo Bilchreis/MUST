@@ -48,6 +48,29 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           # make sure tests actually ran on this target, not only compiled
           grep -E "test result: ok\. [1-9][0-9]* passed" test.log
+      # the manual monitoring session documented in docs/monitoring-protocol.md
+      - name: monitoring session with PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --example simple_node --target ${{ matrix.target }}
+          $node = Start-Process -PassThru -FilePath "target/${{ matrix.target }}/debug/examples/simple_node.exe" -ArgumentList '127.0.0.1:2055'
+          Start-Sleep -Seconds 3
+          try {
+            $reg  = Get-Content "$env:LOCALAPPDATA\must\run\$($node.Id).json" | ConvertFrom-Json
+            $name = $reg.endpoint.name -replace '^\\\\\.\\pipe\\', ''
+            $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $name, 'InOut')
+            $pipe.Connect(5000)
+            $w = New-Object System.IO.StreamWriter($pipe); $w.AutoFlush = $true
+            $r = New-Object System.IO.StreamReader($pipe)
+            $w.WriteLine('{"type":"hello","version":"1.0","client":"me"}')
+            $welcome = $r.ReadLine(); $snapshot = $r.ReadLine()
+            Write-Output $welcome
+            if (-not $welcome.StartsWith('{"type":"welcome"')) { throw "no welcome: $welcome" }
+            if (-not $snapshot.Contains('"equipment_id":"must-example"')) { throw "unexpected snapshot: $snapshot" }
+          } finally {
+            Stop-Process $node
+          }
 
   dist:
     name: dist ${{ matrix.target }}

@@ -117,6 +117,12 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 - **Status window**: `bGUI` and `SECoP_S_showStatusWindow` request the status display,
   which the terminal UI `must-tui` provides (change `add-status-tui`); until then they
   have no effect.
+- **Monitoring** (new): every process with nodes opens a local monitoring endpoint (a
+  Unix socket in `$XDG_RUNTIME_DIR/must` or `/tmp/must-<uid>`, a named pipe on Windows,
+  registered in `%LOCALAPPDATA%\must\run`), from `SECoP_S_createNode` on, with node
+  states, context IDs, build errors, clients, traffic, values and log records. It is only
+  accessible to the user and opens no network port. `MUST_MONITOR=0` turns it off. See
+  [docs/monitoring-protocol.md](docs/monitoring-protocol.md).
 - **Error strings** (`SECoP_S_getErrorString`) have SHALL's texts, but may differ in
   detail; do not compare them.
 

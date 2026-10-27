@@ -15,6 +15,10 @@ crate-type = ["cdylib"]
 [dependencies]
 libloading.workspace = true
 
+[dev-dependencies]
+must-monitor.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
 [lints.rust]
 # a C ABI needs unsafe code; every unsafe operation must still be marked
 unsafe_op_in_unsafe_fn = "deny"

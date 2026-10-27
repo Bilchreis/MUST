@@ -47,6 +47,7 @@ CI builds and tests on all three.
 |---|---|
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
+| `crates/must-monitor` | Monitoring protocol, per-user registry of endpoints, local transport and client library |
 | `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |
 | `crates/must-ffi-variant` | `SHALLvariant64`/`32`, forwarding to `SHALLserver` |
 | `crates/must-ffi-ctests` | C conformance tests of the C interface |
@@ -62,6 +63,15 @@ A simulated temperature controller to try with any SECoP client (port 2055 by de
 ```bash
 cargo run --example simple_node
 ```
+
+## Monitoring
+
+Every process running must nodes offers a local, read-only monitoring endpoint (a Unix
+domain socket on Linux, a named pipe on Windows, only accessible to the user) with the
+status of its nodes, their clients, message traffic, parameter values and log records.
+`must-tui` (planned) shows all of them; the protocol and the client library are described
+in [docs/monitoring-protocol.md](docs/monitoring-protocol.md). Turn it off with
+`MUST_MONITOR=0`.
 
 ## Replacing SHALL
 
