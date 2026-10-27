@@ -123,6 +123,14 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   states, context IDs, build errors, clients, traffic, values and log records. It is only
   accessible to the user and opens no network port. `MUST_MONITOR=0` turns it off. See
   [docs/monitoring-protocol.md](docs/monitoring-protocol.md).
+- **Log files** (new): every node writes its traffic (each published value once), client
+  connections and its log records to `<log dir>\<equipment_id>\<YYYY-MM-DD>.log`, by
+  default under `%LOCALAPPDATA%\must\logs` (Windows) or `~/.local/state/must/logs`
+  (Linux), and deletes files older than 2 days. Configure it with environment variables
+  set before the program starts: `MUST_LOG_FILES=0` (off), `MUST_LOG_DIR` (directory),
+  `MUST_LOG_DAYS` (retention). Logging never slows a node; there is no size limit, so
+  check the disk usage estimate in [docs/log-files.md](docs/log-files.md) for nodes with
+  fast polling. The files contain all values exchanged with clients.
 - **Error strings** (`SECoP_S_getErrorString`) have SHALL's texts, but may differ in
   detail; do not compare them.
 

@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 indexmap.workspace = true
 must-monitor.workspace = true
 must-types.workspace = true

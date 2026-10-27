@@ -21,6 +21,7 @@ use super::actor::{ActorHandle, Job, spawn_actor};
 use super::connection;
 use crate::events::{LogLevel, NodeEvent};
 use crate::handler::Reading;
+use crate::logfiles::LogHandle;
 use crate::model::Node;
 
 /// A node could not be started.
@@ -46,6 +47,8 @@ pub struct RunningNode {
     tracker: TaskTracker,
     /// The node's id at the monitoring endpoint, if it registered itself.
     monitor_id: Option<u64>,
+    /// The node's file logging, if on.
+    log: Option<LogHandle>,
 }
 
 /// The runtime used by [`Node::start`], created on first use.
@@ -83,6 +86,8 @@ impl Node {
 
         let report: Arc<str> = self.structure_report().to_string().into();
         let hub = Arc::new(Hub::new(Arc::clone(&self.model), report));
+        // before anything happens that the log should contain
+        let log = crate::logfiles::start(&hub, self.model.options.log_files.as_ref());
         let stop = CancellationToken::new();
         let tracker = TaskTracker::new();
 
@@ -116,6 +121,7 @@ impl Node {
             stop,
             tracker,
             monitor_id: None,
+            log,
         };
         if self.model.options.monitored {
             running.monitor_id = crate::monitor::register_running(&running);
@@ -243,6 +249,9 @@ impl RunningNode {
         self.tracker.wait().await;
         info!(addr = %self.addr, "node stopped");
         self.hub.emit(NodeEvent::Stopped);
+        if let Some(log) = &self.log {
+            log.finished().await;
+        }
         if let Some(id) = self.monitor_id {
             crate::monitor::unregister_running(id);
         }
