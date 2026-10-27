@@ -25,7 +25,7 @@ in this order:
    `SECoP_V_*` functions, for C and LabVIEW callers (`must-ffi`, done; manual LabVIEW
    smoke test pending)
 4. `add-node-monitoring` – per-process monitoring endpoint for status, clients, traffic
-   and logs
+   and logs (`must-monitor`, `must_server::monitor`, done)
 5. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
    machine, opened by SHALL's status window flags
 
