@@ -39,7 +39,7 @@ After a valid hello the endpoint SHALL send a snapshot with: process id, process
 - **THEN** the snapshot contains node `cryo` with its structure report, the current `t1:value`, and one client entry with its peer address and connect time
 
 ### Requirement: Event stream
-After the snapshot the endpoint SHALL send events for: node started, stopped or failed; SECoP client connected, disconnected, activated or deactivated; message received or sent (direction, node, client, text, time); parameter value or error updated; log record.
+After the snapshot the endpoint SHALL send events for: node started, stopped or failed; SECoP client connected, disconnected, activated or deactivated; message received or sent (direction, node, client, text, time); parameter value or error updated (see "Parameter update rate"); log record.
 
 #### Scenario: Traffic event
 - **WHEN** a SECoP client sends `read t1:value` to node `cryo`
@@ -48,6 +48,21 @@ After the snapshot the endpoint SHALL send events for: node started, stopped or 
 #### Scenario: Client disconnect
 - **WHEN** a SECoP client closes its connection
 - **THEN** connected monitors receive a client-disconnected event
+
+### Requirement: Parameter update rate
+The endpoint SHALL send parameter updates coalesced by default: at most one update per parameter per interval, carrying the latest value or error and its timestamp, with an interval of 1 s unless the monitor requests another (0.1 s to 60 s). A monitor SHALL be able to switch a node to receiving every update instead, and back.
+
+#### Scenario: Fast polled parameter
+- **WHEN** parameter `t1:value` of node `cryo` is updated 50 times per second and a monitor uses the default
+- **THEN** the monitor receives about one update of `t1:value` per second, each with the latest value
+
+#### Scenario: Last value not lost
+- **WHEN** a parameter is updated several times within one interval and then not again
+- **THEN** the monitor's next update of that parameter carries the last of those values
+
+#### Scenario: Every update for one node
+- **WHEN** a monitor switches node `cryo` to every update
+- **THEN** it receives one event per update of `cryo`'s parameters, while other nodes stay coalesced
 
 ### Requirement: Traffic detail control
 The endpoint SHALL send message texts only to monitors that subscribed to traffic for a node, SHALL truncate texts longer than 4 KiB (marking them as truncated), and SHALL always send per-node message counters once per second.

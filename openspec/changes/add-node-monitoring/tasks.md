@@ -12,7 +12,8 @@
 - [ ] 2.2 Implement the per-process `Monitor` singleton started and stopped with the first/last node in `must-server`, honoring `MUST_MONITOR=0`; verify the one-endpoint, last-node-stops and disabled scenarios
 - [ ] 2.3 Implement snapshot assembly from node models and module caches (no hardware reads); verify the snapshot-content scenario and that no handler read happens during a snapshot
 - [ ] 2.4 Implement event fan-out from `NodeEvent` with bounded queues, `lagged`, per-node traffic subscription, 4 KiB truncation and per-second counters; verify the traffic, disconnect, not-subscribed, long-describe and stalled-monitor scenarios (latency check: node reply time unchanged within tolerance while a monitor is stalled)
-- [ ] 2.5 Implement the `tracing` layer with a 2000-record ring buffer and node/module attribution, and the default subscriber installation; verify the handler-error-logged scenario and that an existing global subscriber is not replaced
+- [ ] 2.5 Implement coalesced parameter updates (per-monitor latest-value map flushed every interval, interval from `hello`) and the per-node `subscribe_updates` "all" mode; verify the fast-polled-parameter, last-value-not-lost and every-update scenarios
+- [ ] 2.6 Implement the `tracing` layer with a 2000-record ring buffer and node/module attribution, and the default subscriber installation; verify the handler-error-logged scenario and that an existing global subscriber is not replaced
 
 ## 3. Client library, docs and integration
 

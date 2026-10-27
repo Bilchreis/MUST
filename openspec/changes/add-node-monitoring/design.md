@@ -32,12 +32,16 @@ Registration includes the process start time (Linux: `/proc/<pid>/stat` field 22
 
 ### Protocol shape
 Line-delimited JSON (`serde_json`, one object per line, `type` tag):
-- client → endpoint: `hello {token, version, client}`; `subscribe_traffic {node, enabled}`.
+- client → endpoint: `hello {token, version, client, update_interval?}`; `subscribe_traffic {node, enabled}`; `subscribe_updates {node, mode: "coalesced" | "all"}`.
 - endpoint → client: `welcome {version, process}`, `snapshot {...}`, `event {kind, ...}`, `counters {node, rx, tx, per_second}`, `lagged {dropped}`, `error {message}`.
 Version is `major.minor`; minor additions are optional fields that old readers ignore. The structure report is sent as embedded JSON, values in their SECoP JSON encoding, so the TUI can reuse `must-types` to interpret them.
 
 ### Event pipeline
 A per-process `Monitor` singleton (created lazily by `must-server` when the first node starts) subscribes to every node's `NodeEvent` channel and installs a `tracing` layer for log capture. It fans events out to per-monitor bounded queues (capacity 4096); full queues drop oldest and count. Traffic texts are copied only when at least one monitor subscribed for that node, so unobserved nodes pay only a counter increment. Values come from the module caches for the snapshot, so a connecting monitor never triggers hardware reads.
+
+### Coalesced parameter updates
+Polled or pushed parameters can update far faster than a display needs, so per monitor the endpoint keeps a "dirty" map (node, module, parameter) → latest value and flushes it every interval (default 1 s, chosen in `hello`). A value updated several times within an interval is sent once, with its latest value and timestamp; nothing is lost at the end of a burst because the map holds the last value until the next flush. `subscribe_updates {node, mode: "all"}` switches one node of one monitor to an event per update (for debugging), still subject to the bounded queue and `lagged`. The map is bounded by the number of parameters, so coalescing also caps memory per monitor.
+*Alternative:* opt-in updates only (snapshot values otherwise frozen). Rejected: a status display wants current values without the cost of every update.
 
 ### Tracing integration
 `must-monitor` provides a `tracing_subscriber::Layer`. Rust hosts that already set a global subscriber add the layer themselves (documented); otherwise `must-server` installs a default subscriber with this layer when the monitor starts (C ABI hosts always get this path). Records keep `node` and `module` fields when the emitting span has them.
