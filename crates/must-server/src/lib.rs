@@ -72,6 +72,7 @@
 
 pub mod events;
 pub mod handler;
+pub mod launcher;
 pub mod logfiles;
 pub mod model;
 pub mod monitor;
@@ -80,6 +81,7 @@ mod report;
 mod runtime;
 
 pub use events::{ConnectionId, LogLevel, NodeEvent};
+pub use launcher::show_status_tui;
 
 pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
 pub use model::{

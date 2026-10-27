@@ -70,7 +70,8 @@ The launcher lives in `must-server` (`launcher.rs`, `show_status_tui()`), so Rus
 - **Linux:** the mapping in `/proc/self/maps` that contains the address. No libc call needed.
 
 ### Launching on Windows
-- `std::process::Command` with `creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP)` and null stdio. The child gets its own console window, so `CTRL_CLOSE_EVENT` from closing it reaches only the TUI.
+- `CreateProcessW` (in `must-monitor`'s platform code) with `CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP`, no inherited handles, and no `STARTF_USESTDHANDLES`. The child uses its new console's own handles, and `CTRL_CLOSE_EVENT` from closing that window reaches only the TUI.
+- `std::process::Command` is not used here: it always passes the parent's standard handles. From a console host, the TUI would then draw into the host's console; from LabVIEW, it would get no console handles.
 - The child is not waited for (no zombie on Windows).
 
 *Alternative:* `AllocConsole` in the host and draw there. Rejected: closing that console window terminates the host (e.g. LabVIEW), and a process can have only one console.

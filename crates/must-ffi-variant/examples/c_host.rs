@@ -2,7 +2,8 @@
 
 //! A host program like a LabVIEW VI: loads `SHALLserver32`/`64` from the directory given
 //! as argument by name (as LabVIEW's Call Library Function does), builds two nodes under
-//! two context IDs, prints `ready`, and runs until its standard input closes. Used by
+//! two context IDs, prints `ready`, and runs until its standard input closes. With
+//! `C_HOST_GUI=1` it asks for the status window (`bGUI`). Used by
 //! `cargo xtask check` (`tests/cross_process.rs`), also as a 32-bit host read by a 64-bit
 //! monitor on Windows.
 
@@ -44,12 +45,13 @@ fn main() {
     let add_string: AddString = function(&lib, "SECoP_S_addPropertyString");
     let complete: Complete = function(&lib, "SECoP_S_nodeComplete");
 
+    let gui = c_int::from(std::env::var("C_HOST_GUI").is_ok_and(|v| v == "1"));
     let contexts: [(&CStr, &CStr); 2] = [(c"lv_a", c"hostnode_a"), (c"lv_b", c"hostnode_b")];
     for (ctx, node) in contexts {
         let ctx = ctx.as_ptr();
         // SAFETY: plain C calls with NUL-terminated strings
         unsafe {
-            assert_eq!(init(std::ptr::null_mut(), 0, 0, ctx), 0);
+            assert_eq!(init(std::ptr::null_mut(), gui, 0, ctx), 0);
             assert_eq!(
                 create(
                     node.as_ptr(),

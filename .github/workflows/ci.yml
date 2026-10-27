@@ -41,6 +41,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - run: cargo build --workspace --target ${{ matrix.target }}
+      # opening the status TUI in xterm is tested under Xvfb
+      - name: Xvfb and xterm
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb xterm
       - name: cargo test
         shell: bash
         run: |

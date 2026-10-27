@@ -25,8 +25,8 @@
 
 - [ ] 4.1 Implement the module-directory lookup in `must-monitor` (Windows `GetModuleHandleExW`/`GetModuleFileNameW`, Linux `/proc/self/maps`) and the executable lookup (library directory, `MUST_TUI`, `PATH`); verify the shipped-next-to-the-DLL scenario on Windows i686 and x86_64 and a Linux test from the built `SHALLserver64` library
 - [ ] 4.2 Implement the Windows launcher (`CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP`, null stdio); verify the close-the-console-window scenario manually, and an automated test that the child has its own console and the host survives killing it
-- [ ] 4.3 Implement the Linux launcher (graphical session check, `MUST_TUI_TERMINAL`, terminal emulator order, own process group, null stdio, reaping); verify the no-graphical-session scenario in CI and a launch with `xterm` under Xvfb
-- [ ] 4.4 Add `must_server::show_status_tui()` (spawn thread, lock check, `--focus-pid`) and replace the no-op status display hook in `must-ffi` with it, hide as no-op; verify the first-init, already-running, missing-executable, hide-while-open and focus-on-launch scenarios
+- [x] 4.3 Implement the Linux launcher (graphical session check, `MUST_TUI_TERMINAL`, terminal emulator order, own process group, null stdio, reaping); verify the no-graphical-session scenario in CI and a launch with `xterm` under Xvfb
+- [x] 4.4 Add `must_server::show_status_tui()` (spawn thread, lock check, `--focus-pid`) and replace the no-op status display hook in `must-ffi` with it, hide as no-op; verify the first-init, already-running, missing-executable, hide-while-open and focus-on-launch scenarios
 
 ## 5. Distribution and docs
 

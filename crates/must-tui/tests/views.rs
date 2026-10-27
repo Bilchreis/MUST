@@ -128,7 +128,12 @@ fn connected(key: ProcessKey, process: ProcessInfo, snapshot: Snapshot) -> Msg {
 /// Two processes: LabVIEW with nodes `cryo` (running, BUSY, an error), `magnet`
 /// (failed) and `probe` (building); python with node `test`.
 fn app() -> App {
-    let mut app = App::new(NOW, None);
+    app_focused(None)
+}
+
+/// [`app`], started with `--focus-pid`.
+fn app_focused(focus_pid: Option<u32>) -> App {
+    let mut app = App::new(NOW, focus_pid);
     let mut magnet = node(2, "magnet", NodeState::Failed, Some("lv_a"));
     magnet.messages = vec!["magnet:m1:value: no datainfo given".into()];
     let labview = Snapshot {
@@ -589,4 +594,17 @@ fn ascii_borders_for_the_classic_windows_console() {
     let shown = terminal(&app(), 80, 24, ascii).backend().to_string();
     assert!(shown.is_ascii() || !shown.contains('┌'), "{shown}");
     assert!(!shown.contains('┌') && !shown.contains('↑'));
+}
+
+#[test]
+fn focus_on_launch() {
+    // without --focus-pid, the first node is selected
+    assert_eq!(app().selected, Some((LABVIEW, 1)));
+    // with it, that process's first node, once it appears
+    let mut app = app_focused(Some(777));
+    assert_eq!(app.selected, Some((PYTHON, 1)));
+    assert_eq!(app.focus_pid, None, "applied once");
+    // the user's selection is kept afterwards
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.selected, Some((LABVIEW, 3)));
 }

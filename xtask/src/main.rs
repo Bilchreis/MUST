@@ -121,6 +121,8 @@ fn dist(o: &Options) -> Result<()> {
             "must-ffi",
             "-p",
             "must-ffi-variant",
+            "-p",
+            "must-tui",
             "--target",
             &o.target,
         ])
@@ -158,6 +160,9 @@ fn dist(o: &Options) -> Result<()> {
             )?;
         }
     }
+    // the status TUI, opened by the libraries from their own folder
+    let tui = tui_name(windows);
+    copy(&artifacts.join(tui), &out.join(tui))?;
     for header in headers()? {
         copy(
             &header,
@@ -175,6 +180,11 @@ fn dist(o: &Options) -> Result<()> {
         println!("  {f}");
     }
     Ok(())
+}
+
+/// File name of the status TUI.
+fn tui_name(windows: bool) -> &'static str {
+    if windows { "must-tui.exe" } else { "must-tui" }
 }
 
 fn dist_dir(target: &str) -> PathBuf {
@@ -280,6 +290,12 @@ fn check(o: &Options) -> Result<()> {
             problems.push(format!("{name} depends on non-system libraries: {bad:?}"));
         }
     }
+    if !out.join(tui_name(windows)).is_file() {
+        problems.push(format!(
+            "{} missing next to the libraries",
+            tui_name(windows)
+        ));
+    }
     if problems.is_empty() {
         // handles cross between the two libraries as built, loaded from the dist folder
         let mut test = Command::new(cargo());
@@ -307,7 +323,7 @@ fn check(o: &Options) -> Result<()> {
 
 /// A host process for the target (`examples/c_host.rs`, e.g. 32-bit) using the dist
 /// libraries is discovered and read by the monitoring client built for this machine
-/// (e.g. 64-bit).
+/// (e.g. 64-bit), and opens the status TUI found next to the libraries.
 fn cross_process(o: &Options, out: &Path) -> Result<()> {
     run(Command::new(cargo())
         .args([
@@ -316,20 +332,25 @@ fn cross_process(o: &Options, out: &Path) -> Result<()> {
             "must-ffi-variant",
             "--example",
             "c_host",
+            "--example",
+            "fake_tui",
             "--target",
             &o.target,
         ])
         .current_dir(root()))?;
-    let exe = root()
-        .join("target")
-        .join(&o.target)
-        .join("debug")
-        .join("examples")
-        .join(if o.target.contains("windows") {
-            "c_host.exe"
-        } else {
-            "c_host"
-        });
+    let example = |name: &str| {
+        root()
+            .join("target")
+            .join(&o.target)
+            .join("debug")
+            .join("examples")
+            .join(if o.target.contains("windows") {
+                format!("{name}.exe")
+            } else {
+                name.to_owned()
+            })
+    };
+    let exe = example("c_host");
     let mut test = Command::new(cargo());
     test.args([
         "test",
@@ -342,6 +363,7 @@ fn cross_process(o: &Options, out: &Path) -> Result<()> {
         "--nocapture",
     ])
     .env("MUST_HOST_EXE", &exe)
+    .env("MUST_FAKE_TUI_EXE", example("fake_tui"))
     .env("MUST_DIST_DIR", out)
     .current_dir(root());
     run(&mut test).map_err(|e| format!("cross-process monitoring test failed: {e}"))

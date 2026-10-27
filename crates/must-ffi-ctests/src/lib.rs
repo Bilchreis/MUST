@@ -66,6 +66,7 @@ pub mod server {
         pub fn ctest_server_poll_step(step: c_int) -> c_int;
         pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
         pub fn ctest_monitor_building() -> c_int;
+        pub fn ctest_status_window() -> c_int;
     }
 }
 
