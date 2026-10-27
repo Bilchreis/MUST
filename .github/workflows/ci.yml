@@ -54,10 +54,15 @@ jobs:
         shell: pwsh
         run: |
           cargo build --example simple_node --target ${{ matrix.target }}
-          $node = Start-Process -PassThru -FilePath "target/${{ matrix.target }}/debug/examples/simple_node.exe" -ArgumentList '127.0.0.1:2055'
-          Start-Sleep -Seconds 3
+          $node = Start-Process -PassThru -FilePath "target/${{ matrix.target }}/debug/examples/simple_node.exe" -ArgumentList '127.0.0.1:0' -RedirectStandardOutput node.out -RedirectStandardError node.err
           try {
-            $reg  = Get-Content "$env:LOCALAPPDATA\must\run\$($node.Id).json" | ConvertFrom-Json
+            $file = "$env:LOCALAPPDATA\must\run\$($node.Id).json"
+            for ($i = 0; $i -lt 60 -and -not (Test-Path $file); $i++) { Start-Sleep -Milliseconds 500 }
+            if (-not (Test-Path $file)) {
+              Get-Content node.out, node.err -ErrorAction SilentlyContinue
+              throw "no registration $file (node exited: $($node.HasExited))"
+            }
+            $reg  = Get-Content $file | ConvertFrom-Json
             $name = $reg.endpoint.name -replace '^\\\\\.\\pipe\\', ''
             $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $name, 'InOut')
             $pipe.Connect(5000)
