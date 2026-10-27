@@ -18,8 +18,9 @@ Early development. The roadmap is planned as [OpenSpec](openspec/) changes, impl
 in this order:
 
 1. `add-secop-data-types` – SECoP data types: datainfo, values, identifiers, parameter
-   postfixes (crate `must-types`, in progress)
-2. `add-sec-node-server` – SEC node library for Rust applications (`must-server`)
+   postfixes (crate `must-types`, done)
+2. `add-sec-node-server` – SEC node library for Rust applications (`must-server`, in
+   progress)
 3. `add-shall-c-abi` – drop-in replacement for SHALL's C interface: libraries named
    `SHALLserver64`/`32` and `SHALLvariant64`/`32` exporting the same `SECoP_S_*` and
    `SECoP_V_*` functions, for C and LabVIEW callers
@@ -45,11 +46,18 @@ CI builds and tests on all three.
 | Crate | Purpose |
 |---|---|
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
+| `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
 
 ## Building
 
 ```bash
 cargo test --workspace
+```
+
+A simulated temperature controller to try with any SECoP client (port 2055 by default):
+
+```bash
+cargo run --example simple_node
 ```
 
 The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.

@@ -68,16 +68,34 @@ The library SHALL check SECoP-defined property values: `visibility` must be one 
 - **WHEN** a module has `visibility` `"expert"`
 - **THEN** it is accepted and reported unchanged in the structure report
 
+### Requirement: Interface class names
+The library SHALL accept in `interface_classes` only the SECoP 2.0 interface classes (`Readable`, `Writable`, `Drivable`, `Communicator`, `AcquisitionController`, `AcquisitionChannel`, `Acquisition`) and custom names starting with an underscore.
+
+#### Scenario: Custom class before a base class
+- **WHEN** a module has `interface_classes` `["_MyHeater", "Readable"]` and parameters `value` and `status`
+- **THEN** completion succeeds
+
+#### Scenario: Non-standard class without underscore
+- **WHEN** a module has `interface_classes` `["MyHeater", "Readable"]`
+- **THEN** completion fails with an error naming `MyHeater` and suggesting `_MyHeater`
+
 ### Requirement: Interface class rules
-The library SHALL check the module's base class (the last entry of `interface_classes`): `Readable` needs parameters `value` and `status`; `Writable` additionally a writable `target`; `Drivable` additionally a `stop` command. Unknown higher classes are accepted.
+The library SHALL check the module's base class (the last entry of `interface_classes`): `Readable` needs parameters `value` and `status`; `Writable` additionally a writable `target`; `Drivable` additionally a `stop` command.
 
 #### Scenario: Drivable without stop
 - **WHEN** a module with `interface_classes` `["Drivable"]` has `value`, `status` and `target` but no `stop`
 - **THEN** completion fails with an error naming the missing command `stop`
 
-#### Scenario: Unknown class before a base class
-- **WHEN** a module has `interface_classes` `["MyHeater", "Readable"]` and parameters `value` and `status`
-- **THEN** completion succeeds
+### Requirement: Default module properties
+The library SHALL publish the module properties `features` and `implementation` even when the application does not set them, defaulting to an empty list and to the Rust type name of the module's handler, and SHALL publish the application's values instead when it sets them.
+
+#### Scenario: Defaults published
+- **WHEN** a module with handler type `simple_node::Handler` sets neither `features` nor `implementation`
+- **THEN** the structure report contains `"features": []` and `"implementation": "simple_node::Handler"` for it
+
+#### Scenario: Application values win
+- **WHEN** a module sets `features` to `["HasOffset"]` and `implementation` to `"lakeshore.Model336"`
+- **THEN** the structure report contains exactly those values
 
 ### Requirement: Status parameter shape
 The library SHALL require a `status` parameter to be a tuple of an enum (all member values between 0 and 499) and a string.

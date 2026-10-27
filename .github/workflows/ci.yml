@@ -48,3 +48,36 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           # make sure tests actually ran on this target, not only compiled
           grep -E "test result: ok\. [1-9][0-9]* passed" test.log
+
+  interop:
+    name: interop with Frappy and secop-checker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --example simple_node
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # both pinned for reproducibility
+      - uses: actions/checkout@v7
+        with:
+          repository: SampleEnvironment/frappy
+          ref: f3eacc28b84cd00acbcfb72799f3c37394e46f00
+          path: frappy
+      # the code of SampleEnvironment/secop-checker#1 (branch "work")
+      - uses: actions/checkout@v7
+        with:
+          repository: SampleEnvironment/secop-checker
+          ref: 895648c067b2ed5e1aa476b79678c300cbb5267f
+          path: secop-checker
+      - run: pip install pyyaml requests rich
+      - name: start the example node
+        run: |
+          nohup target/debug/examples/simple_node 127.0.0.1:2055 > node.log 2>&1 &
+          sleep 1
+      # the Frappy client needs only the standard library
+      - name: drive the example node with the Frappy client
+        run: PYTHONPATH=frappy timeout 120 python crates/must-server/tests/interop/frappy_client.py localhost:2055
+      - name: check the example node's description with secop-checker
+        run: PYTHONPATH=secop-checker timeout 60 python crates/must-server/tests/interop/check_describe.py 127.0.0.1:2055
