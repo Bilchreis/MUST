@@ -22,6 +22,7 @@ use serde_json::Value as Json;
 use thiserror::Error;
 
 use crate::handler::{ModuleHandler, NoHandler};
+use crate::logfiles::LogFiles;
 
 /// Default reply timeout of a node (the `timeout` node property), in seconds.
 pub const DEFAULT_TIMEOUT: f64 = 10.0;
@@ -277,6 +278,8 @@ pub(crate) struct NodeOptions {
     pub max_outgoing_bytes: usize,
     pub initial_read: bool,
     pub monitored: bool,
+    /// `None`: from the environment ([`LogFiles::from_env`]).
+    pub log_files: Option<LogFiles>,
 }
 
 /// Declares a SEC node. See the [module documentation](self).
@@ -306,6 +309,7 @@ impl NodeBuilder {
                 max_outgoing_bytes: DEFAULT_MAX_OUTGOING_BYTES,
                 initial_read: true,
                 monitored: true,
+                log_files: None,
             },
         }
     }
@@ -388,6 +392,13 @@ impl NodeBuilder {
     /// the SHALL C ABI with [`crate::monitor::ExternalNode`], turns this off.
     pub fn monitored(mut self, enabled: bool) -> Self {
         self.options.monitored = enabled;
+        self
+    }
+
+    /// Sets where and how long the node logs to disk, overriding the environment
+    /// variables (see [`crate::logfiles`]; default: [`LogFiles::from_env`]).
+    pub fn log_files(mut self, log_files: LogFiles) -> Self {
+        self.options.log_files = Some(log_files);
         self
     }
 }

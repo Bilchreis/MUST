@@ -17,6 +17,7 @@ must-types = { path = "crates/must-types" }
 async-trait = "0.1"
 base64 = "0.22"
 cc = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 indexmap = "2"
 libloading = "0.9"
 proptest = "1"

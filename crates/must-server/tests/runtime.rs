@@ -95,6 +95,7 @@ async fn startup_reads_fill_the_cache() {
         .handler_arc(Arc::clone(&sim) as Arc<dyn must_server::ModuleHandler>);
     let n = start(
         NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
             .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .module(module)
             .unwrap(),
@@ -168,6 +169,7 @@ async fn two_modules_in_parallel() {
         .handler_arc(Arc::clone(&sim) as Arc<dyn must_server::ModuleHandler>);
     let n = start(
         NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
             .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .initial_read(false)
             .module(slow_module)
@@ -320,6 +322,7 @@ async fn periodic_poll() {
         .handler_arc(Arc::clone(&sim) as Arc<dyn must_server::ModuleHandler>);
     let n = start(
         NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
             .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .initial_read(false)
             .module(module)
@@ -358,6 +361,7 @@ async fn polled_values_reach_activated_clients() {
         .handler_arc(sim as Arc<dyn must_server::ModuleHandler>);
     let n = start(
         NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
             .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .initial_read(false)
             .module(module)

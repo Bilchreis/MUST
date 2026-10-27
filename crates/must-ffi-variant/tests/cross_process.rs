@@ -2,9 +2,11 @@
 
 //! A separate host process using the built `SHALLserver` (`examples/c_host.rs`, possibly
 //! 32-bit) is discovered and read through the monitoring client library of this
-//! (possibly 64-bit) process. Run by `cargo xtask check`.
+//! (possibly 64-bit) process, and writes its nodes' log files where `MUST_LOG_DIR` says.
+//! Run by `cargo xtask check`.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -13,15 +15,31 @@ use must_monitor::protocol::NodeState;
 use must_monitor::registry::EndpointStatus;
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, step by step
 #[ignore = "needs the dist libraries and the c_host example; run by cargo xtask check"]
 async fn host_process_is_discovered_and_read() {
     let exe = std::env::var("MUST_HOST_EXE").expect("MUST_HOST_EXE is set");
     let dist = std::env::var("MUST_DIST_DIR").expect("MUST_DIST_DIR is set");
     let registry = std::env::temp_dir().join(format!("must-cross-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&registry);
+    let logs = std::env::temp_dir().join(format!("must-cross-logs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&logs);
+    let day = |days_ago: u64| {
+        (chrono::Local::now().date_naive() - chrono::Days::new(days_ago))
+            .format("%Y-%m-%d.log")
+            .to_string()
+    };
+    let node_logs = logs.join("hostnode_a");
+    std::fs::create_dir_all(&node_logs).unwrap();
+    for days_ago in [7, 8] {
+        std::fs::write(node_logs.join(day(days_ago)), "old\n").unwrap();
+    }
     let mut host = Command::new(&exe)
         .arg(&dist)
         .env("MUST_MONITOR_DIR", &registry)
+        .env("MUST_LOG_DIR", &logs)
+        .env("MUST_LOG_DAYS", "7")
+        .env_remove("MUST_LOG_FILES")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -73,7 +91,25 @@ async fn host_process_is_discovered_and_read() {
             ),
         ]
     );
+    let address = connection
+        .snapshot()
+        .nodes
+        .iter()
+        .find(|n| n.equipment_id == "hostnode_a")
+        .and_then(|n| n.address.clone())
+        .expect("hostnode_a has an address");
     drop(connection);
+
+    // traffic for the log file
+    let mut secop = TcpStream::connect(&address).unwrap();
+    secop
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    secop.write_all(b"*IDN?\n").unwrap();
+    let mut idn = String::new();
+    BufReader::new(&secop).read_line(&mut idn).unwrap();
+    assert!(idn.starts_with("ISSE"), "{idn:?}");
+    drop(secop);
 
     // closing its input ends the host; its registration goes with it
     drop(host.stdin.take());
@@ -84,5 +120,26 @@ async fn host_process_is_discovered_and_read() {
             .iter()
             .any(|l| l.registration.pid == host.id())
     );
+
+    // the log file of today, complete up to the stop, and 7 days kept
+    let log = std::fs::read_to_string(node_logs.join(day(0))).unwrap();
+    println!("{log}");
+    let lines: Vec<&str> = log.lines().map(|l| l.split_once(' ').unwrap().1).collect();
+    assert!(lines[0].starts_with("* node started on 127.0.0.1:"));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("> [") && l.ends_with("] *IDN?"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("< [") && l.contains("] ISSE"))
+    );
+    assert_eq!(lines.last(), Some(&"* node stopped"));
+    assert!(node_logs.join(day(7)).exists(), "kept for 7 days");
+    assert!(!node_logs.join(day(8)).exists(), "deleted after 7 days");
+    assert!(logs.join("hostnode_b").join(day(0)).exists());
     let _ = std::fs::remove_dir_all(&registry);
+    let _ = std::fs::remove_dir_all(&logs);
 }

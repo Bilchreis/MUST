@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use must_server::logfiles::LogFiles;
 use must_server::{
     CallResult, Command, Ctx, HandlerResult, Module, ModuleHandler, NodeBuilder, Parameter, Reading,
 };
@@ -179,6 +180,7 @@ pub fn node(sim: Arc<Sim>) -> NodeBuilder {
     NodeBuilder::new("must-test", "test node")
         .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .initial_read(false)
+        .log_files(LogFiles::off())
         .module(controller(sim))
         .unwrap()
         .module(sensor("t2"))

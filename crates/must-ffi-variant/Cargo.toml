@@ -16,6 +16,7 @@ crate-type = ["cdylib"]
 libloading.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 must-monitor.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

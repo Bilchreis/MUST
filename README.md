@@ -26,7 +26,9 @@ in this order:
    smoke test pending)
 4. `add-node-monitoring` – per-process monitoring endpoint for status, clients, traffic
    and logs (`must-monitor`, `must_server::monitor`, done)
-5. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
+5. `add-node-log-files` – rolling per-node log files of all traffic and log records
+   (`must_server::logfiles`, done)
+6. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
    machine, opened by SHALL's status window flags
 
 SHALL's client library (`SECoP_C_*`) is out of scope.
@@ -72,6 +74,22 @@ status of its nodes, their clients, message traffic, parameter values and log re
 `must-tui` (planned) shows all of them; the protocol and the client library are described
 in [docs/monitoring-protocol.md](docs/monitoring-protocol.md). Turn it off with
 `MUST_MONITOR=0`.
+
+## Log files
+
+Every node writes what it exchanged with its clients (each published value once) and what
+it logged to `~/.local/state/must/logs/<equipment_id>/<YYYY-MM-DD>.log` on Linux or
+`%LOCALAPPDATA%\must\logs\<equipment_id>\<YYYY-MM-DD>.log` on Windows, and deletes files
+older than 2 days. `MUST_LOG_FILES=0` turns it off, `MUST_LOG_DIR` and `MUST_LOG_DAYS`
+change the directory and the retention:
+
+```bash
+MUST_LOG_DIR=/tmp/must-logs MUST_LOG_DAYS=7 cargo run --example simple_node
+# writes /tmp/must-logs/must-example/<today>.log
+```
+
+The line format, disk usage and the Rust API are described in
+[docs/log-files.md](docs/log-files.md).
 
 ## Replacing SHALL
 

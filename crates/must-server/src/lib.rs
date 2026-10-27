@@ -72,6 +72,7 @@
 
 pub mod events;
 pub mod handler;
+pub mod logfiles;
 pub mod model;
 pub mod monitor;
 mod protocol;
