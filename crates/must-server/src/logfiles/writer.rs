@@ -191,13 +191,35 @@ impl NodeLog {
     }
 }
 
-/// Opens `path` for appending with an exclusive lock; `None` if someone holds the lock.
+/// Opens `path` for appending, exclusively for writing; `None` if another process
+/// writes it.
+///
+/// On Unix with an advisory lock; on Windows with a share mode that lets others read and
+/// delete the file but not write it (a Windows lock would also keep editors from reading).
 fn open_locked(path: &Path) -> io::Result<Option<File>> {
-    let file = OpenOptions::new().create(true).append(true).open(path)?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(file)),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_DELETE: u32 = 0x4;
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        options.share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE);
+        match options.open(path) {
+            Ok(file) => Ok(Some(file)),
+            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let file = options.open(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => Err(e),
+        }
     }
 }
 
@@ -372,7 +394,7 @@ mod tests {
             std::fs::read_to_string(&first).unwrap(),
             "2026-10-27T23:59:59.900+01:00 < a\n"
         );
-        File::open(&first).unwrap().try_lock().unwrap();
+        drop(open_locked(&first).unwrap().expect("not held any more"));
         close(&mut w, 1);
         assert_eq!(
             std::fs::read_to_string(dir.join("2026-10-28.log")).unwrap(),
