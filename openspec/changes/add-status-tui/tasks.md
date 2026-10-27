@@ -2,8 +2,8 @@
 
 ## 1. Log file path through monitoring
 
-- [ ] 1.1 Record the current log file per node: the writer sets it in the node's hub and emits `NodeEvent::LogFile { path }` when it opens, switches or gives up a file; verify with writer unit tests (first file, midnight, pid fallback, failure clears it) and a runtime test seeing the event
-- [ ] 1.2 Protocol 1.1 in `must-monitor`: optional `log_file` in node info and a `log_file` event; the endpoint fills and forwards them; update `docs/monitoring-protocol.md`; verify the path-in-snapshot, day-change (with the writer's injected dates), logging-off and 1.0-reader scenarios
+- [x] 1.1 Record the current log file per node: the writer sets it in the node's hub and emits `NodeEvent::LogFile { path }` when it opens, switches or gives up a file; verify with writer unit tests (first file, midnight, pid fallback, failure clears it) and a runtime test seeing the event
+- [x] 1.2 Protocol 1.1 in `must-monitor`: optional `log_file` in node info and a `log_file` event; the endpoint fills and forwards them; update `docs/monitoring-protocol.md`; verify the path-in-snapshot, day-change (with the writer's injected dates), logging-off and 1.0-reader scenarios
 
 ## 2. TUI foundation
 

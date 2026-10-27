@@ -128,6 +128,10 @@ fn handle(inner: &mut Inner, node: NodeId, event: NodeEvent) {
             module,
             message,
         }),
+        NodeEvent::LogFile { path } => inner.event(Event::LogFile {
+            node,
+            path: path.map(|p| p.display().to_string()),
+        }),
     }
 }
 

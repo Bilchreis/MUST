@@ -124,8 +124,11 @@ impl LineFormatter {
                 text.push_str(message);
                 Some(text)
             }
-            // `activate`/`deactivate` and their replies are logged as traffic
-            NodeEvent::ClientActivated { .. } | NodeEvent::ClientDeactivated { .. } => None,
+            // `activate`/`deactivate` and their replies are logged as traffic; the file
+            // itself is not news in the file
+            NodeEvent::ClientActivated { .. }
+            | NodeEvent::ClientDeactivated { .. }
+            | NodeEvent::LogFile { .. } => None,
         }
     }
 

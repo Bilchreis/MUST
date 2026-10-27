@@ -114,6 +114,8 @@ pub(crate) struct Hub {
     pub report: Arc<str>,
     state: Mutex<HubState>,
     pub events: broadcast::Sender<NodeEvent>,
+    /// The log file the node writes now (see [`crate::logfiles`]).
+    log_file: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl Hub {
@@ -139,6 +141,7 @@ impl Hub {
             report,
             state: Mutex::new(state),
             events,
+            log_file: Mutex::new(None),
         }
     }
 
@@ -158,6 +161,24 @@ impl Hub {
     /// Whether anyone listens to the node's events; lets callers skip building events.
     pub(crate) fn observed(&self) -> bool {
         self.events.receiver_count() > 0
+    }
+
+    /// The log file the node writes now.
+    pub(crate) fn log_file(&self) -> Option<std::path::PathBuf> {
+        self.log_file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Records the log file the node writes now and announces it as
+    /// [`NodeEvent::LogFile`].
+    pub(crate) fn set_log_file(&self, path: Option<std::path::PathBuf>) {
+        self.log_file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone_from(&path);
+        self.emit(NodeEvent::LogFile { path });
     }
 
     /// Logs a record about this node: to `tracing` (target `must_server::node`, with the

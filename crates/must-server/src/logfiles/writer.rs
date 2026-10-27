@@ -124,6 +124,8 @@ struct NodeLog {
     file: Option<OpenFile>,
     /// Logging failed for this day; retried with the next day's lines.
     failed: Option<NaiveDate>,
+    /// The file last announced to the node.
+    reported: Option<PathBuf>,
 }
 
 impl NodeLog {
@@ -139,6 +141,17 @@ impl NodeLog {
         self.file = None;
         self.failed = Some(date);
         self.warn(format!("{message}; file logging stops until the next day"));
+        self.report(None);
+    }
+
+    /// Tells the node which file it writes now, if that changed.
+    fn report(&mut self, path: Option<&Path>) {
+        if self.reported.as_deref() != path {
+            self.reported = path.map(Path::to_owned);
+            if let Some(hub) = self.hub.upgrade() {
+                hub.set_log_file(self.reported.clone());
+            }
+        }
     }
 
     fn write(&mut self, pid: u32, date: NaiveDate, text: &str) {
@@ -152,6 +165,7 @@ impl NodeLog {
             }
             match self.open(pid, date) {
                 Ok(file) => {
+                    self.report(Some(&file.path));
                     self.file = Some(file);
                     self.failed = None;
                 }
@@ -287,6 +301,7 @@ impl Writer {
                         hub,
                         file: None,
                         failed: None,
+                        reported: None,
                     },
                 );
             }
@@ -328,6 +343,12 @@ impl Writer {
         for log in self.nodes.values() {
             clean(&log.folder, today, log.days);
         }
+    }
+
+    /// The file last announced to the node (for tests).
+    #[cfg(test)]
+    fn reported(&self, node: LogId) -> Option<&Path> {
+        self.nodes.get(&node)?.reported.as_deref()
     }
 
     /// The path of the node's open file (for tests).
@@ -387,8 +408,14 @@ mod tests {
         open(&mut w, 1, &dir, 2, date(27));
         lines(&mut w, 1, date(27), "2026-10-27T23:59:59.900+01:00 < a\n");
         let first = w.open_path(1).unwrap().to_owned();
+        assert_eq!(
+            w.reported(1),
+            Some(first.as_path()),
+            "the first file is announced"
+        );
         lines(&mut w, 1, date(28), "2026-10-28T00:00:00.100+01:00 < b\n");
         assert_eq!(w.open_path(1).unwrap(), dir.join("2026-10-28.log"));
+        assert_eq!(w.reported(1), Some(dir.join("2026-10-28.log").as_path()));
         // the previous day's file is closed: complete, and its lock released
         assert_eq!(
             std::fs::read_to_string(&first).unwrap(),
@@ -413,6 +440,11 @@ mod tests {
         open(&mut w, 1, &dir, 2, date(27));
         lines(&mut w, 1, date(27), "x\n");
         assert_eq!(w.open_path(1).unwrap(), dir.join("2026-10-27-4242.log"));
+        assert_eq!(
+            w.reported(1),
+            Some(dir.join("2026-10-27-4242.log").as_path()),
+            "the pid file is announced"
+        );
         close(&mut w, 1);
         drop(held);
         assert_eq!(
@@ -497,12 +529,14 @@ mod tests {
         lines(&mut w, 1, date(27), "a\n");
         assert!(w.open_path(1).is_none());
         assert_eq!(w.nodes[&1].failed, Some(date(27)));
+        assert_eq!(w.reported(1), None);
         // the problem goes away; logging resumes with the next day
         std::fs::remove_file(&blocker).unwrap();
         lines(&mut w, 1, date(27), "b\n");
         assert!(w.open_path(1).is_none(), "not retried the same day");
         lines(&mut w, 1, date(28), "c\n");
         assert_eq!(w.open_path(1).unwrap(), folder.join("2026-10-28.log"));
+        assert_eq!(w.reported(1), Some(folder.join("2026-10-28.log").as_path()));
         close(&mut w, 1);
         assert_eq!(
             std::fs::read_to_string(folder.join("2026-10-28.log")).unwrap(),

@@ -30,8 +30,8 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 
 use crate::protocol::{
-    ClientMessage, NodeId, ProcessInfo, ServerMessage, Snapshot, UpdateMode, protocol_version,
-    to_line,
+    ClientMessage, Event, NodeId, ProcessInfo, ServerMessage, Snapshot, UpdateMode,
+    protocol_version, to_line,
 };
 use crate::registry::{self, Listed, Registration, RegistryError};
 use crate::transport::{self, Stream};
@@ -155,8 +155,14 @@ impl Connection {
 
     /// The next message (events, counters, lagged notices); `None` when the endpoint
     /// closed the connection, e.g. because its process stopped its last node.
+    /// Messages of a newer protocol version that this library does not know are skipped.
     pub async fn next(&mut self) -> Result<Option<ServerMessage>, ClientError> {
-        self.read().await
+        loop {
+            match self.read().await? {
+                Some(ServerMessage::Unknown | ServerMessage::Event(Event::Unknown)) => {}
+                other => return Ok(other),
+            }
+        }
     }
 
     /// Turns message events of a node on or off.
