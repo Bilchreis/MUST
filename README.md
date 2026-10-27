@@ -29,7 +29,8 @@ in this order:
 5. `add-node-log-files` – rolling per-node log files of all traffic and log records
    (`must_server::logfiles`, done)
 6. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
-   machine, opened by SHALL's status window flags
+   machine, opened by SHALL's status window flags (`must-tui`, done; manual check on
+   Windows pending)
 
 SHALL's client library (`SECoP_C_*`) is out of scope.
 
@@ -50,6 +51,7 @@ CI builds and tests on all three.
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
 | `crates/must-monitor` | Monitoring protocol, per-user registry of endpoints, local transport and client library |
+| `crates/must-tui` | `must-tui`, the terminal UI showing all must nodes of the user |
 | `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |
 | `crates/must-ffi-variant` | `SHALLvariant64`/`32`, forwarding to `SHALLserver` |
 | `crates/must-ffi-ctests` | C conformance tests of the C interface |
@@ -71,9 +73,18 @@ cargo run --example simple_node
 Every process running must nodes offers a local, read-only monitoring endpoint (a Unix
 domain socket on Linux, a named pipe on Windows, only accessible to the user) with the
 status of its nodes, their clients, message traffic, parameter values and log records.
-`must-tui` (planned) shows all of them; the protocol and the client library are described
+`must-tui` shows all of them; the protocol and the client library are described
 in [docs/monitoring-protocol.md](docs/monitoring-protocol.md). Turn it off with
 `MUST_MONITOR=0`.
+
+## Status TUI
+
+`must-tui` shows all must nodes running for your user in one terminal window: their
+state, clients, parameter values and statuses, message traffic, log records and log
+files. It only reads. Run it in a terminal (`cargo run -p must-tui`, or `must-tui` from
+`dist/<target>/`); programs that set SHALL's `bGUI` flag or call
+`SECoP_S_showStatusWindow(1)` open it in a window of their own. Views, keys and settings
+are described in [docs/status-tui.md](docs/status-tui.md).
 
 ## Log files
 

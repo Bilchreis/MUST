@@ -31,7 +31,7 @@
 ## 5. Distribution and docs
 
 - [ ] 5.1 Add `must-tui` to `xtask dist` for all three targets; verify the dist directories contain the binary next to the libraries
-- [ ] 5.2 Document the TUI (views, keys, launching, environment variables) in the README and `docs/`, and update `COMPATIBILITY.md` (status window replaced by the TUI, hide behavior); verify the documented key bindings match the help overlay
+- [x] 5.2 Document the TUI (views, keys, launching, environment variables) in the README and `docs/`, and update `COMPATIBILITY.md` (status window replaced by the TUI, hide behavior); verify the documented key bindings match the help overlay
 - [ ] 5.3 Run an end-to-end check on Windows: the C example host with `bGUI=1` opens the TUI showing its node, traffic, logs and log file path; record the result in the PR
 
 ## Workflow follow-up

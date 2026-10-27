@@ -608,3 +608,24 @@ fn focus_on_launch() {
     press(&mut app, KeyCode::Up);
     assert_eq!(app.selected, Some((LABVIEW, 3)));
 }
+
+#[test]
+fn documented_keys_match_the_help() {
+    let docs = include_str!("../../../docs/status-tui.md");
+    let section = docs.split("## Keys").nth(1).unwrap();
+    let documented: Vec<(String, String)> = section
+        .lines()
+        .skip_while(|l| !l.starts_with("| Keys"))
+        .skip(2)
+        .take_while(|l| l.starts_with('|'))
+        .map(|l| {
+            let cells: Vec<&str> = l.trim_matches('|').split(" | ").map(str::trim).collect();
+            (cells[0].to_owned(), cells[1].to_owned())
+        })
+        .collect();
+    let shown: Vec<(String, String)> = BINDINGS
+        .iter()
+        .map(|(k, w)| ((*k).to_owned(), (*w).to_owned()))
+        .collect();
+    assert_eq!(documented, shown, "docs/status-tui.md and the help overlay");
+}
