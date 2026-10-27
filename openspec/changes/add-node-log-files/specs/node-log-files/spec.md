@@ -29,7 +29,7 @@ The library SHALL NOT interleave the lines of two processes in one file: when an
 - **THEN** one writes `cryo/<date>.log` and the other `cryo/<date>-<pid>.log`
 
 ### Requirement: Logged content
-The library SHALL write one line for every message the node received from or sent to a client (complete, including `describing` replies and every `update` to every client), for every client connect and disconnect (with the peer address and reason), for node start and stop, and for every library log record of level info or higher concerning the node.
+The library SHALL write one line for every message the node received from or sent to a client (complete, including `describing` replies) except `update` and `error_update` messages, one line per parameter value or error the node publishes (see "Updates logged once"), and lines for client connects and disconnects (with peer address and reason), node start and stop, and library log records of level info or higher concerning the node.
 
 #### Scenario: A request and its reply
 - **WHEN** client 3 sends `read t1:value` and the node replies
@@ -39,12 +39,31 @@ The library SHALL write one line for every message the node received from or sen
 - **WHEN** a module handler fails and the node logs a warning for module `t1`
 - **THEN** the file contains a line with level `WARN`, module `t1` and the message
 
+### Requirement: Updates logged once
+The library SHALL log each parameter value or error the node publishes exactly once, as the `update` or `error_update` message clients receive, without a client id, whether zero, one or many clients are activated; the copies sent to the individual clients, including the initial updates after `activate`, SHALL NOT be logged again.
+
+#### Scenario: Three activated clients
+- **WHEN** three clients are activated and `t1:value` is updated once
+- **THEN** the file contains exactly one line for that update of `t1:value`
+
+#### Scenario: No activated client
+- **WHEN** no client is activated and the node polls `t1:value`
+- **THEN** each new value of `t1:value` is logged once
+
+#### Scenario: Activation
+- **WHEN** a client sends `activate`
+- **THEN** the file contains the received `activate` and the sent `active` reply, but not the initial `update` lines sent to that client
+
 ### Requirement: Line format
-Each line SHALL start with the local time with milliseconds and UTC offset in ISO 8601, followed by a kind marker (`>` received, `<` sent, `*` connection or node event, or a log level), the client id and address for client-related lines, and the text; message texts SHALL be written unchanged on one line, and the file SHALL be UTF-8.
+Each line SHALL start with the local time with milliseconds and UTC offset in ISO 8601, followed by a kind marker (`>` received, `<` sent, `U` published update, `*` connection or node event, or a log level), the client id and address for client-related lines, and the text; message texts SHALL be written unchanged on one line, and the file SHALL be UTF-8.
 
 #### Scenario: Readable lines
 - **WHEN** client 3 from `192.168.1.20:51234` sends `change t1:target 300`
 - **THEN** the line reads like `2026-10-27T16:42:10.123+01:00 > [3 192.168.1.20:51234] change t1:target 300`
+
+#### Scenario: Update line
+- **WHEN** the node publishes `t1:value` 4.2
+- **THEN** the line reads like `2026-10-27T16:42:10.456+01:00 U update t1:value [4.2,{"t":1793118130.456}]`
 
 ### Requirement: Retention
 The library SHALL delete a node's log files whose day ended more than the retention ago (default 2 days, so that at least the last 2 × 24 hours are kept), when a node starts and then about once per hour, and only files whose names match the log file pattern.

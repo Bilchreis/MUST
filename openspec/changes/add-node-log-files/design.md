@@ -24,6 +24,10 @@ The file logger subscribes to the node's existing broadcast channel, so traffic 
 *Alternative:* a `tracing` layer that writes files. Rejected: needs a global subscriber that Rust hosts may already own, and node attribution would need spans around every task.
 `add-node-monitoring` can use the same `Log` events for its log capture.
 
+### Updates once, from the published value
+Every activated client receives its own copy of each `update`, so logging sent lines would repeat each value once per client. Instead `NodeEvent::Updated` gains the published message (`line: Arc<str>`, the `update` or `error_update` text the hub already builds once for all clients), and the logger writes that line once with kind `U`. Sent lines whose action is `update` or `error_update` are skipped; that includes the initial updates after `activate`, whose values were logged when they were published. Values published while no client is activated are logged too, so the file is a complete value history. `add-node-monitoring` gets values in its update events from the same field.
+*Alternative:* log only the copy for the first activated client. Rejected: nothing would be logged while no client is activated, and "first" changes as clients come and go.
+
 ### Drops happen at the broadcast channel
 The logger task never blocks the node, because the broadcast sender never waits. When the task falls behind, `Lagged(n)` tells it exactly how many events it missed; it writes `* dropped <n> lines` before the next line. A second queue between the task and the writer thread (`std::sync::mpsc::sync_channel`, 8192 lines) uses `try_send` and adds its drops to the same counter. The broadcast capacity stays at 1024; the logger task formats lines quickly and should rarely lag.
 
@@ -34,7 +38,7 @@ Formatting happens in a tokio task per node; file I/O (open, write, flush, renam
 The writer keeps one open file per node. Before each line it compares the line's local date with the open file's date and switches files at midnight. A file is opened in append mode and locked with `std::fs::File::try_lock` (exclusive, advisory; held while open). If the lock fails, another process writes that node's file today, and the writer uses `<date>-<pid>.log` instead. The node folder is the `equipment_id` with characters other than ASCII letters, digits, `-`, `_` and `.` replaced by `_` (SECoP identifiers are already safe; `equipment_id` may not be).
 
 ### Line format
-`<local time, ms, offset> <kind> [<client id> <peer>] <text>`, with kinds `>` (received), `<` (sent), `*` (connect, disconnect, start, stop, dropped lines) and `INFO`/`WARN`/`ERROR` for log records (with `<module>:` before the text when known). Plain text keeps the files usable with `less`, `grep` and editors; SECoP messages are single lines, so they are written unchanged. Local time with the offset matches what users see on the lab clock while staying unambiguous. Time comes from `chrono::Local` (safe to query from several threads, unlike `time`'s local offset on Unix).
+`<local time, ms, offset> <kind> [<client id> <peer>] <text>`, with kinds `>` (received), `<` (sent), `U` (published update, no client), `*` (connect, disconnect, start, stop, dropped lines) and `INFO`/`WARN`/`ERROR` for log records (with `<module>:` before the text when known). Plain text keeps the files usable with `less`, `grep` and editors; SECoP messages are single lines, so they are written unchanged. Local time with the offset matches what users see on the lab clock while staying unambiguous. Time comes from `chrono::Local` (safe to query from several threads, unlike `time`'s local offset on Unix).
 
 ### Retention
 The writer deletes, per node folder, files named `YYYY-MM-DD.log` or `YYYY-MM-DD-<pid>.log` whose date is before today minus the retention in days (so with 2 days, on the 27th the files of the 25th and 26th stay and the 24th goes). It does so when a node starts and once per hour, and leaves all other files alone. Only folders of nodes this process runs are cleaned; a node that never runs again keeps its old files (documented).
@@ -47,7 +51,7 @@ If the directory cannot be created or a file cannot be opened or written (includ
 
 ## Risks / Trade-offs
 
-- [No size limit: a node with fast polling and several activated clients can write gigabytes per day] → Documented with an estimate (bytes per update × updates per second × clients). Retention can be lowered to 1 day, or logging turned off per process. Write errors from a full disk stop logging instead of affecting the node. A size limit can be added later without changing the format.
+- [No size limit: a node with fast polling can write gigabytes per day] → Documented with an estimate (bytes per update × updates per second; independent of the number of clients, since updates are logged once). Retention can be lowered to 1 day, or logging turned off per process. Write errors from a full disk stop logging instead of affecting the node. A size limit can be added later without changing the format.
 - [Log files contain all values exchanged, which may be sensitive measurement data] → Kept in a per-user directory (0700 on Linux, per-user ACL on Windows), documented.
 - [Advisory locks are not honored by other tools] → Only must processes write these files; editors only read them.
 - [A crash loses up to about 1 s of lines] → Accepted; flushing per line would cost too much at high traffic.
