@@ -25,7 +25,7 @@ On Windows the library SHALL start `must-tui.exe` as a separate process with its
 - **THEN** the TUI process ends and the host process and its nodes keep running
 
 ### Requirement: Terminal emulator on Linux
-On Linux the library SHALL, when `DISPLAY` or `WAYLAND_DISPLAY` is set, start `must-tui` in a terminal emulator chosen from `$TERMINAL`, `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal` and `xterm` (first found), detached from the host; without a graphical session or terminal emulator it SHALL log how to start `must-tui` manually.
+On Linux the library SHALL, when `DISPLAY` or `WAYLAND_DISPLAY` is set, start `must-tui` in a terminal emulator chosen from `MUST_TUI_TERMINAL`, `$TERMINAL`, `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal` and `xterm` (first found), detached from the host; without a graphical session or terminal emulator it SHALL log how to start `must-tui` manually.
 
 #### Scenario: No graphical session
 - **WHEN** a headless host calls `SECoP_S_showStatusWindow(1)`
