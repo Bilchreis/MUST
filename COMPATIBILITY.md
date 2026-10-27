@@ -26,7 +26,8 @@ and normally run unchanged. This page lists where must behaves differently.
    Programs that used only the C functions need no source change. LabVIEW VIs that call
    the functions by name need no change.
 
-To go back, put SHALL's files back.
+To go back, put SHALL's files back. For LabVIEW, [docs/labview-smoke-test.md](docs/labview-smoke-test.md)
+describes a quick check of the replaced libraries.
 
 ## Protocol: SECoP 2.0
 
