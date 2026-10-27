@@ -62,6 +62,9 @@ CI builds and tests on all three.
 cargo test --workspace
 ```
 
+On Windows, set `MUST_TUI=0` while testing: the C tests use SHALL's `bGUI` flag, and
+cargo puts the built `must-tui` on `PATH`, so they would open the status TUI.
+
 A simulated temperature controller to try with any SECoP client (port 2055 by default):
 
 ```bash

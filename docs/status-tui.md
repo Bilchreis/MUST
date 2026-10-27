@@ -81,7 +81,7 @@ counts the new messages, and resuming shows them.
 
 | Variable | Meaning |
 |---|---|
-| `MUST_TUI` | path of `must-tui` (or the folder holding it), for programs that open the TUI |
+| `MUST_TUI` | path of `must-tui` (or the folder holding it), for programs that open the TUI; `0` turns opening it off (e.g. on unattended machines whose programs set `bGUI`) |
 | `MUST_TUI_TERMINAL` | Linux: terminal command to open the TUI in; the TUI's command line is appended, e.g. `alacritty -e` |
 | `NO_COLOR` | no colors |
 | `MUST_MONITOR_DIR` | registry directory of the monitoring endpoints (see [monitoring-protocol.md](monitoring-protocol.md)) |

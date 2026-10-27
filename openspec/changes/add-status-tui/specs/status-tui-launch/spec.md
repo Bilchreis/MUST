@@ -32,7 +32,7 @@ On Linux the library SHALL, when `DISPLAY` or `WAYLAND_DISPLAY` is set, start `m
 - **THEN** nothing is started, the call returns normally, and an info log says to run `must-tui`
 
 ### Requirement: Finding the executable
-The library SHALL look for the TUI executable first in the directory of the loaded must library, then at the path in `MUST_TUI`, then on `PATH`, and SHALL log a warning naming the searched locations when none is found.
+The library SHALL look for the TUI executable first in the directory of the loaded must library, then at the path in `MUST_TUI`, then on `PATH`, and SHALL log a warning naming the searched locations when none is found; `MUST_TUI=0` SHALL turn launching off.
 
 #### Scenario: Shipped next to the DLL
 - **WHEN** `SHALLserver32.dll` and `must-tui.exe` are in the same directory, which is not on `PATH`

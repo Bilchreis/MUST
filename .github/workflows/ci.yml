@@ -7,6 +7,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # tests using SHALL's bGUI flag must not open real status TUIs (on Windows, cargo puts
+  # the built must-tui on PATH); the launcher's own tests set MUST_TUI themselves
+  MUST_TUI: "0"
 
 jobs:
   lint:

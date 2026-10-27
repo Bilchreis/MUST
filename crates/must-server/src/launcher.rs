@@ -6,7 +6,7 @@
 //! [`show_status_tui`] returns at once; a short-lived thread does the work. It starts
 //! nothing if a TUI already runs for the user (the TUI holds a lock in the monitoring
 //! registry directory). The executable is looked for next to the library (or program)
-//! containing must, then at `MUST_TUI`, then on `PATH`.
+//! containing must, then at `MUST_TUI`, then on `PATH`. `MUST_TUI=0` turns launching off.
 //!
 //! - **Windows:** the TUI gets a console window of its own; closing it ends only the TUI.
 //! - **Linux:** with a graphical session (`DISPLAY` or `WAYLAND_DISPLAY`), the TUI runs in
@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 
 use must_monitor::{platform, registry};
 
-/// Environment variable naming the TUI executable (or the directory holding it).
+/// Environment variable naming the TUI executable (or the directory holding it); `0`
+/// turns launching off.
 pub const TUI_VARIABLE: &str = "MUST_TUI";
 /// Environment variable with the terminal command used on Linux.
 pub const TERMINAL_VARIABLE: &str = "MUST_TUI_TERMINAL";
@@ -47,6 +48,8 @@ pub enum Launch {
     },
     /// A TUI already runs for this user.
     AlreadyRunning,
+    /// Launching is turned off (`MUST_TUI=0`).
+    TurnedOff,
     /// No TUI executable was found in these places.
     NotFound {
         /// Where it was looked for.
@@ -91,6 +94,9 @@ fn report(outcome: &Launch) {
             tracing::info!("status TUI started: {}", program.display());
         }
         Launch::AlreadyRunning => tracing::info!("the status TUI is already running"),
+        Launch::TurnedOff => {
+            tracing::info!("opening the status TUI is turned off ({TUI_VARIABLE}=0)");
+        }
         Launch::NotFound { searched } => {
             let places: Vec<String> = searched.iter().map(|p| p.display().to_string()).collect();
             tracing::warn!(
@@ -126,6 +132,9 @@ fn launch_in(
     var: &dyn Fn(&str) -> Option<OsString>,
     pid: u32,
 ) -> Launch {
+    if var(TUI_VARIABLE).is_some_and(|v| v.to_str().map(str::trim) == Some("0")) {
+        return Launch::TurnedOff;
+    }
     match registry::tui_running(registry_dir) {
         Ok(true) => return Launch::AlreadyRunning,
         Ok(false) => {}
@@ -329,6 +338,9 @@ mod tests {
         let lock = registry::try_lock_tui(&registry).unwrap().unwrap();
         assert_eq!(launch_in(&registry, None, &var, 1), Launch::AlreadyRunning);
         drop(lock);
+        // turned off
+        let off = |name: &str| (name == TUI_VARIABLE).then(|| OsString::from("0"));
+        assert_eq!(launch_in(&registry, None, &off, 1), Launch::TurnedOff);
         let _ = std::fs::remove_dir_all(&base);
     }
 
