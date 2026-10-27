@@ -25,11 +25,11 @@
 - [x] 4.2 Implement the polling-mode queue, `getStoredCommand[2]`, `putCommandAnswer[2]` and the 60 s timeout sweeper; verify the poll-and-answer, small-buffer and unanswered-request scenarios pass (timeout tested with a shortened test-only interval)
 - [x] 4.3 Implement `updateParameter[2]` and the error code mapping table; verify the pushed-update and busy-hardware scenarios, the cross-library handle scenario with a handle from `SHALLvariant`, and a table-driven test over all mapped codes pass
 - [x] 4.4 Implement the no-op status display hook for `bGUI` and `SECoP_S_showStatusWindow`; verify the GUI-requested scenario passes
-- [ ] 4.5 Add a stress test with eight threads mixing pushes, polls and answers for 10 s; verify no crash, deadlock or unanswered request on all three targets
+- [x] 4.5 Add a stress test with eight threads mixing pushes, polls and answers for 10 s; verify no crash, deadlock or unanswered request on all three targets
 
 ## 5. Conformance, docs and integration
 
-- [ ] 5.1 Port the scenarios of SHALL's `tst_contextid.cpp` and `tst_protocol.cpp` to C tests against must (adapting expected wire output to SECoP 2.0); verify they pass on all three targets
+- [x] 5.1 Port the scenarios of SHALL's `tst_contextid.cpp` and `tst_protocol.cpp` to C tests against must (adapting expected wire output to SECoP 2.0); verify they pass on all three targets
 - [x] 5.2 Add a runtime-binding test (`LoadLibrary`/`dlopen` + symbol lookup by name, cdecl calls) for `SHALLserver32.dll` on i686; verify it passes
 - [x] 5.3 Write `COMPATIBILITY.md` (differences to SHALL: SECoP 2.0 wire protocol, removed C++ API, error class mapping, status TUI instead of Qt window) and a README section on replacing SHALL; verify the documented replacement steps work with the C example
 - [ ] 5.4 Document a manual LabVIEW smoke test (32-bit and 64-bit) with a minimal VI calling init, create node, add module/parameter, complete, poll and answer; verify it once on a Windows machine with LabVIEW and record the result in the PR
