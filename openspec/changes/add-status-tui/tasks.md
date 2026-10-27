@@ -9,7 +9,7 @@
 
 - [x] 2.1 Add `crates/must-tui` (ratatui, crossterm, tokio, must-monitor, must-types) with app state, message loop, terminal setup/restore and panic hook; verify the panic-restores-terminal scenario manually and a unit test that the hook restores raw mode
 - [x] 2.2 Implement the discovery loop (rescan every second, connect, gone marking, 60 s removal, pinning, `MUST_MONITOR_DIR`) against the `must-monitor` client; verify the new-node-appears and host-exits scenarios with an integration test that starts and stops host processes
-- [ ] 2.3 Implement the single-instance lock on `tui.lock` (`File::try_lock` on a read/write handle); verify a second `must-tui` exits with a message while the first runs, on all three targets
+- [x] 2.3 Implement the single-instance lock on `tui.lock` (`File::try_lock` on a read/write handle); verify a second `must-tui` exits with a message while the first runs, on all three targets
 
 ## 3. Views
 
@@ -23,14 +23,14 @@
 
 ## 4. Launching from the library
 
-- [ ] 4.1 Implement the module-directory lookup in `must-monitor` (Windows `GetModuleHandleExW`/`GetModuleFileNameW`, Linux `/proc/self/maps`) and the executable lookup (library directory, `MUST_TUI`, `PATH`); verify the shipped-next-to-the-DLL scenario on Windows i686 and x86_64 and a Linux test from the built `SHALLserver64` library
+- [x] 4.1 Implement the module-directory lookup in `must-monitor` (Windows `GetModuleHandleExW`/`GetModuleFileNameW`, Linux `/proc/self/maps`) and the executable lookup (library directory, `MUST_TUI`, `PATH`); verify the shipped-next-to-the-DLL scenario on Windows i686 and x86_64 and a Linux test from the built `SHALLserver64` library
 - [ ] 4.2 Implement the Windows launcher (`CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP`, null stdio); verify the close-the-console-window scenario manually, and an automated test that the child has its own console and the host survives killing it
 - [x] 4.3 Implement the Linux launcher (graphical session check, `MUST_TUI_TERMINAL`, terminal emulator order, own process group, null stdio, reaping); verify the no-graphical-session scenario in CI and a launch with `xterm` under Xvfb
 - [x] 4.4 Add `must_server::show_status_tui()` (spawn thread, lock check, `--focus-pid`) and replace the no-op status display hook in `must-ffi` with it, hide as no-op; verify the first-init, already-running, missing-executable, hide-while-open and focus-on-launch scenarios
 
 ## 5. Distribution and docs
 
-- [ ] 5.1 Add `must-tui` to `xtask dist` for all three targets; verify the dist directories contain the binary next to the libraries
+- [x] 5.1 Add `must-tui` to `xtask dist` for all three targets; verify the dist directories contain the binary next to the libraries
 - [x] 5.2 Document the TUI (views, keys, launching, environment variables) in the README and `docs/`, and update `COMPATIBILITY.md` (status window replaced by the TUI, hide behavior); verify the documented key bindings match the help overlay
 - [ ] 5.3 Run an end-to-end check on Windows: the C example host with `bGUI=1` opens the TUI showing its node, traffic, logs and log file path; record the result in the PR
 
