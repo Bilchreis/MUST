@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Check a running node's description with secop-checker.
 
-Usage: python3 secop_check.py <host:port>
+Usage: python3 check_describe.py <host:port>
+
+(Not named after the checker's `secop_check` package, which it would shadow.)
 
 secop-checker (https://github.com/SampleEnvironment/secop-checker) must be importable,
 e.g. via PYTHONPATH pointing at a checkout. Prints every diagnostic and exits non-zero

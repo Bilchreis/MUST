@@ -256,18 +256,26 @@ async fn requests_without_reading_replies() {
         writer
     });
 
+    // wait until the node stops taking requests: the count must stay unchanged for a
+    // full second (socket buffers fill at different speeds on different platforms)
     let reads = || sim.reads.load(std::sync::atomic::Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let first = reads();
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let later = reads();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut last, mut unchanged_since) = (reads(), Instant::now());
+    while unchanged_since.elapsed() < Duration::from_secs(1) {
+        assert!(
+            Instant::now() < deadline,
+            "node kept taking requests: {} of {ROUNDS}",
+            reads()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = reads();
+        if now != last {
+            (last, unchanged_since) = (now, Instant::now());
+        }
+    }
     assert!(
-        first > 0 && first < ROUNDS,
-        "node handled {first} of {ROUNDS} reads"
-    );
-    assert_eq!(
-        later, first,
-        "node kept taking requests while the client did not read"
+        last > 0 && last < ROUNDS,
+        "node handled {last} of {ROUNDS} reads before stalling"
     );
 
     // other clients are unaffected, and the flooding connection stays open

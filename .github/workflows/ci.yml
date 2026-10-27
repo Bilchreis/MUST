@@ -80,4 +80,4 @@ jobs:
       - name: drive the example node with the Frappy client
         run: PYTHONPATH=frappy timeout 120 python crates/must-server/tests/interop/frappy_client.py localhost:2055
       - name: check the example node's description with secop-checker
-        run: PYTHONPATH=secop-checker timeout 60 python crates/must-server/tests/interop/secop_check.py 127.0.0.1:2055
+        run: PYTHONPATH=secop-checker timeout 60 python crates/must-server/tests/interop/check_describe.py 127.0.0.1:2055
