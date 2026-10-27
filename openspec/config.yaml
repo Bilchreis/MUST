@@ -1,0 +1,51 @@
+schema: spec-driven
+
+# Project context (optional)
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
+# Example:
+#   context: |
+#     Designs and tasks must cover Windows, macOS, and Linux
+#     Write all artifacts in Spanish
+context: |
+  must is a Rust rewrite of SHALL (https://github.com/SampleEnvironment/SHALL), the SECoP
+  hardware abstraction layer. Scope: the SEC node (server) side plus a TUI. The SHALL client
+  library (SECoP_C_*) and its GUIs are out of scope.
+  Protocol: SECoP 2.0 draft (SampleEnvironment/SECoP), mandatory messages first; matrix and
+  check are deferred.
+  Platforms: Linux x86_64 (.so), Windows x86_64 (.dll) and Windows i686 32-bit (.dll, for
+  32-bit LabVIEW). Designs, tasks and CI must cover all three; code must not assume 64-bit
+  pointers or a Unix-only API without a Windows counterpart.
+  C ABI: the libraries are drop-in replacements for SHALL: same exported SECoP_V_* and
+  SECoP_S_* functions, signatures, enum values and semantics (callbacks or polling, context
+  IDs, QApplication* accepted and ignored), cdecl calling convention, and SHALL's library
+  file names (SHALLserver64/32, SHALLvariant64/32).
+  No Qt anywhere: no Qt dependency, build step or runtime requirement.
+  Status display: a ratatui TUI (must-tui) replaces SHALL's Qt status window. It is a separate
+  process showing all running must SEC nodes on the machine (a host such as LabVIEW may run
+  several nodes per process) with status and logs. SHALL's bGUI flag spawns it in a new
+  terminal window.
+  License: LGPL-3.0-or-later, same as SHALL.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
