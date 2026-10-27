@@ -32,9 +32,9 @@
 ## 5. Examples, docs and integration
 
 - [x] 5.1 Add `examples/simple_node.rs` (a simulated temperature Drivable) and document the crate API with rustdoc; verify `cargo run --example simple_node` serves a node that a SECoP client (e.g. frappy-gui or netcat) can `describe`, `activate` and `change`
-- [ ] 5.2 Add an interoperability test that runs the example node and drives it with the Frappy Python client in CI (Linux job); verify it passes
-- [ ] 5.3 Add secop-checker (the code of SampleEnvironment/secop-checker#1, pinned) to the CI interop job, checking the example node's `describe` and failing on any ERROR; verify the job reports no errors
-- [ ] 5.4 Run the full CI matrix (Linux x86_64, Windows x86_64, Windows i686); verify all jobs are green
+- [x] 5.2 Add an interoperability test that runs the example node and drives it with the Frappy Python client in CI (Linux job); verify it passes
+- [x] 5.3 Add secop-checker (the code of SampleEnvironment/secop-checker#1, pinned) to the CI interop job, checking the example node's `describe` and failing on any ERROR; verify the job reports no errors
+- [x] 5.4 Run the full CI matrix (Linux x86_64, Windows x86_64, Windows i686); verify all jobs are green
 
 ## Workflow follow-up
 
