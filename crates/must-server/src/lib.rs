@@ -103,7 +103,7 @@ mod report;
 mod runtime;
 
 pub use events::{ConnectionId, LogLevel, NodeEvent};
-pub use launcher::show_status_tui;
+pub use launcher::{hide_status_tui, show_status_tui};
 
 pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
 pub use model::{

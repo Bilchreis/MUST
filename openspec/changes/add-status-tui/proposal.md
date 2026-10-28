@@ -18,6 +18,7 @@ SHALL users get a Qt status window (`bGUI` in `SECoP_S_initLibrary`, `SECoP_S_sh
   - a new console window on Windows
   - a terminal emulator on Linux, when a graphical session is available
   - Only one TUI runs per user; if one is already running, no second one is started.
+  - The host keeps the TUI open: when it is closed, it is opened again, until `SECoP_S_showStatusWindow(0)` or the library is done.
 - Rust hosts get the same launch through `must_server::show_status_tui()`.
 - `must-tui` is shipped next to the SHALL-named libraries in the distribution.
 
