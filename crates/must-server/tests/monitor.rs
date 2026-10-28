@@ -167,13 +167,30 @@ async fn snapshot_content_without_hardware_reads() {
     c.request("read t1:value").await;
     let reads = sim.reads.load(Ordering::SeqCst);
 
-    let mut m = monitor(Options::new("test")).await;
+    // the endpoint learns of the client from the node's events, a moment after it
+    // connected: take snapshots until it is listed
+    let address = n.local_addr().to_string();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut m, node) = loop {
+        let m = monitor(Options::new("test")).await;
+        let node = m
+            .snapshot()
+            .nodes
+            .iter()
+            .find(|n| n.address.as_deref() == Some(address.as_str()))
+            .expect("the node in the snapshot")
+            .clone();
+        if !node.clients.is_empty() || Instant::now() > deadline {
+            break (m, node);
+        }
+        drop(m);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(
         sim.reads.load(Ordering::SeqCst),
         reads,
-        "no reads for the snapshot"
+        "no reads for the snapshots"
     );
-    let node = m.snapshot().nodes[0].clone();
     assert_eq!(node.equipment_id, "must-test");
     assert_eq!(node.address, Some(n.local_addr().to_string()));
     assert!(node.structure.as_ref().unwrap()["modules"]["t1"].is_object());
@@ -602,4 +619,48 @@ async fn not_on_the_network() {
         "only the SECoP port, no monitoring port"
     );
     n.stop().await;
+}
+
+// --- log file location (protocol 1.1)
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn log_file_in_snapshot_and_events() {
+    use must_server::logfiles::LogFiles;
+    let _serial = serial();
+    let logs = DIR.join("logs");
+    // a node without file logging, so that the endpoint is open before the second starts
+    let quiet = start(Arc::new(Sim::default()));
+    let mut m = monitor(Options::new("test")).await;
+    assert_eq!(m.snapshot().nodes[0].log_file, None, "file logging off");
+
+    let logged = node(Arc::new(Sim::default()))
+        .log_files(LogFiles::default().dir(&logs))
+        .build()
+        .unwrap()
+        .spawn(&Handle::current())
+        .unwrap();
+    let expected = logs
+        .join("must-test")
+        .join(format!("{}.log", today()))
+        .display()
+        .to_string();
+    let (id, path) = wait_for(&mut m, |msg| match msg {
+        ServerMessage::Event(Event::LogFile { node, path }) => Some((*node, path.clone())),
+        _ => None,
+    })
+    .await;
+    assert_eq!(path.as_deref(), Some(expected.as_str()));
+    assert_ne!(id, m.snapshot().nodes[0].id);
+
+    // later monitors find it in the snapshot
+    let later = monitor(Options::new("later")).await;
+    let entry = later.snapshot().nodes.iter().find(|n| n.id == id).unwrap();
+    assert_eq!(entry.log_file.as_deref(), Some(expected.as_str()));
+    logged.stop().await;
+    quiet.stop().await;
+    let _ = std::fs::remove_dir_all(&logs);
 }

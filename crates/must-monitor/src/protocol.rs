@@ -6,6 +6,10 @@
 //! [`ServerMessage::Welcome`] and a [`ServerMessage::Snapshot`], then streams
 //! [`ServerMessage::Event`]s, per-node [`ServerMessage::Counters`] every second, and
 //! [`ServerMessage::Lagged`] when the client fell behind and events were dropped.
+//!
+//! Minor versions only add optional fields, message types and event kinds. Readers
+//! ignore unknown fields, and unknown message types and event kinds parse as
+//! [`ServerMessage::Unknown`] and [`Event::Unknown`], which the client library skips.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -14,7 +18,7 @@ use serde_json::Value as Json;
 /// is rejected.
 pub const PROTOCOL_MAJOR: u32 = 1;
 /// Minor version; minor additions are optional fields that older readers ignore.
-pub const PROTOCOL_MINOR: u32 = 0;
+pub const PROTOCOL_MINOR: u32 = 1;
 
 /// The protocol version as sent in hello and welcome, e.g. `"1.0"`.
 pub fn protocol_version() -> String {
@@ -110,6 +114,9 @@ pub enum ServerMessage {
         /// Why.
         message: String,
     },
+    /// A message type of a newer protocol version.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The monitored process.
@@ -171,6 +178,10 @@ pub struct NodeInfo {
     pub parameters: Vec<ParameterState>,
     /// Connected SECoP clients.
     pub clients: Vec<ClientInfo>,
+    /// The log file the node writes now; absent while file logging is off, not yet
+    /// started or stopped after an error. Since 1.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_file: Option<String>,
 }
 
 /// The last known value or error of a parameter.
@@ -322,6 +333,18 @@ pub enum Event {
     },
     /// A log record.
     Log(LogRecord),
+    /// The node's log file changed (first file, day change, per-process file name) or,
+    /// with `path` absent, file logging stopped. Since 1.1.
+    LogFile {
+        /// The node.
+        node: NodeId,
+        /// The file it writes now.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// An event kind of a newer protocol version.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Messages longer than this are cut in message events.
@@ -391,6 +414,7 @@ mod tests {
                 active_all: false,
                 active_modules: vec!["t1".into()],
             }],
+            log_file: Some("/home/u/.local/state/must/logs/cryo/2026-10-27.log".into()),
         }
     }
 
@@ -404,7 +428,7 @@ mod tests {
         let line = to_line(&hello);
         assert_eq!(
             line,
-            "{\"type\":\"hello\",\"version\":\"1.0\",\"client\":\"must-tui\"}\n"
+            "{\"type\":\"hello\",\"version\":\"1.1\",\"client\":\"must-tui\"}\n"
         );
         for message in [
             hello,
@@ -516,6 +540,14 @@ mod tests {
                 module: None,
                 message: "hello".into(),
             }),
+            Event::LogFile {
+                node: 1,
+                path: Some(r"C:\Users\u\AppData\Local\must\logs\cryo\2026-10-27-4242.log".into()),
+            },
+            Event::LogFile {
+                node: 1,
+                path: None,
+            },
         ];
         for event in events {
             round_trip_server(&ServerMessage::Event(event));
@@ -525,6 +557,26 @@ mod tests {
             line,
             "{\"type\":\"event\",\"kind\":\"node_stopped\",\"node\":1}\n"
         );
+    }
+
+    #[test]
+    fn protocol_minor_versions() {
+        // a 1.0 node entry (no log file) reads as one without a log file
+        let mut old = serde_json::to_value(node()).unwrap();
+        old.as_object_mut().unwrap().remove("log_file");
+        let read: NodeInfo = serde_json::from_value(old).unwrap();
+        assert_eq!(read.log_file, None);
+        // no log file: the field is left out
+        let mut off = node();
+        off.log_file = None;
+        assert!(!serde_json::to_string(&off).unwrap().contains("log_file"));
+        // message types and event kinds of newer versions are recognized as unknown
+        let later: ServerMessage =
+            serde_json::from_str(r#"{"type":"event","kind":"node_paused","node":1,"why":"x"}"#)
+                .unwrap();
+        assert_eq!(later, ServerMessage::Event(Event::Unknown));
+        let later: ServerMessage = serde_json::from_str(r#"{"type":"heartbeat","n":3}"#).unwrap();
+        assert_eq!(later, ServerMessage::Unknown);
     }
 
     #[test]

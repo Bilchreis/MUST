@@ -30,8 +30,8 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 
 use crate::protocol::{
-    ClientMessage, NodeId, ProcessInfo, ServerMessage, Snapshot, UpdateMode, protocol_version,
-    to_line,
+    ClientMessage, Event, NodeId, ProcessInfo, ServerMessage, Snapshot, UpdateMode,
+    protocol_version, to_line,
 };
 use crate::registry::{self, Listed, Registration, RegistryError};
 use crate::transport::{self, Stream};
@@ -84,9 +84,19 @@ impl Options {
 pub struct Connection {
     process: ProcessInfo,
     snapshot: Snapshot,
+    events: Events,
+    requests: Requests,
+}
+
+/// The reading half of a [`Connection`] (see [`Connection::into_parts`]).
+pub struct Events {
     reader: BufReader<ReadHalf<Stream>>,
-    writer: WriteHalf<Stream>,
     line: String,
+}
+
+/// The writing half of a [`Connection`] (see [`Connection::into_parts`]).
+pub struct Requests {
+    writer: WriteHalf<Stream>,
 }
 
 impl std::fmt::Debug for Connection {
@@ -94,6 +104,18 @@ impl std::fmt::Debug for Connection {
         f.debug_struct("Connection")
             .field("process", &self.process)
             .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Events {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Events").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Requests {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Requests").finish_non_exhaustive()
     }
 }
 
@@ -108,38 +130,42 @@ pub async fn connect(
 
 /// Like [`connect`], on an already open stream.
 pub async fn connect_stream(stream: Stream, options: &Options) -> Result<Connection, ClientError> {
-    let (reader, mut writer) = tokio::io::split(stream);
-    let hello = ClientMessage::Hello {
-        version: protocol_version(),
-        client: options.client.clone(),
-        update_interval: options.update_interval,
-    };
-    writer.write_all(to_line(&hello).as_bytes()).await?;
-    let mut connection = Connection {
-        process: ProcessInfo::default(),
-        snapshot: Snapshot::default(),
+    let (reader, writer) = tokio::io::split(stream);
+    let mut requests = Requests { writer };
+    let mut events = Events {
         reader: BufReader::new(reader),
-        writer,
         line: String::new(),
     };
-    match connection.read().await? {
-        Some(ServerMessage::Welcome { process, .. }) => connection.process = process,
+    requests
+        .send(&ClientMessage::Hello {
+            version: protocol_version(),
+            client: options.client.clone(),
+            update_interval: options.update_interval,
+        })
+        .await?;
+    let process = match events.read().await? {
+        Some(ServerMessage::Welcome { process, .. }) => process,
         Some(ServerMessage::Error { message }) => return Err(ClientError::Refused(message)),
         other => {
             return Err(ClientError::Protocol(format!(
                 "{other:?} instead of welcome"
             )));
         }
-    }
-    match connection.read().await? {
-        Some(ServerMessage::Snapshot(snapshot)) => connection.snapshot = snapshot,
+    };
+    let snapshot = match events.read().await? {
+        Some(ServerMessage::Snapshot(snapshot)) => snapshot,
         other => {
             return Err(ClientError::Protocol(format!(
                 "{other:?} instead of snapshot"
             )));
         }
-    }
-    Ok(connection)
+    };
+    Ok(Connection {
+        process,
+        snapshot,
+        events,
+        requests,
+    })
 }
 
 impl Connection {
@@ -155,11 +181,61 @@ impl Connection {
 
     /// The next message (events, counters, lagged notices); `None` when the endpoint
     /// closed the connection, e.g. because its process stopped its last node.
+    ///
+    /// Messages of a newer protocol version that this library does not know are skipped.
     pub async fn next(&mut self) -> Result<Option<ServerMessage>, ClientError> {
-        self.read().await
+        self.events.next().await
     }
 
     /// Turns message events of a node on or off.
+    pub async fn subscribe_traffic(
+        &mut self,
+        node: NodeId,
+        enabled: bool,
+    ) -> Result<(), ClientError> {
+        self.requests.subscribe_traffic(node, enabled).await
+    }
+
+    /// Chooses coalesced or every update for a node.
+    pub async fn subscribe_updates(
+        &mut self,
+        node: NodeId,
+        mode: UpdateMode,
+    ) -> Result<(), ClientError> {
+        self.requests.subscribe_updates(node, mode).await
+    }
+
+    /// Splits the connection, to read events and send requests from different tasks:
+    /// the process, the snapshot, the reading and the writing half.
+    pub fn into_parts(self) -> (ProcessInfo, Snapshot, Events, Requests) {
+        (self.process, self.snapshot, self.events, self.requests)
+    }
+}
+
+impl Events {
+    /// See [`Connection::next`].
+    pub async fn next(&mut self) -> Result<Option<ServerMessage>, ClientError> {
+        loop {
+            match self.read().await? {
+                Some(ServerMessage::Unknown | ServerMessage::Event(Event::Unknown)) => {}
+                other => return Ok(other),
+            }
+        }
+    }
+
+    async fn read(&mut self) -> Result<Option<ServerMessage>, ClientError> {
+        self.line.clear();
+        if self.reader.read_line(&mut self.line).await? == 0 {
+            return Ok(None);
+        }
+        serde_json::from_str(&self.line)
+            .map(Some)
+            .map_err(|e| ClientError::Protocol(format!("{e}: {}", self.line.trim_end())))
+    }
+}
+
+impl Requests {
+    /// See [`Connection::subscribe_traffic`].
     pub async fn subscribe_traffic(
         &mut self,
         node: NodeId,
@@ -169,7 +245,7 @@ impl Connection {
             .await
     }
 
-    /// Chooses coalesced or every update for a node.
+    /// See [`Connection::subscribe_updates`].
     pub async fn subscribe_updates(
         &mut self,
         node: NodeId,
@@ -182,15 +258,5 @@ impl Connection {
     async fn send(&mut self, message: &ClientMessage) -> Result<(), ClientError> {
         self.writer.write_all(to_line(message).as_bytes()).await?;
         Ok(())
-    }
-
-    async fn read(&mut self) -> Result<Option<ServerMessage>, ClientError> {
-        self.line.clear();
-        if self.reader.read_line(&mut self.line).await? == 0 {
-            return Ok(None);
-        }
-        serde_json::from_str(&self.line)
-            .map(Some)
-            .map_err(|e| ClientError::Protocol(format!("{e}: {}", self.line.trim_end())))
     }
 }

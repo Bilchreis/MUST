@@ -548,3 +548,14 @@ int ctest_monitor_building(void)
     OK(SECoP_S_addModule("m", "mon"));
     return 0;
 }
+
+/* --- the status window flags open the status TUI; the calls always succeed */
+
+int ctest_status_window(void)
+{
+    OK(SECoP_S_initLibrary(NULL, 1, 1, "gui"));
+    SECoP_S_showStatusWindow(1);
+    SECoP_S_showStatusWindow(0);
+    SECoP_S_doneLibrary(1, "gui");
+    return 0;
+}

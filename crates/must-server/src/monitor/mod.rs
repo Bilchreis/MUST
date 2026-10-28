@@ -154,9 +154,13 @@ impl Inner {
 /// A node as listed in snapshots, with values from the node's cache (never read from
 /// the hardware).
 fn node_info(id: NodeId, entry: &NodeEntry) -> NodeInfo {
-    let (structure, parameters) = match &entry.running {
-        Some(node) => (Some(structure(node)), parameters(node)),
-        None => (None, Vec::new()),
+    let (structure, parameters, log_file) = match &entry.running {
+        Some(node) => (
+            Some(structure(node)),
+            parameters(node),
+            node.hub().log_file().map(|p| p.display().to_string()),
+        ),
+        None => (None, Vec::new(), None),
     };
     NodeInfo {
         id,
@@ -168,6 +172,7 @@ fn node_info(id: NodeId, entry: &NodeEntry) -> NodeInfo {
         structure,
         parameters,
         clients: entry.clients.values().cloned().collect(),
+        log_file,
     }
 }
 

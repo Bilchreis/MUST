@@ -147,9 +147,18 @@ async fn request_reply_and_handler_error() {
         client.contains("127.0.0.1:"),
         "client with its address: {client}"
     );
-    // the value read is published (once) before the reply
-    assert!(lines[read + 1].starts_with("U update t1:value [295"));
-    assert_eq!(lines[read + 2], format!("< {client} {reply}"));
+    // the next line sent to that client is the reply (the value read is also
+    // published, as a `U` line, in either order with the reply)
+    let next_sent = lines[read + 1..]
+        .iter()
+        .find(|l| l.starts_with(&format!("< {client}")))
+        .unwrap();
+    assert_eq!(*next_sent, format!("< {client} {reply}"));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("U update t1:value [295"))
+    );
     assert!(lines.contains(&format!("* {client} connected")));
     assert!(
         lines

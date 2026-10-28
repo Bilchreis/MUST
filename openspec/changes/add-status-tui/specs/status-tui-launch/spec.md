@@ -25,14 +25,14 @@ On Windows the library SHALL start `must-tui.exe` as a separate process with its
 - **THEN** the TUI process ends and the host process and its nodes keep running
 
 ### Requirement: Terminal emulator on Linux
-On Linux the library SHALL, when `DISPLAY` or `WAYLAND_DISPLAY` is set, start `must-tui` in a terminal emulator chosen from `$TERMINAL`, `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal` and `xterm` (first found), detached from the host; without a graphical session or terminal emulator it SHALL log how to start `must-tui` manually.
+On Linux the library SHALL, when `DISPLAY` or `WAYLAND_DISPLAY` is set, start `must-tui` in a terminal emulator chosen from `MUST_TUI_TERMINAL`, `$TERMINAL`, `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal` and `xterm` (first found), detached from the host; without a graphical session or terminal emulator it SHALL log how to start `must-tui` manually.
 
 #### Scenario: No graphical session
 - **WHEN** a headless host calls `SECoP_S_showStatusWindow(1)`
 - **THEN** nothing is started, the call returns normally, and an info log says to run `must-tui`
 
 ### Requirement: Finding the executable
-The library SHALL look for the TUI executable first in the directory of the loaded must library, then at the path in `MUST_TUI`, then on `PATH`, and SHALL log a warning naming the searched locations when none is found.
+The library SHALL look for the TUI executable first in the directory of the loaded must library, then at the path in `MUST_TUI`, then on `PATH`, and SHALL log a warning naming the searched locations when none is found; `MUST_TUI=0` SHALL turn launching off.
 
 #### Scenario: Shipped next to the DLL
 - **WHEN** `SHALLserver32.dll` and `must-tui.exe` are in the same directory, which is not on `PATH`

@@ -3,6 +3,7 @@
 //! Events of a running node, for monitoring.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Identifies a client connection within a node.
@@ -82,6 +83,12 @@ pub enum NodeEvent {
         module: Option<String>,
         /// The message.
         message: String,
+    },
+    /// The node's log file changed (see [`crate::logfiles`]): the file it writes now, or
+    /// `None` when file logging stopped after an error.
+    LogFile {
+        /// The file.
+        path: Option<PathBuf>,
     },
 }
 

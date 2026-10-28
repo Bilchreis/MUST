@@ -372,8 +372,47 @@ pub fn list(dir: &Path) -> Result<Vec<Listed>, RegistryError> {
     Ok(found)
 }
 
+/// Name of the lock file in the registry directory that the status TUI holds while it
+/// runs, so that only one runs per user.
+pub const TUI_LOCK: &str = "tui.lock";
+
+/// Takes the TUI lock in `dir` without waiting: `Some(file)` holds it until the file is
+/// dropped (or the process ends), `None` if another process holds it.
+pub fn try_lock_tui(dir: &Path) -> io::Result<Option<std::fs::File>> {
+    // read and write access: Windows refuses to lock append-only handles
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(dir.join(TUI_LOCK))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+/// Whether a status TUI holds the lock in `dir`.
+pub fn tui_running(dir: &Path) -> io::Result<bool> {
+    Ok(try_lock_tui(dir)?.is_none())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tui_lock() {
+        let dir = std::env::temp_dir().join(format!("must-tui-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!super::tui_running(&dir).unwrap());
+        let held = super::try_lock_tui(&dir).unwrap().expect("free");
+        assert!(super::tui_running(&dir).unwrap());
+        assert!(super::try_lock_tui(&dir).unwrap().is_none());
+        drop(held);
+        assert!(!super::tui_running(&dir).unwrap(), "released with the file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {

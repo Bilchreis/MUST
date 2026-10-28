@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! What the registry needs from the operating system: identities of processes (to tell
-//! a live registration from a stale one, also after pid reuse) and of the current user.
+//! a live registration from a stale one, also after pid reuse) and of the current user;
+//! and what launching the status TUI needs: the file of the library a function lives
+//! in, and on Windows a process with a console window of its own.
 
 use std::io;
+use std::path::PathBuf;
 
 /// A process as identified in registrations.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,10 +32,47 @@ pub fn process(pid: u32) -> io::Result<Option<ProcessIdentity>> {
     imp::process(pid)
 }
 
+/// The file of the executable or library (DLL, shared object) containing the code at
+/// `address`, e.g. the address of one of its functions.
+pub fn module_path(address: usize) -> io::Result<PathBuf> {
+    imp::module_path(address)
+}
+
+/// Starts `program` with `args` as a process with a console window of its own (a new
+/// console and process group, no handles inherited), so that closing that window ends
+/// only that process. Returns its pid.
+#[cfg(windows)]
+pub fn spawn_in_new_console(program: &std::path::Path, args: &[String]) -> io::Result<u32> {
+    imp::spawn_in_new_console(program, args)
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use std::io;
     use std::os::unix::fs::MetadataExt;
+    use std::path::PathBuf;
+
+    /// The mapped file that contains `address`, from `/proc/self/maps`.
+    pub(super) fn module_path(address: usize) -> io::Result<PathBuf> {
+        let maps = std::fs::read_to_string("/proc/self/maps")?;
+        mapped_file(&maps, address)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "address not in a mapped file"))
+    }
+
+    /// The file of the mapping containing `address` in `maps` (the `/proc/<pid>/maps`
+    /// format: `start-end perms offset dev inode path`).
+    pub(super) fn mapped_file(maps: &str, address: usize) -> Option<PathBuf> {
+        maps.lines().find_map(|line| {
+            let mut fields = line.splitn(6, ' ');
+            let (start, end) = fields.next()?.split_once('-')?;
+            let start = usize::from_str_radix(start, 16).ok()?;
+            let end = usize::from_str_radix(end, 16).ok()?;
+            let path = fields.nth(4)?.trim_start();
+            let path = path.strip_suffix(" (deleted)").unwrap_or(path);
+            (start <= address && address < end && path.starts_with('/'))
+                .then(|| PathBuf::from(path))
+        })
+    }
 
     use super::ProcessIdentity;
 
@@ -99,6 +139,120 @@ mod imp {
     };
 
     use super::ProcessIdentity;
+
+    /// The module (EXE or DLL) containing `address`.
+    pub(super) fn module_path(address: usize) -> io::Result<std::path::PathBuf> {
+        use windows_sys::Win32::Foundation::HMODULE;
+        use windows_sys::Win32::System::LibraryLoader::{
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            GetModuleFileNameW, GetModuleHandleExW,
+        };
+        let mut module: HMODULE = std::ptr::null_mut();
+        // SAFETY: with FROM_ADDRESS the "name" is an address inside the module; the
+        // reference count is not changed, so nothing needs to be released
+        let found = unsafe {
+            GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                    | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                address as *const u16,
+                &raw mut module,
+            )
+        };
+        if found == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buffer = vec![0u16; 260];
+        loop {
+            let size = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+            // SAFETY: the buffer holds `size` characters
+            let len = unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), size) };
+            if len == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if len < size {
+                buffer.truncate(len as usize);
+                return Ok(std::ffi::OsString::from_wide(&buffer).into());
+            }
+            // cut off: try a larger buffer
+            buffer.resize(buffer.len() * 2, 0);
+        }
+    }
+
+    pub(super) fn spawn_in_new_console(
+        program: &std::path::Path,
+        args: &[String],
+    ) -> io::Result<u32> {
+        use std::os::windows::ffi::OsStrExt;
+
+        use windows_sys::Win32::System::Threading::{
+            CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP, CreateProcessW, PROCESS_INFORMATION,
+            STARTUPINFOW,
+        };
+
+        let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain([0]).collect() };
+        let application = wide(program.as_os_str());
+        let mut line = quote(&program.to_string_lossy());
+        for arg in args {
+            line.push(' ');
+            line.push_str(&quote(arg));
+        }
+        let mut command_line = wide(std::ffi::OsStr::new(&line));
+        // SAFETY: all-zero is a valid STARTUPINFOW; without STARTF_USESTDHANDLES the
+        // child uses its new console's handles. cb is set below.
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
+        // SAFETY: all-zero is a valid PROCESS_INFORMATION, filled by CreateProcessW
+        let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: NUL-terminated strings that live across the call; no handles are
+        // inherited; environment and current directory are the caller's
+        let ok = unsafe {
+            CreateProcessW(
+                application.as_ptr(),
+                command_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP,
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const startup,
+                &raw mut info,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        drop(Handle(info.hThread));
+        drop(Handle(info.hProcess));
+        Ok(info.dwProcessId)
+    }
+
+    /// Quotes a command-line argument for the C runtime's argument parsing.
+    pub(super) fn quote(arg: &str) -> String {
+        if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
+            return arg.to_owned();
+        }
+        let mut quoted = String::from('"');
+        let mut backslashes = 0;
+        for c in arg.chars() {
+            match c {
+                '\\' => backslashes += 1,
+                '"' => {
+                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                    quoted.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    quoted.push_str(&"\\".repeat(backslashes));
+                    quoted.push(c);
+                    backslashes = 0;
+                }
+            }
+        }
+        quoted.push_str(&"\\".repeat(backslashes * 2));
+        quoted.push('"');
+        quoted
+    }
 
     /// 100 ns intervals between 1601-01-01 and 1970-01-01.
     const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
@@ -240,6 +394,13 @@ mod imp {
             "monitoring supports Linux and Windows",
         ))
     }
+
+    pub(super) fn module_path(_address: usize) -> io::Result<std::path::PathBuf> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "monitoring supports Linux and Windows",
+        ))
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -250,6 +411,53 @@ pub(crate) use imp::user_sid;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn module_of_a_function() {
+        // in a test binary, its own functions live in the executable
+        let path = module_path((module_of_a_function as *const ()).addr()).unwrap();
+        assert_eq!(
+            path.canonicalize().unwrap(),
+            std::env::current_exe().unwrap().canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn maps_lines() {
+        let maps = "\
+55d0c0000000-55d0c0001000 r--p 00000000 08:01 1234 /usr/bin/LabVIEW
+7f0000000000-7f0000100000 r-xp 00010000 08:01 5678                       /opt/lv/libSHALLserver64.so
+7f0000200000-7f0000201000 rw-p 00000000 00:00 0
+7f0000300000-7f0000301000 r-xp 00000000 08:01 9 /tmp/old lib.so (deleted)
+";
+        assert_eq!(
+            imp::mapped_file(maps, 0x7f00_0000_0042),
+            Some(PathBuf::from("/opt/lv/libSHALLserver64.so"))
+        );
+        assert_eq!(
+            imp::mapped_file(maps, 0x7f00_0030_0000),
+            Some(PathBuf::from("/tmp/old lib.so"))
+        );
+        assert_eq!(imp::mapped_file(maps, 0x7f00_0020_0000), None, "anonymous");
+        assert_eq!(imp::mapped_file(maps, 0x1000), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn command_line_quoting() {
+        assert_eq!(imp::quote("--focus-pid"), "--focus-pid");
+        assert_eq!(
+            imp::quote(r"C:\Program Files\must\must-tui.exe"),
+            r#""C:\Program Files\must\must-tui.exe""#
+        );
+        assert_eq!(imp::quote(r#"a"b"#), r#""a\"b""#);
+        assert_eq!(
+            imp::quote(r"C:\dir with space\"),
+            r#""C:\dir with space\\""#
+        );
+        assert_eq!(imp::quote(""), "\"\"");
+    }
 
     #[test]
     fn own_process() {

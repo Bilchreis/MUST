@@ -114,9 +114,14 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   port.
 - **Errors and warnings** of the building functions are kept for `SECoP_S_showErrors`,
   which prints them to stderr and clears them.
-- **Status window**: `bGUI` and `SECoP_S_showStatusWindow` request the status display,
-  which the terminal UI `must-tui` provides (change `add-status-tui`); until then they
-  have no effect.
+- **Status window**: SHALL's Qt status window is replaced by the terminal UI `must-tui`
+  (shipped next to the libraries), which shows the nodes of all must programs of the user
+  at once and only reads. `bGUI` in `SECoP_S_initLibrary` and
+  `SECoP_S_showStatusWindow(1)` open it in a window of its own (a console window on
+  Windows; a terminal emulator on Linux with a graphical session), unless it runs
+  already. **Different from SHALL:** `SECoP_S_showStatusWindow(0)` does not close it,
+  since it may show other programs' nodes; the user closes it. Closing its window never
+  ends the host. See [docs/status-tui.md](docs/status-tui.md).
 - **Monitoring** (new): every process with nodes opens a local monitoring endpoint (a
   Unix socket in `$XDG_RUNTIME_DIR/must` or `/tmp/must-<uid>`, a named pipe on Windows,
   registered in `%LOCALAPPDATA%\must\run`), from `SECoP_S_createNode` on, with node

@@ -1,0 +1,24 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: shown
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   2 processes, 4 nodes                           "
+"┌ Detail: magnet ──────────────────────────────────────────────────────────────────────────────────┐"
+"│magnet  failed  context lv_a  LabVIEW.exe (4242)                                                  │"
+"│log  no log file (file logging off or stopped)                                                    │"
+"│error   magnet:m1:value: no datainfo given                                                        │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+"┌ Clients (0) ─────────────────────────────────────────────────────────────────────────────────────┐"
+"│ID   ADDRESS                  CONNECTED  ACTIVATED                                                │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" ↑↓ scroll · ←→ node · Tab views · ? help · q quit                                                  "

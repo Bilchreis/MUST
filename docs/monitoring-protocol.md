@@ -26,7 +26,7 @@ A registration looks like this:
 
 ```json
 {
-  "version": "1.0",
+  "version": "1.1",
   "pid": 4242,
   "name": "LabVIEW.exe",
   "start": 133748224000000000,
@@ -55,8 +55,14 @@ Windows. Nothing listens on a network port.
 ## Protocol
 
 UTF-8 JSON objects, one per line, each with a `type` field. The protocol version is
-`major.minor` (currently `1.0`); minor versions only add optional fields, which readers
-ignore.
+`major.minor` (currently `1.1`). Minor versions only add optional fields, message types
+and event kinds; readers ignore fields, types and kinds they do not know (the
+`must-monitor` client library skips them).
+
+| Version | Additions |
+|---|---|
+| 1.0 | first version |
+| 1.1 | `log_file` in node entries, `log_file` event |
 
 ### Opening
 
@@ -64,7 +70,7 @@ The monitor's first line must be a hello; otherwise the endpoint closes the conn
 without a word:
 
 ```json
-{"type":"hello","version":"1.0","client":"my-tool","update_interval":1.0}
+{"type":"hello","version":"1.1","client":"my-tool","update_interval":1.0}
 ```
 
 `update_interval` (optional, 0.1 to 60 s, default 1 s) sets how often coalesced
@@ -74,7 +80,7 @@ parameter updates are sent. A hello with another major version gets
 The endpoint answers with `welcome` and a `snapshot`:
 
 ```json
-{"type":"welcome","version":"1.0","process":{"pid":4242,"name":"LabVIEW.exe","library_version":"0.1.0","start_time":1793118000.5}}
+{"type":"welcome","version":"1.1","process":{"pid":4242,"name":"LabVIEW.exe","library_version":"0.1.0","start_time":1793118000.5}}
 {"type":"snapshot","process":{...},"nodes":[...],"logs":[...]}
 ```
 
@@ -91,6 +97,7 @@ Each node in the snapshot:
 | `structure` | the `describe` data, once running |
 | `parameters` | `{module, parameter, report, error}` for every cached parameter: `report` is the SECoP data report `[value, {"t": ...}]`, or the error report if `error` is true; values come from the cache, the hardware is never read for a snapshot |
 | `clients` | `{id, peer, connected_at, active_all, active_modules}` per SECoP client |
+| `log_file` | the path of the log file the node writes now (see [log-files.md](log-files.md)); absent while file logging is off, not yet started or stopped after an error (1.1) |
 
 `logs` holds up to the 2000 most recent log records `{time, level, node, module, message}`.
 
@@ -106,7 +113,10 @@ After the snapshot the endpoint sends:
   `message` (only for nodes with traffic subscribed: `client`, `direction`
   `received`/`sent`, `time`, `text` cut to 4 KiB with `truncated`),
   `update` (a parameter's `report`/`error`, see below),
-  `log` (a log record).
+  `log` (a log record),
+  `log_file` (`node`, and `path` of the file the node writes now: after the first line,
+  at midnight, or when it falls back to `<date>-<pid>.log`; without `path` when file
+  logging stopped after an error; 1.1).
 - `{"type":"counters","node":1,"rx":120,"tx":340,"rx_per_second":2.0,"tx_per_second":5.0}`
   for every running node once per second.
 - `{"type":"lagged","dropped":17}` when the monitor did not read fast enough and that many
@@ -136,7 +146,7 @@ Linux, with OpenBSD netcat or socat:
 ```bash
 REG=${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/must}; REG=${REG:-/tmp/must-$(id -u)}
 ls $REG                                          # 4242.json 4242.sock ...
-printf '{"type":"hello","version":"1.0","client":"me"}\n' | nc -U -q 5 $REG/4242.sock
+printf '{"type":"hello","version":"1.1","client":"me"}\n' | nc -U -q 5 $REG/4242.sock
 # or: socat - UNIX-CONNECT:$REG/4242.sock
 ```
 
@@ -150,7 +160,7 @@ $pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', $name, 'InOut')
 $pipe.Connect(5000)
 $w = New-Object System.IO.StreamWriter($pipe); $w.AutoFlush = $true
 $r = New-Object System.IO.StreamReader($pipe)
-$w.WriteLine('{"type":"hello","version":"1.0","client":"me"}')
+$w.WriteLine('{"type":"hello","version":"1.1","client":"me"}')
 $r.ReadLine(); $r.ReadLine()    # welcome and snapshot
 ```
 

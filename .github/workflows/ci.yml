@@ -7,6 +7,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # tests using SHALL's bGUI flag must not open real status TUIs (on Windows, cargo puts
+  # the built must-tui on PATH); the launcher's own tests set MUST_TUI themselves
+  MUST_TUI: "0"
 
 jobs:
   lint:
@@ -24,6 +27,8 @@ jobs:
   test:
     name: test ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # a hanging test must not block CI for hours
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +46,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - run: cargo build --workspace --target ${{ matrix.target }}
+      # opening the status TUI in xterm is tested under Xvfb
+      - name: Xvfb and xterm
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb xterm
       - name: cargo test
         shell: bash
         run: |
@@ -80,6 +89,7 @@ jobs:
   dist:
     name: dist ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

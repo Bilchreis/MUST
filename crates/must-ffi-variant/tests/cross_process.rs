@@ -7,6 +7,7 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -142,4 +143,80 @@ async fn host_process_is_discovered_and_read() {
     assert!(logs.join("hostnode_b").join(day(0)).exists());
     let _ = std::fs::remove_dir_all(&registry);
     let _ = std::fs::remove_dir_all(&logs);
+}
+
+/// `bGUI` in a host using the dist libraries opens the status TUI shipped next to them
+/// (here a stand-in that reports how it was started), focused on the host.
+#[test]
+#[ignore = "needs the dist libraries and the examples; run by cargo xtask check"]
+fn status_tui_next_to_the_library() {
+    let exe = std::env::var("MUST_HOST_EXE").expect("MUST_HOST_EXE is set");
+    let fake = std::env::var("MUST_FAKE_TUI_EXE").expect("MUST_FAKE_TUI_EXE is set");
+    let dist = PathBuf::from(std::env::var("MUST_DIST_DIR").expect("MUST_DIST_DIR is set"));
+    let base = std::env::temp_dir().join(format!("must-cross-tui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    // a copy of the dist folder (not on PATH) with the TUI next to the libraries
+    let shipped = base.join("dist");
+    std::fs::create_dir_all(&shipped).unwrap();
+    for entry in std::fs::read_dir(&dist).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            std::fs::copy(&path, shipped.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    let tui_name = if cfg!(windows) {
+        "must-tui.exe"
+    } else {
+        "must-tui"
+    };
+    std::fs::copy(&fake, shipped.join(tui_name)).unwrap();
+    let registry = base.join("registry");
+    let report = base.join("report.txt");
+
+    let mut command = Command::new(&exe);
+    command
+        .arg(&shipped)
+        .env("C_HOST_GUI", "1")
+        .env("FAKE_TUI_REPORT", &report)
+        .env("MUST_MONITOR_DIR", &registry)
+        .env("MUST_LOG_FILES", "0")
+        .env_remove("MUST_TUI")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    if cfg!(not(windows)) {
+        // a "terminal" that runs the TUI directly
+        command
+            .env("DISPLAY", ":fake")
+            .env("MUST_TUI_TERMINAL", "env");
+    }
+    let mut host = command.spawn().unwrap();
+    let mut ready = String::new();
+    BufReader::new(host.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert!(ready.starts_with("ready"), "host said {ready:?}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !report.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the TUI was not started"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let text = std::fs::read_to_string(&report).unwrap();
+    let mut lines = text.lines();
+    let started = PathBuf::from(lines.next().unwrap());
+    assert_eq!(
+        started.canonicalize().unwrap(),
+        shipped.join(tui_name).canonicalize().unwrap(),
+        "the TUI next to the library"
+    );
+    assert_eq!(
+        lines.next(),
+        Some(format!("--focus-pid {}", host.id()).as_str())
+    );
+    drop(host.stdin.take());
+    assert!(host.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(&base);
 }

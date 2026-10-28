@@ -7,11 +7,15 @@ A terminal UI that shows, in one place, all must SEC nodes running on the machin
 ## ADDED Requirements
 
 ### Requirement: Show all running nodes
-The TUI SHALL discover all monitoring endpoints of the current user, connect to each, and list every node of every process with process name and pid, equipment_id, listen address, state, number of connected clients, messages per second, and the most severe module status.
+The TUI SHALL discover all monitoring endpoints of the current user, connect to each, and list every node of every process with process name and pid, equipment_id, SHALL context ID if any, listen address, state (building, failed, running or stopped), number of connected clients, messages per second, and the most severe module status.
 
 #### Scenario: Several hosts
 - **WHEN** a LabVIEW process runs nodes `cryo` and `magnet` and a second process runs node `test`
 - **THEN** the overview lists all three nodes, grouped by process
+
+#### Scenario: Node being built and failed node
+- **WHEN** a C host under context `lv_a` has created node `cryo` but not completed it, and node `magnet` failed to complete
+- **THEN** the overview lists `cryo` as building and `magnet` as failed, both with context `lv_a`
 
 ### Requirement: Processes come and go
 The TUI SHALL rescan for endpoints at least every 2 seconds, add new processes without user action, and mark a process whose endpoint closed or whose process ended as gone, removing it after 60 seconds unless the user pins it.
@@ -25,7 +29,7 @@ The TUI SHALL rescan for endpoints at least every 2 seconds, add new processes w
 - **THEN** its nodes are shown as gone, and disappear after 60 seconds
 
 ### Requirement: Node detail
-The TUI SHALL show for a selected node its modules with their parameters (value formatted with the datainfo's `fmtstr` and unit, timestamp age, or error), each module's status colored by status group (DISABLED, IDLE, WARN, BUSY, ERROR), and the connected SECoP clients with address, connect time and activation state.
+The TUI SHALL show for a selected node its modules with their parameters (value formatted with the datainfo's `fmtstr` and unit, timestamp age, or error), each module's status colored by status group (DISABLED, IDLE, WARN, BUSY, ERROR), the connected SECoP clients with address, connect time and activation state, the node's build errors and warnings, and the path of the log file the node currently writes, or that it writes none.
 
 #### Scenario: Busy module
 - **WHEN** module `t1` has status `[300, "ramping"]`
@@ -35,8 +39,20 @@ The TUI SHALL show for a selected node its modules with their parameters (value 
 - **WHEN** the last read of `t1:value` failed with `HardwareError`
 - **THEN** the detail view shows the error class and message instead of a value
 
+#### Scenario: Failed node
+- **WHEN** node `magnet` failed to complete because a parameter has no datainfo
+- **THEN** its detail view shows that error message instead of modules
+
+#### Scenario: Log file
+- **WHEN** node `cryo` of process 4242 writes `~/.local/state/must/logs/cryo/2026-10-27-4242.log`
+- **THEN** the detail view shows that path, and the new path after the day changes
+
+#### Scenario: File logging off
+- **WHEN** a node runs with file logging turned off
+- **THEN** the detail view states that the node writes no log file
+
 ### Requirement: Traffic view
-The TUI SHALL show the SECoP messages of a selected node in a scrolling list with time, direction, client and text, subscribing to traffic only while the view is open, and SHALL support pausing and a text filter.
+The TUI SHALL show the SECoP messages of a selected node in a scrolling list with time, direction, client and text, subscribing to traffic only while the view is open, marking messages the endpoint shortened, and SHALL support pausing and a text filter.
 
 #### Scenario: Live traffic
 - **WHEN** the traffic view of `cryo` is open and a client sends `read t1:value`
@@ -79,7 +95,7 @@ The TUI SHALL work in Windows console hosts (conhost and Windows Terminal) and c
 - **THEN** the terminal is back in normal mode and the panic message is printed
 
 ### Requirement: Read-only
-The TUI SHALL not offer any action that changes nodes, parameters or connections.
+The TUI SHALL not offer any action that changes nodes, parameters or connections, and SHALL send nothing to monitoring endpoints but the hello and its traffic and update subscriptions.
 
 #### Scenario: No write actions
 - **WHEN** the user opens the help overlay
