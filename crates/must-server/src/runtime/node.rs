@@ -114,6 +114,7 @@ impl Node {
             stop.clone(),
             tracker.clone(),
         ));
+        crate::discovery::start(&hub, addr, &tracker, &stop);
 
         info!(%addr, equipment_id = %self.model.equipment_id, "node started");
         hub.emit(NodeEvent::Started { addr });
