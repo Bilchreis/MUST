@@ -72,15 +72,17 @@
 //!
 //! # Polling
 //!
-//! A node polls only what the application asks for, and sends every result to activated
-//! clients as an update, even when the value did not change:
+//! A node polls its modules and sends every result to activated clients as an update,
+//! even when the value did not change. By default a module polls in two tiers: `value`
+//! and `status` of a `Readable`, `Writable` or `Drivable` module every 5 s, and every
+//! other parameter that is neither constant nor cached every 60 s.
 //!
-//! - [`Module::poll_interval`] polls in two tiers: `value` and `status` of a `Readable`,
-//!   `Writable` or `Drivable` module at the given interval, and every other parameter
-//!   that is neither constant nor cached every 60 s ([`Module::slow_poll_interval`]).
+//! - [`Module::poll_interval`] and [`Module::slow_poll_interval`] change the two
+//!   intervals.
 //! - [`Module::poll_all`] polls all those parameters at one interval, as SHALL did.
+//! - [`Module::no_polling`] turns the module's polling off.
 //! - [`Parameter::poll_interval`] gives a parameter an interval of its own, which wins
-//!   over the module's.
+//!   over the module's (also with polling off).
 //!
 //! A module with a `double` parameter named `pollinterval` lets clients tune the rate:
 //! a `change` goes to the handler, and the value it returns (or any value pushed later)

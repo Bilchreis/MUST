@@ -94,13 +94,15 @@ are described in [docs/status-tui.md](docs/status-tui.md).
 
 ## Polling
 
-`must-server` modules poll only when asked: `Module::poll_interval(d)` polls `value` and
-`status` of a `Readable`/`Writable`/`Drivable` module every `d` and the other parameters
-every 60 s, `Module::poll_all(d)` polls everything every `d`. A `pollinterval` parameter
-lets clients change the rate at runtime. **API change:** `Module::poll_interval` used to
-poll all parameters at one interval; use `Module::poll_all` for that. The C ABI keeps
-SHALL's behavior. See the crate documentation of `must-server` for details, and try it
-with the example node:
+`must-server` modules are polled by default: `value` and `status` of a
+`Readable`/`Writable`/`Drivable` module every 5 s, the other parameters every 60 s.
+`Module::poll_interval(d)` changes the 5 s, `Module::poll_all(d)` polls everything every
+`d`, and `Module::no_polling()` turns it off. A `pollinterval` parameter lets clients
+change the rate at runtime. **API change:** `Module::poll_interval` used to poll all
+parameters at one interval (use `Module::poll_all` for that), and modules without poll
+settings used to be not polled. C programs that use SHALL's `pollinterval` properties
+keep SHALL's behavior ([COMPATIBILITY.md](COMPATIBILITY.md)). See the crate
+documentation of `must-server` for details, and try it with the example node:
 
 ```bash
 cargo run --example simple_node

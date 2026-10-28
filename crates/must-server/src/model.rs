@@ -417,6 +417,7 @@ pub struct Module {
     tiered_poll: Option<Duration>,
     uniform_poll: Option<Duration>,
     slow_poll: Option<Duration>,
+    polling_off: bool,
 }
 
 enum Accessible {
@@ -439,6 +440,7 @@ impl Module {
             tiered_poll: None,
             uniform_poll: None,
             slow_poll: None,
+            polling_off: false,
         }
     }
 
@@ -543,18 +545,20 @@ impl Module {
         self
     }
 
-    /// Polls the module in two tiers: `value` and `status` of a `Readable`, `Writable` or
-    /// `Drivable` module at `interval`, and every other parameter that is not constant
-    /// and not cached every 60 s (see [`slow_poll_interval`](Self::slow_poll_interval)).
-    /// Parameters with an interval of their own keep it. A `pollinterval` parameter of
-    /// the module replaces `interval` while the node runs.
+    /// Sets the fast tier of the module's polling, 5 s by default. Without other poll
+    /// settings a module polls in two tiers: `value` and `status` of a `Readable`,
+    /// `Writable` or `Drivable` module at the fast interval, and every other parameter
+    /// that is not constant and not cached every 60 s (see
+    /// [`slow_poll_interval`](Self::slow_poll_interval)). Parameters with an interval of
+    /// their own keep it. A `pollinterval` parameter of the module replaces the fast
+    /// interval while the node runs.
     pub fn poll_interval(mut self, interval: Duration) -> Self {
         self.tiered_poll = Some(interval);
         self
     }
 
-    /// Interval of the slow tier of [`poll_interval`](Self::poll_interval), 60 s if not
-    /// set.
+    /// Interval of the slow poll tier (see [`poll_interval`](Self::poll_interval)), 60 s
+    /// if not set.
     pub fn slow_poll_interval(mut self, interval: Duration) -> Self {
         self.slow_poll = Some(interval);
         self
@@ -563,9 +567,17 @@ impl Module {
     /// Polls all parameters of the module that have no interval of their own, are not
     /// constant and not cached, at the same `interval`. A `pollinterval` parameter of the
     /// module replaces `interval` while the node runs. Cannot be combined with
-    /// [`poll_interval`](Self::poll_interval).
+    /// [`poll_interval`](Self::poll_interval) or [`no_polling`](Self::no_polling).
     pub fn poll_all(mut self, interval: Duration) -> Self {
         self.uniform_poll = Some(interval);
+        self
+    }
+
+    /// Turns the module's polling off: only parameters with an interval of their own
+    /// ([`Parameter::poll_interval`]) are polled. Cannot be combined with
+    /// [`poll_interval`](Self::poll_interval) or [`poll_all`](Self::poll_all).
+    pub fn no_polling(mut self) -> Self {
+        self.polling_off = true;
         self
     }
 }
@@ -766,6 +778,9 @@ pub(crate) enum PollSource {
 /// Name of the parameter that drives a module's polling.
 pub(crate) const POLLINTERVAL: &str = "pollinterval";
 
+/// Interval of the fast poll tier unless the module sets one.
+pub(crate) const DEFAULT_FAST_POLL: Duration = Duration::from_secs(5);
+
 /// Interval of the slow poll tier unless the module sets one.
 const DEFAULT_SLOW_POLL: Duration = Duration::from_secs(60);
 
@@ -922,8 +937,15 @@ fn finish_module(m: Module) -> ModuleModel {
     } else {
         &[]
     };
-    let driven = drives_polling(&m);
-    let fast = m.tiered_poll.or(m.uniform_poll);
+    let off = m.polling_off;
+    let tiered = !off && m.uniform_poll.is_none();
+    let driven = !off && drives_polling(&m);
+    let fast = if off {
+        None
+    } else {
+        m.uniform_poll
+            .or(Some(m.tiered_poll.unwrap_or(DEFAULT_FAST_POLL)))
+    };
     let names: HashSet<String> = m.accessibles.keys().cloned().collect();
     let accessibles = m
         .accessibles
@@ -944,16 +966,12 @@ fn finish_module(m: Module) -> ModuleModel {
                         PollSource::None
                     } else if let Some(own) = p.poll_interval {
                         PollSource::Own(own)
-                    } else if m.tiered_poll.is_some() {
-                        if fast_names.contains(&name.as_str()) {
-                            PollSource::Fast
-                        } else {
-                            PollSource::Slow
-                        }
-                    } else if m.uniform_poll.is_some() || driven {
+                    } else if off {
+                        PollSource::None
+                    } else if !tiered || fast_names.contains(&name.as_str()) {
                         PollSource::Fast
                     } else {
-                        PollSource::None
+                        PollSource::Slow
                     };
                     let mut initial = p.initial;
                     if driven && name == POLLINTERVAL && initial.is_none() && constant.is_none() {
@@ -1193,11 +1211,17 @@ impl Validator {
 
     fn check_polling(&mut self, m: &Module) {
         let path = m.name.as_str();
-        if m.tiered_poll.is_some() && m.uniform_poll.is_some() {
+        let modes = [
+            m.tiered_poll.is_some(),
+            m.uniform_poll.is_some(),
+            m.polling_off,
+        ];
+        if modes.into_iter().filter(|set| *set).count() > 1 {
             self.error(ModelError::new(
                 path,
                 ModelErrorKind::Polling(
-                    "`poll_interval` (tiered) and `poll_all` (uniform) cannot both be set",
+                    "only one of `poll_interval` (tiered), `poll_all` (uniform) and \
+                     `no_polling` can be set",
                 ),
             ));
         }
@@ -1208,13 +1232,20 @@ impl Validator {
                 ModelErrorKind::Polling("poll intervals must be positive"),
             ));
         }
-        if m.slow_poll.is_some() && m.tiered_poll.is_none() {
+        if m.slow_poll.is_some() && (m.uniform_poll.is_some() || m.polling_off) {
             self.warnings.push(ModelWarning {
                 path: path.to_owned(),
-                message: "`slow_poll_interval` has no effect without `poll_interval`".into(),
+                message: "`slow_poll_interval` has no effect with `poll_all` or `no_polling`"
+                    .into(),
             });
         }
         let driven = drives_polling(m);
+        if driven && m.polling_off {
+            self.warnings.push(ModelWarning {
+                path: format!("{path}:{POLLINTERVAL}"),
+                message: "`pollinterval` has no effect: the module's polling is off".into(),
+            });
+        }
         for (name, accessible) in &m.accessibles {
             let Accessible::Parameter(p) = accessible else {
                 continue;

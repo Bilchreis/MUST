@@ -681,11 +681,68 @@ fn uniform_and_own_intervals() {
 }
 
 #[test]
-fn nothing_polled_unless_configured() {
+fn default_tiers() {
     let node = node().module(controller("cryo")).unwrap().build().unwrap();
+    assert_eq!(poll_of(&node, "cryo", "value"), PollSource::Fast);
+    assert_eq!(poll_of(&node, "cryo", "status"), PollSource::Fast);
+    assert_eq!(poll_of(&node, "cryo", "target"), PollSource::Slow);
+    let poll = &node.model.modules["cryo"].poll;
+    assert_eq!(
+        (poll.fast, poll.slow),
+        (Some(Duration::from_secs(5)), Duration::from_secs(60))
+    );
+}
+
+#[test]
+fn no_base_class_without_configuration() {
+    let m = Module::new("x", "no base class")
+        .interface_classes([])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("x", kelvin(), "x"))
+        .unwrap();
+    let node = node().module(m).unwrap().build().unwrap();
+    assert_eq!(poll_of(&node, "x", "value"), PollSource::Slow);
+    assert_eq!(poll_of(&node, "x", "x"), PollSource::Slow);
+}
+
+#[test]
+fn polling_off_keeps_own_intervals() {
+    let m = controller("cryo")
+        .parameter(Parameter::new("ramp", kelvin(), "ramp").poll_interval(Duration::from_secs(5)))
+        .unwrap()
+        .no_polling();
+    let node = node().module(m).unwrap().build().unwrap();
+    assert_eq!(node.warnings(), []);
     for p in ["value", "status", "target"] {
         assert_eq!(poll_of(&node, "cryo", p), PollSource::None);
     }
+    assert_eq!(
+        poll_of(&node, "cryo", "ramp"),
+        PollSource::Own(Duration::from_secs(5))
+    );
+    assert_eq!(node.model.modules["cryo"].poll.fast, None);
+}
+
+#[test]
+fn polling_off_with_uniform() {
+    let m = sensor("t1").no_polling().poll_all(Duration::from_secs(2));
+    let e = errors(node().module(m).unwrap());
+    assert_eq!(e.len(), 1);
+    assert_eq!(e[0].path, "t1");
+    assert!(matches!(e[0].kind, ModelErrorKind::Polling(_)));
+}
+
+#[test]
+fn pollinterval_with_polling_off_warns() {
+    let m = sensor("t1")
+        .parameter(Parameter::new("pollinterval", seconds(), "p").writable())
+        .unwrap()
+        .no_polling();
+    let node = node().module(m).unwrap().build().unwrap();
+    assert_eq!(node.warnings().len(), 1);
+    assert_eq!(node.warnings()[0].path, "t1:pollinterval");
+    assert!(!node.model.modules["t1"].poll.driven);
 }
 
 #[test]
@@ -729,7 +786,9 @@ fn interval_on_cached_parameter_ignored() {
 
 #[test]
 fn slow_interval_without_tiers_warns() {
-    let m = sensor("t1").slow_poll_interval(Duration::from_secs(10));
+    let m = sensor("t1")
+        .slow_poll_interval(Duration::from_secs(10))
+        .poll_all(Duration::from_secs(1));
     let node = node().module(m).unwrap().build().unwrap();
     assert_eq!(node.warnings().len(), 1);
     assert_eq!(node.warnings()[0].path, "t1");
@@ -759,17 +818,18 @@ fn valid_pollinterval_drives_polling() {
 }
 
 #[test]
-fn pollinterval_alone_polls_uniformly_from_zero() {
+fn pollinterval_alone_uses_the_default_tiers() {
     let m = controller("cryo")
         .parameter(Parameter::new("pollinterval", seconds(), "poll interval").writable())
         .unwrap();
     let node = node().module(m).unwrap().build().unwrap();
     let module = &node.model.modules["cryo"];
-    assert_eq!(module.poll.fast, None);
-    assert_eq!(poll_of(&node, "cryo", "target"), PollSource::Fast);
+    assert!(module.poll.driven);
+    assert_eq!(poll_of(&node, "cryo", "value"), PollSource::Fast);
+    assert_eq!(poll_of(&node, "cryo", "target"), PollSource::Slow);
     assert_eq!(
         module.parameter("pollinterval").unwrap().initial,
-        Some(Value::Double(0.0))
+        Some(Value::Double(5.0))
     );
 }
 

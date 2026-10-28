@@ -33,7 +33,7 @@ The example node pushes `value` from its simulation loop only while ramping and 
 - `Module::poll_all(d)`: uniform polling, the old meaning of `poll_interval`. `must-ffi` uses it for SHALL's module property.
 - `Module::no_polling()`: no module-level polling; only parameters with an interval of their own are polled. `must-ffi` uses it when only parameter properties are set; Rust code and tests that need a quiet module use it too.
 - Setting more than one of `poll_interval`, `poll_all` and `no_polling` on one module is a completion error. It is not a silent "last call wins", because they mean different things.
-- Internally the module keeps one `PollMode` (`Tiered { fast }`, `Uniform(d)`, `Off`) plus the slow interval, so the combination check counts how many setters were called.
+- Internally the module keeps the optional tiered and uniform intervals, a polling-off flag and the optional slow interval; the combination check counts how many of the first three were set.
 - *Alternative considered:* keep `poll_interval` uniform and add `poll_tiered`. Rejected because the common case should get the short name, and the crate is pre-1.0. The break is caught at review time: every existing Rust caller is in this repo (two tests and `must-ffi`).
 
 ### Model: poll source per parameter
@@ -81,7 +81,7 @@ async fn poll(&self, ctx: &Ctx, due: &[&str]) {
 
 ### C ABI
 `build.rs` decides per module, after all accessibles are known (in `build_module`):
-1. **Qualifying `pollinterval` parameter** (same test as the model: `double` datainfo, no negative `min`): no poll call on the module and no `Parameter::poll_interval`, so the default tiers apply with the parameter as fast interval. Each ignored `pollinterval` property (module or parameter) is added to the problems kept for `SECoP_S_showErrors` as a warning (`SECoP_S_WARNING_CUSTOM_PROPERTY` is the closest SHALL code; the text says the property is ignored because of the parameter). The setter callback (or polling-mode request) answers changes of the parameter first.
+1. **Qualifying `pollinterval` parameter** (same test as the model: `double` datainfo, no negative `min`): no poll call on the module and no `Parameter::poll_interval`, so the default tiers apply with the parameter as fast interval. Each ignored `pollinterval` property (module or parameter) becomes a completion note, like SHALL's filled-in defaults: `SECoP_S_nodeComplete` returns a warning code and `SECoP_S_showErrors` prints the text, which says the property is ignored because of the parameter. The setter callback (or polling-mode request) answers changes of the parameter first.
 2. **Any `pollinterval` property:** the module property gives `module.poll_all(d)` (0 means none, so `no_polling()`); without a module property, `module.no_polling()`. Parameter properties give `Parameter::poll_interval(d)`. This is SHALL's behavior, as before this change.
 3. **Neither:** no poll call; the default tiers apply.
 

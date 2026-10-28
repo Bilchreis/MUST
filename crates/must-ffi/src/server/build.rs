@@ -59,7 +59,8 @@ pub(crate) struct DraftNode {
 pub(crate) struct DraftModule {
     pub name: String,
     pub props: Map<String, Json>,
-    pub poll: Option<Duration>,
+    /// SHALL's `pollinterval` property, if given.
+    pub poll: Option<ShallPoll>,
     pub accessibles: Vec<DraftAccessible>,
 }
 
@@ -69,8 +70,18 @@ pub(crate) struct DraftAccessible {
     pub props: Map<String, Json>,
     /// The datainfo, as SHALL's variant type (which accepts SECoP 1.0 descriptions).
     pub datainfo: Option<variant::Node>,
-    pub poll: Option<Duration>,
+    /// SHALL's `pollinterval` property, if given.
+    pub poll: Option<ShallPoll>,
     pub kind: AccessibleKind,
+}
+
+/// A value of SHALL's `pollinterval` property.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShallPoll {
+    /// 0: no polling.
+    Off,
+    /// Poll at this interval.
+    Every(Duration),
 }
 
 #[derive(Clone)]
@@ -338,6 +349,21 @@ impl DraftNode {
                 ));
                 module.props.insert("interface_classes".into(), classes);
             }
+            if module.has_poll_parameter() {
+                let ignored = module.poll.iter().map(|_| path.clone()).chain(
+                    module
+                        .accessibles
+                        .iter()
+                        .filter(|a| a.poll.is_some())
+                        .map(|a| format!("{path}:{}", a.name)),
+                );
+                for at in ignored {
+                    notes.push(format!(
+                        "{at}: property `pollinterval` ignored: the module's `pollinterval` \
+                         parameter sets the poll interval"
+                    ));
+                }
+            }
             for acc in &mut module.accessibles {
                 let path = format!("{path}:{}", acc.name);
                 match acc.kind {
@@ -408,8 +434,19 @@ impl DraftNode {
         let mut props = draft.props.clone();
         let description = take_string(&mut props, "description");
         let mut module = Module::new(&draft.name, &description);
-        if let Some(interval) = draft.poll {
-            module = module.poll_all(interval);
+        // a `pollinterval` parameter replaces SHALL's properties; without either, the
+        // library's default tiers apply
+        let poll_parameter = draft.has_poll_parameter();
+        if !poll_parameter {
+            match draft.poll {
+                Some(ShallPoll::Every(interval)) => module = module.poll_all(interval),
+                Some(ShallPoll::Off) => module = module.no_polling(),
+                None if draft.accessibles.iter().any(|a| a.poll.is_some()) => {
+                    // only parameter properties: only those parameters are polled
+                    module = module.no_polling();
+                }
+                None => {}
+            }
         }
         for (key, value) in props {
             module = if is_settable(Level::Module, &key) {
@@ -477,7 +514,7 @@ impl DraftNode {
                     if *writable {
                         parameter = parameter.writable();
                     }
-                    if let Some(interval) = acc.poll {
+                    if !poll_parameter && let Some(ShallPoll::Every(interval)) = acc.poll {
                         parameter = parameter.poll_interval(interval);
                     }
                     if let Some(value) = initial {
@@ -575,6 +612,19 @@ impl DraftNode {
 }
 
 impl DraftModule {
+    /// Whether the module has a `pollinterval` parameter that drives its polling (see
+    /// `must_server`): a `double` without a negative `min`.
+    pub(crate) fn has_poll_parameter(&self) -> bool {
+        self.accessibles.iter().any(|a| {
+            a.name == "pollinterval"
+                && matches!(a.kind, AccessibleKind::Parameter { .. })
+                && matches!(
+                    a.datainfo.as_ref().and_then(variant::Node::to_datainfo),
+                    Some(DataInfo::Double(d)) if d.min().is_none_or(|min| min >= 0.0)
+                )
+        })
+    }
+
     /// `interface_classes` for a module that sets none (SHALL did not require it): the
     /// highest base class whose accessibles the module has, else none.
     pub(crate) fn default_interface_classes(&self) -> Json {
@@ -644,10 +694,14 @@ fn is_settable(level: Level, key: &str) -> bool {
 }
 
 /// SHALL's `pollinterval` in seconds; 0 means no polling.
-fn set_poll(poll: &mut Option<Duration>, value: &Json) -> c_int {
+fn set_poll(poll: &mut Option<ShallPoll>, value: &Json) -> c_int {
     match value.as_f64().filter(|s| s.is_finite() && *s >= 0.0) {
         Some(s) => {
-            *poll = (s > 0.0).then(|| Duration::from_secs_f64(s.min(3600.0)));
+            *poll = Some(if s > 0.0 {
+                ShallPoll::Every(Duration::from_secs_f64(s.min(3600.0)))
+            } else {
+                ShallPoll::Off
+            });
             err::SUCCESS
         }
         None => err::INVALID_VALUE,
@@ -744,7 +798,10 @@ mod tests {
             serde_json::json!(["Readable"])
         );
         assert_eq!(node.add_property("pollinterval", 2.0.into()), err::SUCCESS);
-        assert_eq!(node.modules[0].poll, Some(Duration::from_secs(2)));
+        assert_eq!(
+            node.modules[0].poll,
+            Some(ShallPoll::Every(Duration::from_secs(2)))
+        );
         assert_eq!(node.add_property("visibility", 3.into()), err::SUCCESS);
         assert_eq!(node.modules[0].props["visibility"], "expert");
     }

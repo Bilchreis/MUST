@@ -202,11 +202,47 @@ async fn fast_and_slow_tier() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_polling_unless_configured() {
+async fn default_tiers() {
     let rec = Arc::new(Rec::default());
     let n = start(cryo().handler_arc(Arc::clone(&rec) as Arc<dyn ModuleHandler>));
-    run_for(Duration::from_secs(120)).await;
-    assert!(rec.reads.lock().unwrap().is_empty());
+    run_for(Duration::from_millis(130_500)).await;
+    assert_eq!(rec.reads("value"), 26, "every 5 s");
+    assert_eq!(rec.reads("status"), 26);
+    assert_eq!(rec.reads("target"), 2, "every 60 s");
+    assert_eq!(rec.reads("ramp"), 2);
+    n.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn module_without_a_fast_tier() {
+    let rec = Arc::new(Rec::default());
+    let module = Module::new("x", "no base class")
+        .interface_classes([])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("x", kelvin(), "x"))
+        .unwrap()
+        .handler_arc(Arc::clone(&rec) as Arc<dyn ModuleHandler>);
+    let n = start(module);
+    run_for(Duration::from_millis(130_500)).await;
+    assert_eq!(rec.reads("value"), 2);
+    assert_eq!(rec.reads("x"), 2);
+    n.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn polling_turned_off() {
+    let rec = Arc::new(Rec::default());
+    let module = cryo()
+        .parameter(Parameter::new("rate", kelvin(), "r").poll_interval(Duration::from_secs(5)))
+        .unwrap()
+        .no_polling()
+        .handler_arc(Arc::clone(&rec) as Arc<dyn ModuleHandler>);
+    let n = start(module);
+    run_for(Duration::from_millis(130_500)).await;
+    assert_eq!(rec.reads("rate"), 26, "own interval only");
+    let reads = rec.reads.lock().unwrap().clone();
+    assert_eq!(reads.len(), 1, "nothing else polled: {reads:?}");
     n.stop().await;
 }
 

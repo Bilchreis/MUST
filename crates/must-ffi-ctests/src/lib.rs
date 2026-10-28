@@ -62,7 +62,8 @@ pub mod server {
         pub fn ctest_server_validation_fixed() -> c_int;
         pub fn ctest_server_callbacks(port: c_ushort) -> c_int;
         pub fn ctest_server_missing_functions() -> c_int;
-        pub fn ctest_server_poll_uniform(port: c_ushort, with_parameter: c_int) -> c_int;
+        pub fn ctest_server_poll_config(port: c_ushort, mode: c_int) -> c_int;
+        pub fn ctest_server_poll_default_requests(port: c_ushort) -> c_int;
         pub fn ctest_server_poll_count(parameter: *const c_char) -> c_int;
         pub fn ctest_server_polling(port: c_ushort) -> c_int;
         pub fn ctest_server_poll_step(step: c_int) -> c_int;

@@ -439,10 +439,15 @@ static enum SECoP_S_error add_drv_param(const char* name, int writable, const ch
     return SECoP_S_addPropertyJSON("datainfo", datainfo, "poll");
 }
 
-/* A Drivable module polled with SHALL's pollinterval 0.2 s, its ramp at 1 s, and a
-   writable pollinterval parameter (with_parameter != 0). */
-int ctest_server_poll_uniform(unsigned short port, int with_parameter)
+/* A Drivable module "drv" (value, status, target, ramp) whose poll configuration is
+   chosen by `mode`:
+   0: SHALL's module property pollinterval 0.2 s, ramp's parameter property 1 s
+   1: as 0, plus a writable pollinterval parameter (the properties are then ignored)
+   2: only ramp's parameter property 1 s
+   3: nothing */
+int ctest_server_poll_config(unsigned short port, int mode)
 {
+    enum SECoP_S_error rc;
     const char* kelvin = "{\"type\":\"double\",\"unit\":\"K\"}";
     g_drv_value = g_drv_status = g_drv_target = g_drv_ramp = g_drv_interval_sets = 0;
     g_drv_interval = 0.0;
@@ -451,20 +456,73 @@ int ctest_server_poll_uniform(unsigned short port, int with_parameter)
     OK(SECoP_S_addModule("drv", "poll"));
     OK(SECoP_S_addPropertyString("description", "polled drivable", "poll"));
     OK(SECoP_S_addPropertyJSON("interface_classes", "[\"Drivable\"]", "poll"));
-    OK(SECoP_S_addPropertyDouble("pollinterval", 0.2, "poll"));
+    if (mode == 0 || mode == 1)
+        OK(SECoP_S_addPropertyDouble("pollinterval", 0.2, "poll"));
     OK(add_drv_param("value", 0, kelvin));
     OK(add_drv_param("status", 0,
                      "{\"type\":\"tuple\",\"members\":[{\"type\":\"enum\",\"members\":"
                      "{\"DISABLED\":0,\"IDLE\":100,\"BUSY\":300}},{\"type\":\"string\"}]}"));
     OK(add_drv_param("target", 1, kelvin));
     OK(add_drv_param("ramp", 1, kelvin));
-    OK(SECoP_S_addPropertyDouble("pollinterval", 1.0, "poll"));
-    if (with_parameter)
+    if (mode <= 2)
+        OK(SECoP_S_addPropertyDouble("pollinterval", 1.0, "poll"));
+    if (mode == 1)
         OK(add_drv_param("pollinterval", 1, "{\"type\":\"double\",\"min\":0,\"unit\":\"s\"}"));
     OK(SECoP_S_addCommand("stop", call_drv, "poll"));
     OK(SECoP_S_addPropertyString("description", "stop", "poll"));
     OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"command\"}", "poll"));
-    CHECK(complete("poll") >= 0);
+    rc = complete("poll");
+    CHECK(rc >= 0);
+    /* the ignored properties are reported as warnings */
+    CHECK(mode != 1 || rc > 0);
+    return 0;
+}
+
+/* Polling mode without poll configuration: a Readable module is polled by default, so
+   the host gets stored read requests for value and status about every 5 s. Answers
+   them for 5.8 s and checks that each was requested once after the startup reads. */
+int ctest_server_poll_default_requests(unsigned short port)
+{
+    int ms = 0, value_reads = 0, status_reads = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "pdef"));
+    OK(SECoP_S_createNode2("pdnode", "default polling", "127.0.0.1", port, "pdef"));
+    OK(SECoP_S_addModule("sensor", "pdef"));
+    OK(SECoP_S_addPropertyString("description", "polled by default", "pdef"));
+    OK(SECoP_S_addReadableParameter("value", NULL, "pdef"));
+    OK(SECoP_S_addPropertyString("description", "value", "pdef"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "pdef"));
+    OK(SECoP_S_addReadableParameter("status", NULL, "pdef"));
+    OK(SECoP_S_addPropertyString("description", "status", "pdef"));
+    OK(SECoP_S_addPropertyJSON("datainfo",
+                               "{\"type\":\"tuple\",\"members\":[{\"type\":\"enum\",\"members\":"
+                               "{\"IDLE\":100}},{\"type\":\"string\"}]}",
+                               "pdef"));
+    CHECK(complete("pdef") >= 0);
+    for (ms = 0; ms < 5800; ms += 10) {
+        unsigned long long id = 0;
+        enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+        char name[64], value[64];
+        int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+        enum SECoP_S_error rc =
+            SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "pdef");
+        if (rc == SECoP_S_ERROR_NO_DATA) {
+            sleep_ms(10);
+            continue;
+        }
+        OK(rc);
+        CHECK(action == SECoP_S_ACTION_READ);
+        if (strcmp(name, "pdnode:sensor:value") == 0) {
+            value_reads += ms > 1000;
+            OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "1.0", -1, NULL, 0, 0.0));
+        } else {
+            CHECK(strcmp(name, "pdnode:sensor:status") == 0);
+            status_reads += ms > 1000;
+            OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "[100,\"ok\"]", -1, NULL, 0, 0.0));
+        }
+    }
+    CHECK(value_reads == 1);
+    CHECK(status_reads == 1);
+    SECoP_S_doneLibrary(0, "pdef");
     return 0;
 }
 
