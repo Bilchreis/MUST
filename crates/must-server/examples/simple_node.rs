@@ -30,6 +30,8 @@ use must_server::{
     Reading, RunningNode,
 };
 use must_types::{DataInfo, ErrorClass, SecopError, Value};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// Noise of the temperature readback in K: ±5 mK.
 const NOISE: f64 = 0.005;
@@ -211,7 +213,12 @@ async fn simulate(node: RunningNode, sim: Arc<Mutex<Cryostat>>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().with_env_filter("info").init();
+    // log to the terminal, and to the monitoring endpoint for must-tui's log view
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new("info"))
+        .with(tracing_subscriber::fmt::layer())
+        .with(must_server::monitor::log_layer())
+        .init();
     let addr: SocketAddr = std::env::args()
         .nth(1)
         .as_deref()
