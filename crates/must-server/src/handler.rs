@@ -8,6 +8,7 @@ use serde_json::Value as Json;
 
 use std::sync::Arc;
 
+use crate::events::LogLevel;
 use crate::runtime::Hub;
 
 /// A value obtained from the hardware, with optional qualifiers.
@@ -114,6 +115,29 @@ pub trait ModuleHandler: Send + Sync {
     async fn call(&self, ctx: &Ctx, command: &str, argument: Option<Value>) -> CallResult {
         let _ = (ctx, argument);
         Err(not_implemented("do", command))
+    }
+
+    /// Polls the parameters `due` at this tick of the module's polling, in declaration
+    /// order. The node sends only what is published through `ctx`: the default reads
+    /// each parameter with [`read`](Self::read) and publishes the value or error.
+    /// Override it to obtain several parameters in one hardware transaction.
+    async fn poll(&self, ctx: &Ctx, due: &[&str]) {
+        for &parameter in due {
+            match self.read(ctx, parameter).await {
+                Ok(reading) => {
+                    // an invalid value is logged and published as an error by the node
+                    let _ = ctx.update(parameter, reading);
+                }
+                Err(error) => {
+                    ctx.hub.log(
+                        LogLevel::Warn,
+                        Some(&ctx.module),
+                        format!("reading `{parameter}` failed: {error}"),
+                    );
+                    ctx.update_error(parameter, error);
+                }
+            }
+        }
     }
 }
 

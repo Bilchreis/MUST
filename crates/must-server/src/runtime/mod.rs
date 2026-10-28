@@ -15,16 +15,17 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
 use serde_json::Value as Json;
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::events::{ConnectionId, LogLevel, NodeEvent};
 use crate::handler::Reading;
-use crate::model::NodeModel;
+use crate::model::{NodeModel, POLLINTERVAL};
 use crate::protocol::{self, now};
 
 pub use node::{RunningNode, StartError};
@@ -116,6 +117,20 @@ pub(crate) struct Hub {
     pub events: broadcast::Sender<NodeEvent>,
     /// The log file the node writes now (see [`crate::logfiles`]).
     log_file: Mutex<Option<std::path::PathBuf>>,
+    /// Fast poll interval of each module driven by a `pollinterval` parameter, `None`
+    /// while stopped, fed by every published value of that parameter.
+    poll_intervals: HashMap<String, watch::Sender<Option<Duration>>>,
+}
+
+/// Longest interval a `pollinterval` value sets, as in SHALL.
+const MAX_POLL_INTERVAL: f64 = 3600.0;
+
+/// The poll interval a `pollinterval` value sets: `None` for 0 (stopped).
+fn poll_interval_of(value: &Value) -> Option<Duration> {
+    value
+        .as_f64()
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .map(|s| Duration::from_secs_f64(s.min(MAX_POLL_INTERVAL)))
 }
 
 impl Hub {
@@ -135,6 +150,18 @@ impl Hub {
                 }
             }
         }
+        let poll_intervals = model
+            .modules
+            .iter()
+            .filter(|(_, m)| m.poll.driven)
+            .map(|(name, m)| {
+                let start = match state.cache.get(&(name.clone(), POLLINTERVAL.to_owned())) {
+                    Some(CacheEntry::Value { value, .. }) => poll_interval_of(value),
+                    _ => m.poll.fast,
+                };
+                (name.clone(), watch::Sender::new(start))
+            })
+            .collect();
         let (events, _) = broadcast::channel(1024);
         Self {
             model,
@@ -142,7 +169,18 @@ impl Hub {
             state: Mutex::new(state),
             events,
             log_file: Mutex::new(None),
+            poll_intervals,
         }
+    }
+
+    /// Watches the fast poll interval of a module driven by its `pollinterval`.
+    pub(crate) fn watch_poll_interval(
+        &self,
+        module: &str,
+    ) -> Option<watch::Receiver<Option<Duration>>> {
+        self.poll_intervals
+            .get(module)
+            .map(watch::Sender::subscribe)
     }
 
     fn lock(&self) -> MutexGuard<'_, HubState> {
@@ -376,6 +414,11 @@ impl Hub {
             e: reading.e,
         };
         let report = data_report(json, &qualifiers);
+        if parameter == POLLINTERVAL
+            && let Some(interval) = self.poll_intervals.get(module)
+        {
+            interval.send_replace(poll_interval_of(&reading.value));
+        }
         self.store(
             module,
             parameter,

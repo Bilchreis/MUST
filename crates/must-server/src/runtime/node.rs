@@ -6,12 +6,14 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use must_types::SecopError;
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::runtime::{Handle, Runtime};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::info;
@@ -22,7 +24,7 @@ use super::connection;
 use crate::events::{LogLevel, NodeEvent};
 use crate::handler::Reading;
 use crate::logfiles::LogHandle;
-use crate::model::Node;
+use crate::model::{Node, PollSource};
 
 /// A node could not be started.
 #[derive(Debug, Error)]
@@ -162,7 +164,7 @@ async fn accept_loop(
     // the listener is dropped here, closing the port
 }
 
-/// Starts the startup reads and one poll task per polled parameter.
+/// Starts the startup reads and one poll task per polled module.
 fn start_polling(
     hub: &Arc<Hub>,
     actors: &Arc<HashMap<String, ActorHandle>>,
@@ -171,33 +173,141 @@ fn start_polling(
 ) {
     for (mname, module) in &hub.model.modules {
         let actor = &actors[mname];
+        let mut polled = Vec::new();
         for (pname, param) in module.parameters() {
             if param.constant.is_some() || param.cached {
                 continue;
             }
             if hub.model.options.initial_read && param.initial.is_none() {
-                let _ = actor.try_send(Job::Poll {
+                let _ = actor.try_send(Job::Refresh {
                     parameter: pname.clone(),
                 });
             }
-            let Some(interval) = param.poll_interval else {
+            if param.poll != PollSource::None {
+                polled.push((pname.clone(), param.poll));
+            }
+        }
+        if polled.is_empty() {
+            continue;
+        }
+        let fast = hub.watch_poll_interval(mname);
+        let initial_fast = fast.as_ref().map_or(module.poll.fast, |rx| *rx.borrow());
+        let schedule = Schedule::new(polled, initial_fast, module.poll.slow, Instant::now());
+        tracker.spawn(poll_module(actor.clone(), schedule, fast, stop.clone()));
+    }
+}
+
+/// When each polled parameter of a module is due next.
+struct Schedule {
+    params: Vec<(String, PollSource)>,
+    /// `None` while not polled.
+    next: Vec<Option<Instant>>,
+    fast: Option<Duration>,
+    slow: Duration,
+}
+
+impl Schedule {
+    /// The first poll of each parameter is one interval after `now`; the startup reads
+    /// cover the start.
+    fn new(
+        params: Vec<(String, PollSource)>,
+        fast: Option<Duration>,
+        slow: Duration,
+        now: Instant,
+    ) -> Self {
+        let mut schedule = Self {
+            next: vec![None; params.len()],
+            params,
+            fast,
+            slow,
+        };
+        for i in 0..schedule.params.len() {
+            schedule.next[i] = schedule.interval(i).map(|d| now + d);
+        }
+        schedule
+    }
+
+    fn interval(&self, i: usize) -> Option<Duration> {
+        match self.params[i].1 {
+            PollSource::Own(d) => Some(d),
+            PollSource::Fast => self.fast,
+            PollSource::Slow => Some(self.slow),
+            PollSource::None => None,
+        }
+    }
+
+    fn earliest(&self) -> Option<Instant> {
+        self.next.iter().flatten().min().copied()
+    }
+
+    /// The parameters due at `now`, in declaration order, each rescheduled one interval
+    /// after its due time, or after `now` if it is late by a whole interval.
+    fn take_due(&mut self, now: Instant) -> Vec<String> {
+        let mut due = Vec::new();
+        for i in 0..self.params.len() {
+            let Some(at) = self.next[i].filter(|at| *at <= now) else {
                 continue;
             };
-            let (actor, parameter, stop) = (actor.clone(), pname.clone(), stop.clone());
-            tracker.spawn(async move {
-                let mut ticker = tokio::time::interval(interval);
-                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                ticker.tick().await; // the first tick is immediate; the startup read covers it
-                loop {
-                    tokio::select! {
-                        () = stop.cancelled() => break,
-                        _ = ticker.tick() => {
-                            // skip this poll if the module is busy with a backlog
-                            let _ = actor.try_send(Job::Poll { parameter: parameter.clone() });
-                        }
-                    }
-                }
+            due.push(self.params[i].0.clone());
+            self.next[i] = self.interval(i).map(|d| {
+                let next = at + d;
+                if next <= now { now + d } else { next }
             });
+        }
+        due
+    }
+
+    /// Changes the fast interval; the fast parameters are next due one new interval
+    /// after `now`, or never for `None`.
+    fn set_fast(&mut self, fast: Option<Duration>, now: Instant) {
+        self.fast = fast;
+        for i in 0..self.params.len() {
+            if self.params[i].1 == PollSource::Fast {
+                self.next[i] = fast.map(|d| now + d);
+            }
+        }
+    }
+}
+
+async fn poll_module(
+    actor: ActorHandle,
+    mut schedule: Schedule,
+    mut fast: Option<watch::Receiver<Option<Duration>>>,
+    stop: CancellationToken,
+) {
+    loop {
+        let earliest = schedule.earliest();
+        let tick = async {
+            match earliest {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending().await,
+            }
+        };
+        let retimed = async {
+            match fast.as_mut() {
+                Some(rx) => rx.changed().await.is_ok(),
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            () = stop.cancelled() => break,
+            () = tick => {
+                let due = schedule.take_due(Instant::now());
+                if !due.is_empty() {
+                    // skip this tick if the module is busy with a backlog
+                    let _ = actor.try_send(Job::Poll { parameters: due });
+                }
+            }
+            ok = retimed => {
+                match fast.as_mut() {
+                    Some(rx) if ok => {
+                        let interval = *rx.borrow_and_update();
+                        schedule.set_fast(interval, Instant::now());
+                    }
+                    // the node is going away
+                    _ => fast = None,
+                }
+            }
         }
     }
 }

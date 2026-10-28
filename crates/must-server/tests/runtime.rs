@@ -353,7 +353,7 @@ async fn periodic_poll() {
 #[tokio::test]
 async fn polled_values_reach_activated_clients() {
     let sim = Arc::new(Sim::default());
-    let module = common::controller(Arc::clone(&sim)).poll_interval(Duration::from_secs(3600));
+    let module = common::controller(Arc::clone(&sim));
     let fast = Module::new("p", "polled")
         .interface_classes([])
         .parameter(Parameter::new("value", kelvin(), "v").poll_interval(Duration::from_millis(100)))

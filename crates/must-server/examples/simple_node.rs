@@ -2,6 +2,10 @@
 
 //! A SEC node with one simulated temperature controller.
 //!
+//! The module is polled: `value` and `status` every second (the reported temperature
+//! carries ±5 mK of noise), `target` and `ramp` every minute. Clients can change the
+//! fast rate through the `pollinterval` parameter.
+//!
 //! ```text
 //! cargo run --example simple_node [ADDRESS]
 //! ```
@@ -13,6 +17,7 @@
 //! describe
 //! activate
 //! change cryo:target 20
+//! change cryo:pollinterval 0.2
 //! ```
 
 use std::net::SocketAddr;
@@ -25,6 +30,11 @@ use must_server::{
     Reading, RunningNode,
 };
 use must_types::{DataInfo, ErrorClass, SecopError, Value};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+/// Noise of the temperature readback in K: ±5 mK.
+const NOISE: f64 = 0.005;
 
 /// The simulated hardware: a temperature that ramps towards its target.
 struct Cryostat {
@@ -67,7 +77,8 @@ impl ModuleHandler for Handler {
     async fn read(&self, _ctx: &Ctx, parameter: &str) -> HandlerResult {
         let sim = self.0.lock().unwrap();
         let value = match parameter {
-            "value" => Value::Double(sim.temperature),
+            // only the reported value is noisy; status and busy use the true temperature
+            "value" => Value::Double(sim.temperature + (fastrand::f64() * 2.0 - 1.0) * NOISE),
             "status" => sim.status(),
             "target" => Value::Double(sim.target),
             "ramp" => Value::Double(sim.ramp),
@@ -77,6 +88,10 @@ impl ModuleHandler for Handler {
     }
 
     async fn change(&self, ctx: &Ctx, parameter: &str, value: Value) -> HandlerResult {
+        if parameter == "pollinterval" {
+            // any rate is fine for the simulation; the node re-times its polling
+            return Ok(Reading::new(value));
+        }
         let new = value.as_f64().expect("checked against the datainfo");
         let status = {
             let mut sim = self.0.lock().unwrap();
@@ -127,6 +142,7 @@ fn build(
         .max(100.0)
         .unit("K/min")
         .build()?;
+    let seconds = DataInfo::double().min(0.0).max(3600.0).unit("s").build()?;
 
     let cryo = Module::new(
         "cryo",
@@ -147,6 +163,17 @@ fn build(
             .initial_value(Value::Double(300.0)),
     )?
     .parameter(Parameter::new("ramp", ramp, "ramp rate").writable())?
+    .parameter(
+        Parameter::new(
+            "pollinterval",
+            seconds,
+            "interval of value and status polling",
+        )
+        .writable()
+        .cached()
+        .initial_value(Value::Double(1.0)),
+    )?
+    .poll_interval(Duration::from_secs(1))
     .command(Command::new(
         "stop",
         DataInfo::command().build()?,
@@ -165,22 +192,19 @@ fn build(
     Ok(node)
 }
 
-/// Advances the simulation and pushes the new temperature and status to clients.
+/// Advances the simulation. Clients get `value` through polling; a change of `status`
+/// is pushed at once.
 async fn simulate(node: RunningNode, sim: Arc<Mutex<Cryostat>>) {
     const DT: Duration = Duration::from_millis(500);
     let mut ticker = tokio::time::interval(DT);
     loop {
         ticker.tick().await;
-        let (temperature, status, was_busy, busy) = {
+        let (status, was_busy, busy) = {
             let mut sim = sim.lock().unwrap();
             let was_busy = sim.busy();
             sim.step(DT);
-            (sim.temperature, sim.status(), was_busy, sim.busy())
+            (sim.status(), was_busy, sim.busy())
         };
-        if was_busy {
-            node.update("cryo", "value", Value::Double(temperature))
-                .unwrap();
-        }
         if was_busy != busy {
             node.update("cryo", "status", status).unwrap();
         }
@@ -189,7 +213,12 @@ async fn simulate(node: RunningNode, sim: Arc<Mutex<Cryostat>>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().with_env_filter("info").init();
+    // log to the terminal, and to the monitoring endpoint for must-tui's log view
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new("info"))
+        .with(tracing_subscriber::fmt::layer())
+        .with(must_server::monitor::log_layer())
+        .init();
     let addr: SocketAddr = std::env::args()
         .nth(1)
         .as_deref()

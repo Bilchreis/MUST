@@ -188,6 +188,112 @@ fn callbacks() {
     assert!(closed(port));
 }
 
+fn poll_count(parameter: &CStr) -> c_int {
+    // SAFETY: a C helper taking a NUL-terminated string
+    unsafe { c::ctest_server_poll_count(parameter.as_ptr()) }
+}
+
+/// Reads per parameter during `d`.
+fn reads_during(d: Duration) -> [c_int; 4] {
+    let params = [c"value", c"status", c"target", c"ramp"];
+    let before = params.map(poll_count);
+    std::thread::sleep(d);
+    let after = params.map(poll_count);
+    std::array::from_fn(|i| after[i] - before[i])
+}
+
+/// Builds the C test module `drv` in the given poll configuration (see c/server.c) and
+/// lets its startup reads pass.
+fn poll_config(port: u16, mode: c_int) {
+    // SAFETY: a C test with a port and a mode
+    check("poll_config", unsafe {
+        c::ctest_server_poll_config(port, mode)
+    });
+    std::thread::sleep(Duration::from_millis(300));
+}
+
+#[test]
+fn module_property_polls_all_parameters() {
+    let _serial = serial();
+    let port = free_port();
+    poll_config(port, 0);
+    let [value, status, target, ramp] = reads_during(Duration::from_secs(2));
+    // no tiers with SHALL's property: target is polled like value and status
+    for (name, reads) in [("value", value), ("status", status), ("target", target)] {
+        assert!(
+            (7..=11).contains(&reads),
+            "{name}: about 10 reads, got {reads}"
+        );
+    }
+    assert!((1..=3).contains(&ramp), "ramp's own 1 s wins, got {ramp}");
+    done(c"poll");
+    assert!(closed(port));
+}
+
+#[test]
+fn only_parameter_properties() {
+    let _serial = serial();
+    let port = free_port();
+    poll_config(port, 2);
+    let [value, status, target, ramp] = reads_during(Duration::from_millis(2500));
+    assert_eq!([value, status, target], [0, 0, 0], "only ramp is polled");
+    assert!((2..=3).contains(&ramp), "ramp every second, got {ramp}");
+    done(c"poll");
+    assert!(closed(port));
+}
+
+#[test]
+fn declared_pollinterval_parameter() {
+    let _serial = serial();
+    let port = free_port();
+    poll_config(port, 1);
+    let mut client = Client::connect(port);
+    let reply = client.request("read drv:pollinterval");
+    assert_eq!(data(&reply)[0], 0.0, "the getter answers reads: {reply}");
+    let reply = client.request("change drv:pollinterval 0.05");
+    assert!(reply.starts_with("changed drv:pollinterval "), "{reply}");
+    assert_eq!(data(&reply)[0], 0.05);
+    assert_eq!(
+        poll_count(c"pollinterval_sets"),
+        1,
+        "the setter answers first"
+    );
+    let [value, status, target, ramp] = reads_during(Duration::from_secs(1));
+    for (name, reads) in [("value", value), ("status", status)] {
+        assert!(
+            (12..=22).contains(&reads),
+            "{name}: about 20 reads, got {reads}"
+        );
+    }
+    // the properties are ignored: target and ramp are in the 60 s slow tier
+    assert_eq!([target, ramp], [0, 0]);
+    done(c"poll");
+    assert!(closed(port));
+}
+
+#[test]
+fn no_poll_configuration() {
+    let _serial = serial();
+    let port = free_port();
+    poll_config(port, 3);
+    let [value, status, target, ramp] = reads_during(Duration::from_millis(5000));
+    assert_eq!([value, status], [1, 1], "value and status every 5 s");
+    assert_eq!([target, ramp], [0, 0], "the rest every 60 s");
+    done(c"poll");
+    assert!(closed(port));
+}
+
+#[test]
+fn polling_mode_default_requests() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port argument
+    check("poll_default_requests", unsafe {
+        c::ctest_server_poll_default_requests(port)
+    });
+    assert!(closed(port));
+}
+
 #[test]
 fn missing_functions() {
     let _serial = serial();

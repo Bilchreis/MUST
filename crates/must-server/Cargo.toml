@@ -22,6 +22,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, default-features = false, features = ["registry", "std"] }
 
 [dev-dependencies]
+fastrand.workspace = true
 tokio = { workspace = true, features = ["test-util", "signal"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 

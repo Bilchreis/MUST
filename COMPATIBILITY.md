@@ -136,6 +136,27 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `MUST_LOG_DAYS` (retention). Logging never slows a node; there is no size limit, so
   check the disk usage estimate in [docs/log-files.md](docs/log-files.md) for nodes with
   fast polling. The files contain all values exchanged with clients.
+- **Polling** depends on what the module declares:
+  - **SHALL's `pollinterval` properties** work as in SHALL: the module property polls all
+    readable parameters of the module at that interval (0: none), a parameter's property
+    gives that parameter its own interval, and with only parameter properties only those
+    parameters are polled.
+  - **New: a `pollinterval` parameter** with a `double` datainfo (no negative `min`), the
+    standard SECoP way, makes the module poll `value` and `status` (of a `Readable`,
+    `Writable` or `Drivable` module) at that parameter's value and all other parameters
+    every 60 s. The module's and its parameters' `pollinterval` properties are then
+    ignored, with a warning from `SECoP_S_nodeComplete`/`SECoP_S_showErrors`. A
+    client's `change` of the parameter goes to the setter (or the polling-mode request)
+    as usual; the value answered, read or pushed with `SECoP_S_updateParameter` becomes
+    the interval, 0 stops it, and without a value it starts at 5 s. The library never
+    polls the parameter itself. SHALL treated it as an ordinary parameter.
+  - **Different from SHALL: neither** means the same default: `value` and `status`
+    every 5 s, all other parameters every 60 s. SHALL polled nothing. In polling mode
+    the host therefore receives stored `read` requests from polling, which it answers
+    like a client's. Set the module property `pollinterval` to 0 to get SHALL's
+    "nothing polled".
+
+  Every polled value is sent to activated clients, also when it did not change.
 - **Error strings** (`SECoP_S_getErrorString`) have SHALL's texts, but may differ in
   detail; do not compare them.
 

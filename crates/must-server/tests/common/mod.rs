@@ -103,7 +103,8 @@ impl ModuleHandler for Sim {
 }
 
 /// A Drivable module `t1` with value, status, target, `target_max` (cached), extra
-/// parameters for error cases, and commands stop, echo and big.
+/// parameters for error cases, and commands stop, echo and big. It is not polled: its
+/// `hang` and `panic` parameters would disturb longer tests.
 pub fn controller(sim: Arc<Sim>) -> Module {
     let s = DataInfo::string().prop("isUTF8", true).build().unwrap();
     Module::new("t1", "a simulated temperature controller")
@@ -155,6 +156,7 @@ pub fn controller(sim: Arc<Sim>) -> Module {
             "returns a large string",
         ))
         .unwrap()
+        .no_polling()
         .handler_arc(sim)
 }
 

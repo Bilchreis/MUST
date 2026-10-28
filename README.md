@@ -31,6 +31,9 @@ in this order:
 6. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
    machine, opened by SHALL's status window flags (`must-tui`, done; manual check on
    Windows pending)
+7. `sample-node-polling` – polling in two tiers inferred from the interface class, the
+   `pollinterval` parameter and a poll hook for batched hardware access; the example
+   node polls its noisy readback (`must-server`, in progress)
 
 SHALL's client library (`SECoP_C_*`) is out of scope.
 
@@ -88,6 +91,23 @@ files. It only reads. Run it in a terminal (`cargo run -p must-tui`, or `must-tu
 `dist/<target>/`); programs that set SHALL's `bGUI` flag or call
 `SECoP_S_showStatusWindow(1)` open it in a window of their own. Views, keys and settings
 are described in [docs/status-tui.md](docs/status-tui.md).
+
+## Polling
+
+`must-server` modules are polled by default: `value` and `status` of a
+`Readable`/`Writable`/`Drivable` module every 5 s, the other parameters every 60 s.
+`Module::poll_interval(d)` changes the 5 s, `Module::poll_all(d)` polls everything every
+`d`, and `Module::no_polling()` turns it off. A `pollinterval` parameter lets clients
+change the rate at runtime. **API change:** `Module::poll_interval` used to poll all
+parameters at one interval (use `Module::poll_all` for that), and modules without poll
+settings used to be not polled. C programs that use SHALL's `pollinterval` properties
+keep SHALL's behavior ([COMPATIBILITY.md](COMPATIBILITY.md)). See the crate
+documentation of `must-server` for details, and try it with the example node:
+
+```bash
+cargo run --example simple_node
+# in another terminal: nc localhost 2055, then `activate` and `change cryo:pollinterval 0.2`
+```
 
 ## Log files
 

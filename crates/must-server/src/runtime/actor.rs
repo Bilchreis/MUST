@@ -35,7 +35,9 @@ pub(crate) enum Job {
         reply: oneshot::Sender<JobResult>,
     },
     /// A read whose result only goes to the cache and activated clients.
-    Poll { parameter: String },
+    Refresh { parameter: String },
+    /// A poll tick: the handler's poll hook with the parameters due.
+    Poll { parameters: Vec<String> },
 }
 
 /// Handle to send jobs to a module actor.
@@ -73,8 +75,24 @@ async fn run_job(hub: &Arc<Hub>, module: &str, handler: &Arc<dyn ModuleHandler>,
             let result = read(hub, module, handler, &parameter).await;
             let _ = reply.send(result);
         }
-        Job::Poll { parameter } => {
+        Job::Refresh { parameter } => {
             let _ = read(hub, module, handler, &parameter).await;
+        }
+        Job::Poll { parameters } => {
+            let (handler, ctx) = (Arc::clone(handler), ctx(hub, module));
+            let result = guarded(hub, async move {
+                let due: Vec<&str> = parameters.iter().map(String::as_str).collect();
+                handler.poll(&ctx, &due).await;
+                Ok(())
+            })
+            .await;
+            if let Err(error) = result {
+                hub.log(
+                    LogLevel::Warn,
+                    Some(module),
+                    format!("polling failed: {error}"),
+                );
+            }
         }
         Job::Change {
             parameter,
