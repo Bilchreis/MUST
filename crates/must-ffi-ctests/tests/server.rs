@@ -188,6 +188,70 @@ fn callbacks() {
     assert!(closed(port));
 }
 
+fn poll_count(parameter: &CStr) -> c_int {
+    // SAFETY: a C helper taking a NUL-terminated string
+    unsafe { c::ctest_server_poll_count(parameter.as_ptr()) }
+}
+
+/// Reads per parameter during `d`.
+fn reads_during(d: Duration) -> [c_int; 4] {
+    let params = [c"value", c"status", c"target", c"ramp"];
+    let before = params.map(poll_count);
+    std::thread::sleep(d);
+    let after = params.map(poll_count);
+    std::array::from_fn(|i| after[i] - before[i])
+}
+
+#[test]
+fn poll_interval_property_stays_uniform() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port and a flag
+    check("poll_uniform", unsafe {
+        c::ctest_server_poll_uniform(port, 0)
+    });
+    let [value, status, target, ramp] = reads_during(Duration::from_secs(2));
+    // no tiers through the C ABI: target is polled like value and status
+    for (name, reads) in [("value", value), ("status", status), ("target", target)] {
+        assert!(
+            (7..=11).contains(&reads),
+            "{name}: about 10 reads, got {reads}"
+        );
+    }
+    assert!((1..=3).contains(&ramp), "ramp's own 1 s wins, got {ramp}");
+    done(c"poll");
+    assert!(closed(port));
+}
+
+#[test]
+fn declared_pollinterval_parameter() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port and a flag
+    check("poll_uniform", unsafe {
+        c::ctest_server_poll_uniform(port, 1)
+    });
+    let mut client = Client::connect(port);
+    let reply = client.request("change drv:pollinterval 0.05");
+    assert!(reply.starts_with("changed drv:pollinterval "), "{reply}");
+    assert_eq!(data(&reply)[0], 0.05);
+    assert_eq!(
+        poll_count(c"pollinterval_sets"),
+        1,
+        "the setter answers first"
+    );
+    let [value, _, target, ramp] = reads_during(Duration::from_secs(1));
+    for (name, reads) in [("value", value), ("target", target)] {
+        assert!(
+            (12..=22).contains(&reads),
+            "{name}: about 20 reads, got {reads}"
+        );
+    }
+    assert!(ramp <= 2, "ramp keeps its own 1 s, got {ramp}");
+    done(c"poll");
+    assert!(closed(port));
+}
+
 #[test]
 fn missing_functions() {
     let _serial = serial();

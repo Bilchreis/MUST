@@ -362,6 +362,112 @@ int ctest_server_callbacks(unsigned short port)
     return 0;
 }
 
+/* --- polling in callback mode: SHALL's pollinterval keeps one interval for all */
+
+/* reads per parameter of the "drv" module, and setter calls of its pollinterval */
+static int g_drv_value, g_drv_status, g_drv_target, g_drv_ramp, g_drv_interval_sets;
+static double g_drv_interval = 0.0;
+
+int ctest_server_poll_count(const char* parameter)
+{
+    if (strcmp(parameter, "value") == 0)
+        return g_drv_value;
+    if (strcmp(parameter, "status") == 0)
+        return g_drv_status;
+    if (strcmp(parameter, "target") == 0)
+        return g_drv_target;
+    if (strcmp(parameter, "ramp") == 0)
+        return g_drv_ramp;
+    if (strcmp(parameter, "pollinterval_sets") == 0)
+        return g_drv_interval_sets;
+    return -1;
+}
+
+static void get_drv(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                    CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)ppSigma;
+    (void)timestamp;
+    *piError = SECoP_S_SUCCESS;
+    if (strcmp(name, "pnode:drv:value") == 0) {
+        ++g_drv_value;
+        SECoP_V_modifyDouble(*ppData, 0, 0, 4.2);
+    } else if (strcmp(name, "pnode:drv:status") == 0) {
+        ++g_drv_status; /* the default status value (DISABLED, "") is fine */
+    } else if (strcmp(name, "pnode:drv:target") == 0) {
+        ++g_drv_target;
+    } else if (strcmp(name, "pnode:drv:ramp") == 0) {
+        ++g_drv_ramp;
+    } else if (strcmp(name, "pnode:drv:pollinterval") == 0) {
+        SECoP_V_modifyDouble(*ppData, 0, 0, g_drv_interval);
+    } else {
+        *piError = SECoP_S_ERROR_INTERNAL;
+    }
+}
+
+static void set_drv(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                    CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)ppSigma;
+    (void)timestamp;
+    *piError = SECoP_S_SUCCESS;
+    if (strcmp(name, "pnode:drv:pollinterval") == 0) {
+        ++g_drv_interval_sets;
+        SECoP_V_getDouble(*ppData, 0, 0, &g_drv_interval);
+    }
+}
+
+static void call_drv(const char* name, const CSECoPbaseType* pArgument, enum SECoP_S_error* piError,
+                     CSECoPbaseType** ppReturn, double* timestamp)
+{
+    (void)name;
+    (void)pArgument;
+    (void)ppReturn;
+    (void)timestamp;
+    *piError = SECoP_S_SUCCESS;
+}
+
+static enum SECoP_S_error add_drv_param(const char* name, int writable, const char* datainfo)
+{
+    enum SECoP_S_error rc = writable ? SECoP_S_addWritableParameter(name, get_drv, set_drv, "poll")
+                                     : SECoP_S_addReadableParameter(name, get_drv, "poll");
+    if (rc != SECoP_S_SUCCESS)
+        return rc;
+    rc = SECoP_S_addPropertyString("description", name, "poll");
+    if (rc != SECoP_S_SUCCESS)
+        return rc;
+    return SECoP_S_addPropertyJSON("datainfo", datainfo, "poll");
+}
+
+/* A Drivable module polled with SHALL's pollinterval 0.2 s, its ramp at 1 s, and a
+   writable pollinterval parameter (with_parameter != 0). */
+int ctest_server_poll_uniform(unsigned short port, int with_parameter)
+{
+    const char* kelvin = "{\"type\":\"double\",\"unit\":\"K\"}";
+    g_drv_value = g_drv_status = g_drv_target = g_drv_ramp = g_drv_interval_sets = 0;
+    g_drv_interval = 0.0;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "poll"));
+    OK(SECoP_S_createNode2("pnode", "polling", "127.0.0.1", port, "poll"));
+    OK(SECoP_S_addModule("drv", "poll"));
+    OK(SECoP_S_addPropertyString("description", "polled drivable", "poll"));
+    OK(SECoP_S_addPropertyJSON("interface_classes", "[\"Drivable\"]", "poll"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.2, "poll"));
+    OK(add_drv_param("value", 0, kelvin));
+    OK(add_drv_param("status", 0,
+                     "{\"type\":\"tuple\",\"members\":[{\"type\":\"enum\",\"members\":"
+                     "{\"DISABLED\":0,\"IDLE\":100,\"BUSY\":300}},{\"type\":\"string\"}]}"));
+    OK(add_drv_param("target", 1, kelvin));
+    OK(add_drv_param("ramp", 1, kelvin));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 1.0, "poll"));
+    if (with_parameter)
+        OK(add_drv_param("pollinterval", 1, "{\"type\":\"double\",\"min\":0,\"unit\":\"s\"}"));
+    OK(SECoP_S_addCommand("stop", call_drv, "poll"));
+    OK(SECoP_S_addPropertyString("description", "stop", "poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"command\"}", "poll"));
+    CHECK(complete("poll") >= 0);
+    return 0;
+}
+
 /* in callback mode every parameter needs its functions */
 int ctest_server_missing_functions(void)
 {

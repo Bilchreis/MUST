@@ -14,8 +14,8 @@
 
 ## 3. C ABI
 
-- [ ] 3.1 Switch `must-ffi/src/server/build.rs` from `module.poll_interval` to `module.poll_all`; update the build test at `pollinterval` 2.0; verify the uniform-polling-kept and parameter-property-wins scenarios with the C tests (`must-ffi-ctests`) in callback mode on Linux, and in CI for Windows x86_64 and i686
-- [ ] 3.2 Verify the declared-pollinterval-parameter scenario through the C ABI (setter callback called first, then re-timed reads)
+- [x] 3.1 Switch `must-ffi/src/server/build.rs` from `module.poll_interval` to `module.poll_all`; update the build test at `pollinterval` 2.0; verify the uniform-polling-kept and parameter-property-wins scenarios with the C tests (`must-ffi-ctests`) in callback mode on Linux, and in CI for Windows x86_64 and i686
+- [x] 3.2 Verify the declared-pollinterval-parameter scenario through the C ABI (setter callback called first, then re-timed reads)
 
 ## 4. Example node
 
