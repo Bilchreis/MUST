@@ -130,6 +130,12 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   states, context IDs, build errors, clients, traffic, values and log records. It is only
   accessible to the user and opens no network port. `MUST_MONITOR=0` turns it off. See
   [docs/monitoring-protocol.md](docs/monitoring-protocol.md).
+- **Discovery** (new): every node listens on UDP port 10767 of all interfaces and
+  answers SECoP discovery requests with its TCP port, `equipment_id`, `firmware` (or
+  `must-<version>` if the node has none) and `description`, and broadcasts that once
+  when `SECoP_S_nodeComplete` opens its port. SHALL opened no UDP port. A node on
+  `localhost` answers only local requests. `MUST_DISCOVERY=0` turns discovery off. See
+  the README.
 - **Log files** (new): every node writes its traffic (each published value once), client
   connections and its log records to `<log dir>\<equipment_id>\<YYYY-MM-DD>.log`, by
   default under `%LOCALAPPDATA%\must\logs` (Windows) or `~/.local/state/must/logs`
