@@ -58,13 +58,29 @@ async fn client(ip: Ipv4Addr) -> UdpSocket {
 
 /// The next packet the socket receives within `timeout`, and its sender.
 async fn receive(socket: &UdpSocket, timeout: Duration) -> Option<(Json, SocketAddr)> {
+    let deadline = tokio::time::Instant::now() + timeout;
     let mut buffer = vec![0; 2048];
-    let (len, from) = tokio::time::timeout(timeout, socket.recv_from(&mut buffer))
-        .await
-        .ok()?
-        .unwrap();
-    assert!(len <= MAX_PACKET_LEN, "{len}-byte packet");
-    Some((serde_json::from_slice(&buffer[..len]).unwrap(), from))
+    loop {
+        let received = tokio::time::timeout_at(deadline, socket.recv_from(&mut buffer))
+            .await
+            .ok()?;
+        match received {
+            Ok((len, from)) => {
+                assert!(len <= MAX_PACKET_LEN, "{len}-byte packet");
+                return Some((serde_json::from_slice(&buffer[..len]).unwrap(), from));
+            }
+            // Windows reports an ICMP port unreachable for an earlier datagram, sent to a
+            // port nobody listens on, as an error of the next receive
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {}
+            Err(e) => panic!("receiving failed: {e}"),
+        }
+    }
+}
+
+/// The node's TCP address as clients reach it on this host (Windows cannot connect to
+/// `0.0.0.0`).
+fn local(n: &RunningNode) -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, n.local_addr().port()))
 }
 
 /// Sends a discover request to `ip:port` and returns the reply, if one comes.
@@ -202,7 +218,7 @@ async fn too_long_identity_keeps_the_node_running() {
             .log_files(LogFiles::default().dir(&dir)),
     );
     assert!(port_is_free(port), "no discovery socket");
-    let mut c = common::Client::connect(n.local_addr()).await;
+    let mut c = common::Client::connect(local(&n)).await;
     assert!(c.request("ping x").await.starts_with("pong x"));
     n.stop().await;
     assert!(
@@ -325,7 +341,7 @@ async fn port_in_use_keeps_the_node_running() {
     let _holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).unwrap();
     let dir = log_dir("in-use");
     let n = start(discoverable(port).log_files(LogFiles::default().dir(&dir)));
-    let mut c = common::Client::connect(n.local_addr()).await;
+    let mut c = common::Client::connect(local(&n)).await;
     assert!(c.request("ping x").await.starts_with("pong x"));
     n.stop().await;
     assert!(
