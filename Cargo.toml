@@ -18,6 +18,7 @@ async-trait = "0.1"
 base64 = "0.22"
 cc = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+fastrand = "2"
 indexmap = "2"
 libloading = "0.9"
 proptest = "1"

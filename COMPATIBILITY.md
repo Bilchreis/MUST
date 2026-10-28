@@ -136,6 +136,15 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `MUST_LOG_DAYS` (retention). Logging never slows a node; there is no size limit, so
   check the disk usage estimate in [docs/log-files.md](docs/log-files.md) for nodes with
   fast polling. The files contain all values exchanged with clients.
+- **Polling**: the module property `pollinterval` polls all readable parameters of the
+  module at that interval and the parameter property `pollinterval` gives one parameter
+  its own, as in SHALL. **New:** a module that also declares a parameter named
+  `pollinterval` with a `double` datainfo (no negative `min`) has its polling driven by
+  it: a client's `change` goes to the setter (or the polling-mode request) as usual, and
+  the value answered, or a value pushed with `SECoP_S_updateParameter`, becomes the
+  module's interval; 0 stops it. The library never polls that parameter itself. SHALL
+  treated it as an ordinary parameter. Every polled value is sent to activated clients,
+  also when it did not change.
 - **Error strings** (`SECoP_S_getErrorString`) have SHALL's texts, but may differ in
   detail; do not compare them.
 

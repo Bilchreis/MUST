@@ -722,6 +722,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "fastrand",
  "indexmap",
  "must-monitor",
  "must-types",

@@ -19,15 +19,15 @@
 
 ## 4. Example node
 
-- [ ] 4.1 Add `fastrand` to `[workspace.dependencies]` and as a dev-dependency of `must-server`; add ±5 mK noise to the reported `value` only, keeping `status`/`busy()` on the true temperature
-- [ ] 4.2 Configure `cryo` with `.poll_interval(1 s)` and a writable, cached `pollinterval` parameter (double, 0–3600 s, initial 1.0) accepted by the handler; remove the `value` push from `simulate`, keeping the `status` push on transitions; update the doc comment with `change cryo:pollinterval 0.2`
-- [ ] 4.3 Run the example and check by hand with `nc`: after `activate`, `value` updates arrive about once per second with varying last digits while idle; after `change cryo:pollinterval 0.2` they arrive about five times per second; `target`/`ramp` refresh about once a minute
+- [x] 4.1 Add `fastrand` to `[workspace.dependencies]` and as a dev-dependency of `must-server`; add ±5 mK noise to the reported `value` only, keeping `status`/`busy()` on the true temperature
+- [x] 4.2 Configure `cryo` with `.poll_interval(1 s)` and a writable, cached `pollinterval` parameter (double, 0–3600 s, initial 1.0) accepted by the handler; remove the `value` push from `simulate`, keeping the `status` push on transitions; update the doc comment with `change cryo:pollinterval 0.2`
+- [x] 4.3 Run the example and check by hand with `nc`: after `activate`, `value` updates arrive about once per second with varying last digits while idle; after `change cryo:pollinterval 0.2` they arrive about five times per second; `target`/`ramp` refresh about once a minute
 
 ## 5. Callers, docs and checks
 
-- [ ] 5.1 Update `tests/runtime.rs` and `tests/log_files.rs` for the new `poll_interval` meaning (`poll_all` where uniform polling is meant)
-- [ ] 5.2 Document polling (tiers, precedence, `pollinterval`, poll hook, updates for unchanged values) in the `must-server` crate docs/README, note the `Module::poll_interval` change, and add the `pollinterval`-parameter entry to the "Library behavior" section of `COMPATIBILITY.md`
-- [ ] 5.3 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, and cross-check `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc` builds as CI does
+- [x] 5.1 Update `tests/runtime.rs` and `tests/log_files.rs` for the new `poll_interval` meaning (`poll_all` where uniform polling is meant)
+- [x] 5.2 Document polling (tiers, precedence, `pollinterval`, poll hook, updates for unchanged values) in the `must-server` crate docs/README, note the `Module::poll_interval` change, and add the `pollinterval`-parameter entry to the "Library behavior" section of `COMPATIBILITY.md`
+- [x] 5.3 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, and cross-check `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc` builds as CI does
 
 ## Workflow follow-up
 
