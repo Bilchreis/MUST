@@ -2,15 +2,15 @@
 
 ## 1. Model
 
-- [ ] 1.1 Add `Module::poll_all` and `Module::slow_poll_interval`, change `Module::poll_interval` to tiered, and resolve each parameter's `PollSource` (`Own`/`Fast`/`Slow`/`None`) in `finish_module` from the base interface class; verify with model tests: Drivable/Readable/Writable tiers, `interface_classes` `[]` puts everything in the slow tier, the tiered-and-uniform-together error, and the cached-parameter-interval warning
-- [ ] 1.2 Recognize a qualifying `pollinterval` parameter (`double`, no negative `min`), warn for a non-qualifying one, exclude it from polling and startup reads, and seed its initial value (own initial value, else the module interval, else 0.0); verify the valid- and integer-pollinterval scenarios and the structure report
+- [x] 1.1 Add `Module::poll_all` and `Module::slow_poll_interval`, change `Module::poll_interval` to tiered, and resolve each parameter's `PollSource` (`Own`/`Fast`/`Slow`/`None`) in `finish_module` from the base interface class; verify with model tests: Drivable/Readable/Writable tiers, `interface_classes` `[]` puts everything in the slow tier, the tiered-and-uniform-together error, and the cached-parameter-interval warning
+- [x] 1.2 Recognize a qualifying `pollinterval` parameter (`double`, no negative `min`), warn for a non-qualifying one, exclude it from polling and startup reads, and seed its initial value (own initial value, else the module interval, else 0.0); verify the valid- and integer-pollinterval scenarios and the structure report
 
 ## 2. Runtime
 
-- [ ] 2.1 Add `ModuleHandler::poll(&self, ctx, due: &[&str])` with the default read-and-publish body, and change `Job::Poll` to carry a parameter list and call the hook under `guarded` (timeout and panic logged once per module); verify the default-hook, one-hardware-transaction and hook-times-out scenarios
-- [ ] 2.2 Replace the per-parameter poll tasks in `start_polling` with one task per module (due times per parameter, grouping, `try_send` skip, delay-style catch-up, stop token); verify the periodic-read, fast-and-slow-tier (paused time, 130 s), parameter-interval-wins, uniform-interval and parameters-due-together scenarios
-- [ ] 2.3 Re-time the fast/uniform interval through a per-module `watch` channel fed by `Hub::publish_value` for the `pollinterval` parameter (clamped to 3600 s, 0 = stop); verify the client-tunes-the-rate, handler-adjusts, handler-refuses, zero-stops-polling, application-push-re-times and never-polled scenarios
-- [ ] 2.4 Add a runtime test for the unchanged-value scenario (two identical poll results → two updates with different timestamps)
+- [x] 2.1 Add `ModuleHandler::poll(&self, ctx, due: &[&str])` with the default read-and-publish body, and change `Job::Poll` to carry a parameter list and call the hook under `guarded` (timeout and panic logged once per module); verify the default-hook, one-hardware-transaction and hook-times-out scenarios
+- [x] 2.2 Replace the per-parameter poll tasks in `start_polling` with one task per module (due times per parameter, grouping, `try_send` skip, delay-style catch-up, stop token); verify the periodic-read, fast-and-slow-tier (paused time, 130 s), parameter-interval-wins, uniform-interval and parameters-due-together scenarios
+- [x] 2.3 Re-time the fast/uniform interval through a per-module `watch` channel fed by `Hub::publish_value` for the `pollinterval` parameter (clamped to 3600 s, 0 = stop); verify the client-tunes-the-rate, handler-adjusts, handler-refuses, zero-stops-polling, application-push-re-times and never-polled scenarios
+- [x] 2.4 Add a runtime test for the unchanged-value scenario (two identical poll results → two updates with different timestamps)
 
 ## 3. C ABI
 

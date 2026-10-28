@@ -409,7 +409,7 @@ impl DraftNode {
         let description = take_string(&mut props, "description");
         let mut module = Module::new(&draft.name, &description);
         if let Some(interval) = draft.poll {
-            module = module.poll_interval(interval);
+            module = module.poll_all(interval);
         }
         for (key, value) in props {
             module = if is_settable(Level::Module, &key) {

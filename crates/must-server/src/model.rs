@@ -166,6 +166,9 @@ pub enum ModelErrorKind {
         "`{0}` is not a SECoP interface class; custom classes start with an underscore, e.g. `_{0}`"
     )]
     UnknownInterfaceClass(String),
+    /// The module's or a parameter's poll settings are invalid.
+    #[error("{0}")]
+    Polling(&'static str),
 }
 
 impl ModelError {
@@ -411,7 +414,9 @@ pub struct Module {
     accessibles: IndexMap<String, Accessible>,
     accessible_names: NameScope,
     handler: Option<Arc<dyn ModuleHandler>>,
-    poll_interval: Option<Duration>,
+    tiered_poll: Option<Duration>,
+    uniform_poll: Option<Duration>,
+    slow_poll: Option<Duration>,
 }
 
 enum Accessible {
@@ -431,7 +436,9 @@ impl Module {
             accessibles: IndexMap::new(),
             accessible_names: NameScope::new(),
             handler: None,
-            poll_interval: None,
+            tiered_poll: None,
+            uniform_poll: None,
+            slow_poll: None,
         }
     }
 
@@ -536,10 +543,29 @@ impl Module {
         self
     }
 
-    /// Polls all parameters of the module that have no interval of their own, are not
-    /// constant and not cached, at this interval.
+    /// Polls the module in two tiers: `value` and `status` of a `Readable`, `Writable` or
+    /// `Drivable` module at `interval`, and every other parameter that is not constant
+    /// and not cached every 60 s (see [`slow_poll_interval`](Self::slow_poll_interval)).
+    /// Parameters with an interval of their own keep it. A `pollinterval` parameter of
+    /// the module replaces `interval` while the node runs.
     pub fn poll_interval(mut self, interval: Duration) -> Self {
-        self.poll_interval = Some(interval);
+        self.tiered_poll = Some(interval);
+        self
+    }
+
+    /// Interval of the slow tier of [`poll_interval`](Self::poll_interval), 60 s if not
+    /// set.
+    pub fn slow_poll_interval(mut self, interval: Duration) -> Self {
+        self.slow_poll = Some(interval);
+        self
+    }
+
+    /// Polls all parameters of the module that have no interval of their own, are not
+    /// constant and not cached, at the same `interval`. A `pollinterval` parameter of the
+    /// module replaces `interval` while the node runs. Cannot be combined with
+    /// [`poll_interval`](Self::poll_interval).
+    pub fn poll_all(mut self, interval: Duration) -> Self {
+        self.uniform_poll = Some(interval);
         self
     }
 }
@@ -609,7 +635,8 @@ impl Parameter {
         self
     }
 
-    /// Polls this parameter at `interval`, overriding the module's interval.
+    /// Polls this parameter at `interval`, overriding the module's polling. Ignored, with a
+    /// warning, for constant and cached parameters and for `pollinterval`.
     pub fn poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = Some(interval);
         self
@@ -710,7 +737,40 @@ pub(crate) struct ModuleModel {
     pub props: IndexMap<String, Json>,
     pub accessibles: IndexMap<String, AccessibleModel>,
     pub handler: Arc<dyn ModuleHandler>,
+    pub poll: ModulePoll,
 }
+
+/// How a module polls, resolved from its declaration.
+pub(crate) struct ModulePoll {
+    /// Interval of the [`PollSource::Fast`] parameters as declared.
+    pub fast: Option<Duration>,
+    /// Interval of the [`PollSource::Slow`] parameters.
+    pub slow: Duration,
+    /// Whether the module's `pollinterval` parameter drives the fast interval.
+    pub driven: bool,
+}
+
+/// Where a parameter's poll interval comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PollSource {
+    /// Not polled.
+    None,
+    /// Its own interval.
+    Own(Duration),
+    /// The module's fast (or uniform) interval, or its `pollinterval` parameter.
+    Fast,
+    /// The module's slow interval.
+    Slow,
+}
+
+/// Name of the parameter that drives a module's polling.
+pub(crate) const POLLINTERVAL: &str = "pollinterval";
+
+/// Interval of the slow poll tier unless the module sets one.
+const DEFAULT_SLOW_POLL: Duration = Duration::from_secs(60);
+
+/// Base classes whose `value` and `status` are in the fast poll tier.
+const FAST_TIER_CLASSES: &[&str] = &["Readable", "Writable", "Drivable"];
 
 pub(crate) enum AccessibleModel {
     Parameter(ParameterModel),
@@ -724,7 +784,7 @@ pub(crate) struct ParameterModel {
     pub constant: Option<Value>,
     pub cached: bool,
     pub initial: Option<Value>,
-    pub poll_interval: Option<Duration>,
+    pub poll: PollSource,
     /// Names of this parameter's `_min`, `_max` and `_limits` parameters, if declared.
     pub limit_params: Vec<(Postfix, String)>,
 }
@@ -853,7 +913,17 @@ impl NodeBuilder {
 }
 
 fn finish_module(m: Module) -> ModuleModel {
-    let module_poll = m.poll_interval;
+    let base = base_class(&m.props).map(str::to_owned);
+    let fast_names: &[&str] = if base
+        .as_deref()
+        .is_some_and(|b| FAST_TIER_CLASSES.contains(&b))
+    {
+        &["value", "status"]
+    } else {
+        &[]
+    };
+    let driven = drives_polling(&m);
+    let fast = m.tiered_poll.or(m.uniform_poll);
     let names: HashSet<String> = m.accessibles.keys().cloned().collect();
     let accessibles = m
         .accessibles
@@ -870,19 +940,34 @@ fn finish_module(m: Module) -> ModuleModel {
                         .props
                         .get("constant")
                         .and_then(|c| p.datainfo.decode(c, Mode::Report).ok());
-                    let poll_interval = p.poll_interval.or(if p.cached || constant.is_some() {
-                        None
+                    let poll = if p.cached || constant.is_some() || name == POLLINTERVAL {
+                        PollSource::None
+                    } else if let Some(own) = p.poll_interval {
+                        PollSource::Own(own)
+                    } else if m.tiered_poll.is_some() {
+                        if fast_names.contains(&name.as_str()) {
+                            PollSource::Fast
+                        } else {
+                            PollSource::Slow
+                        }
+                    } else if m.uniform_poll.is_some() || driven {
+                        PollSource::Fast
                     } else {
-                        module_poll
-                    });
+                        PollSource::None
+                    };
+                    let mut initial = p.initial;
+                    if driven && name == POLLINTERVAL && initial.is_none() && constant.is_none() {
+                        let seconds = fast.map_or(0.0, |d| d.as_secs_f64());
+                        initial = Some(Value::Double(seconds));
+                    }
                     AccessibleModel::Parameter(ParameterModel {
                         readonly: p.props.get("readonly") != Some(&Json::Bool(false)),
                         datainfo: p.datainfo,
                         props: p.props.values,
                         constant,
                         cached: p.cached,
-                        initial: p.initial,
-                        poll_interval,
+                        initial,
+                        poll,
                         limit_params,
                     })
                 }
@@ -908,6 +993,32 @@ fn finish_module(m: Module) -> ModuleModel {
         props,
         accessibles,
         handler,
+        poll: ModulePoll {
+            fast,
+            slow: m.slow_poll.unwrap_or(DEFAULT_SLOW_POLL),
+            driven,
+        },
+    }
+}
+
+/// The base class, the last entry of `interface_classes`.
+fn base_class(props: &Properties) -> Option<&str> {
+    props
+        .get("interface_classes")
+        .and_then(Json::as_array)
+        .and_then(|c| c.last())
+        .and_then(Json::as_str)
+}
+
+/// Whether the module has a `pollinterval` parameter that can drive its polling: a
+/// `double` without a negative `min`.
+fn drives_polling(m: &Module) -> bool {
+    match m.accessibles.get(POLLINTERVAL) {
+        Some(Accessible::Parameter(p)) => match &p.datainfo {
+            DataInfo::Double(d) => d.min().is_none_or(|min| min >= 0.0),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -1012,6 +1123,7 @@ impl Validator {
         self.check_interface_classes(m);
         self.check_status(m);
         self.check_postfixes(m);
+        self.check_polling(m);
     }
 
     fn check_parameter(&mut self, param: &Parameter, path: &str, names: &[&str]) {
@@ -1079,14 +1191,64 @@ impl Validator {
         }
     }
 
+    fn check_polling(&mut self, m: &Module) {
+        let path = m.name.as_str();
+        if m.tiered_poll.is_some() && m.uniform_poll.is_some() {
+            self.error(ModelError::new(
+                path,
+                ModelErrorKind::Polling(
+                    "`poll_interval` (tiered) and `poll_all` (uniform) cannot both be set",
+                ),
+            ));
+        }
+        let module_intervals = [m.tiered_poll, m.uniform_poll, m.slow_poll];
+        if module_intervals.iter().flatten().any(Duration::is_zero) {
+            self.error(ModelError::new(
+                path,
+                ModelErrorKind::Polling("poll intervals must be positive"),
+            ));
+        }
+        if m.slow_poll.is_some() && m.tiered_poll.is_none() {
+            self.warnings.push(ModelWarning {
+                path: path.to_owned(),
+                message: "`slow_poll_interval` has no effect without `poll_interval`".into(),
+            });
+        }
+        let driven = drives_polling(m);
+        for (name, accessible) in &m.accessibles {
+            let Accessible::Parameter(p) = accessible else {
+                continue;
+            };
+            let path = format!("{path}:{name}");
+            if name == POLLINTERVAL && !driven {
+                self.warnings.push(ModelWarning {
+                    path: path.clone(),
+                    message: "`pollinterval` does not drive polling: it needs a `double` \
+                              datainfo without a negative `min`"
+                        .into(),
+                });
+            }
+            let Some(own) = p.poll_interval else {
+                continue;
+            };
+            if own.is_zero() {
+                self.error(ModelError::new(
+                    path,
+                    ModelErrorKind::Polling("poll intervals must be positive"),
+                ));
+            } else if p.cached || p.props.get("constant").is_some() || name == POLLINTERVAL {
+                self.warnings.push(ModelWarning {
+                    path,
+                    message: "poll interval ignored: constant and cached parameters and \
+                              `pollinterval` are never polled"
+                        .into(),
+                });
+            }
+        }
+    }
+
     fn check_interface_classes(&mut self, m: &Module) {
-        let Some(base) = m
-            .props
-            .get("interface_classes")
-            .and_then(Json::as_array)
-            .and_then(|c| c.last())
-            .and_then(Json::as_str)
-        else {
+        let Some(base) = base_class(&m.props) else {
             return;
         };
         let param = |name: &str| match m.accessibles.get(name) {
