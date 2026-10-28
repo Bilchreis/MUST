@@ -167,13 +167,30 @@ async fn snapshot_content_without_hardware_reads() {
     c.request("read t1:value").await;
     let reads = sim.reads.load(Ordering::SeqCst);
 
-    let mut m = monitor(Options::new("test")).await;
+    // the endpoint learns of the client from the node's events, a moment after it
+    // connected: take snapshots until it is listed
+    let address = n.local_addr().to_string();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut m, node) = loop {
+        let m = monitor(Options::new("test")).await;
+        let node = m
+            .snapshot()
+            .nodes
+            .iter()
+            .find(|n| n.address.as_deref() == Some(address.as_str()))
+            .expect("the node in the snapshot")
+            .clone();
+        if !node.clients.is_empty() || Instant::now() > deadline {
+            break (m, node);
+        }
+        drop(m);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(
         sim.reads.load(Ordering::SeqCst),
         reads,
-        "no reads for the snapshot"
+        "no reads for the snapshots"
     );
-    let node = m.snapshot().nodes[0].clone();
     assert_eq!(node.equipment_id, "must-test");
     assert_eq!(node.address, Some(n.local_addr().to_string()));
     assert!(node.structure.as_ref().unwrap()["modules"]["t1"].is_object());

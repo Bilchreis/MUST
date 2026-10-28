@@ -178,7 +178,19 @@ fn fake_endpoint(
     dir: &Path,
     answer: Vec<ServerMessage>,
 ) -> (Arc<Mutex<Vec<String>>>, registry::RegistrationFile) {
-    let (mut listener, endpoint) = transport::Listener::bind(dir).unwrap();
+    // on Windows the pipe name is made from the pid: the previous test's endpoint may
+    // still be closing (its runtime is dropped after the test returns)
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut listener, endpoint) = loop {
+        match transport::Listener::bind(dir) {
+            Ok(bound) => break bound,
+            Err(e) if Instant::now() < deadline => {
+                println!("endpoint not free yet: {e}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("cannot open the fake endpoint: {e}"),
+        }
+    };
     let registration = Registration::new(&platform::current_process().unwrap(), endpoint);
     let file = registry::register(dir, &registration).unwrap();
     let received = Arc::new(Mutex::new(Vec::new()));
