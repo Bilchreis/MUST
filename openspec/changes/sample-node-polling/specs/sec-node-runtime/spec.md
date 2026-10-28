@@ -14,26 +14,34 @@ The library SHALL send an `update` (or `error_update`) to every client that has 
 - **THEN** the client receives two `update t1:value` messages, each with its own timestamp
 
 ### Requirement: Polling
-The library SHALL poll parameters only when the application configures it, and SHALL publish each poll result (value or error) as an update. A module configured with a tiered poll interval SHALL poll a fast tier at that interval and a slow tier every 60 s unless configured otherwise:
-- fast tier: `value` and `status` of a module whose base class is `Readable`, `Writable` or `Drivable`
-- slow tier: every other parameter that is neither constant nor cached
+The library SHALL poll every module unless its module-level polling is turned off, and SHALL publish each poll result (value or error) as an update. By default a module SHALL poll in two tiers:
+- fast tier: `value` and `status` of a module whose base class is `Readable`, `Writable` or `Drivable`, every 5 s unless the application sets another fast interval
+- slow tier: every other parameter that is neither constant nor cached, every 60 s unless the application sets another slow interval
 
-A module configured with a uniform poll interval SHALL poll all non-constant, non-cached parameters at that one interval. For each parameter the effective interval SHALL be, in order of precedence: the parameter's own interval, the module's `pollinterval` parameter (for the fast tier or the uniform interval), the module's configured interval, and otherwise no polling. Constant and cached parameters and the `pollinterval` parameter itself SHALL never be polled.
+A module configured with a uniform interval SHALL instead poll all non-constant, non-cached parameters at that one interval. A module whose module-level polling is turned off SHALL poll only parameters with an interval of their own. For each parameter the effective interval SHALL be, in order of precedence: the parameter's own interval, the module's `pollinterval` parameter (for the fast tier or the uniform interval), the module's configured interval, and the defaults. Constant and cached parameters and the `pollinterval` parameter itself SHALL never be polled.
 
 #### Scenario: Periodic read
 - **WHEN** `t1:value` is configured to poll every second and a client is activated
 - **THEN** the client receives about one `update t1:value` per second
 
+#### Scenario: Default tiers
+- **WHEN** a `Drivable` module with `value`, `status`, `target` and `ramp` and no poll settings runs for 130 s
+- **THEN** `value` and `status` are each polled about 26 times, and `target` and `ramp` about twice
+
 #### Scenario: Fast and slow tier
-- **WHEN** a `Drivable` module with `value`, `status`, `target` and `ramp` is configured with a tiered interval of 1 s and runs for 130 s
+- **WHEN** that module is configured with a fast interval of 1 s and runs for 130 s
 - **THEN** `value` and `status` are each polled about 130 times, and `target` and `ramp` about twice
 
-#### Scenario: No polling unless configured
-- **WHEN** a `Readable` module has no poll interval and no `pollinterval` parameter
-- **THEN** no parameter of it is polled after the startup reads
+#### Scenario: Module without a fast tier
+- **WHEN** a module with `interface_classes` `[]` and parameters `value` and `x` and no poll settings runs for 130 s
+- **THEN** both are polled about twice
+
+#### Scenario: Polling turned off
+- **WHEN** a module's polling is turned off and only its `ramp` has an interval of its own (5 s)
+- **THEN** only `ramp` is polled, every 5 s
 
 #### Scenario: Parameter interval wins
-- **WHEN** a tiered module polls at 1 s and its `ramp` parameter has its own interval of 5 s
+- **WHEN** a module polls in tiers at 1 s and its `ramp` parameter has its own interval of 5 s
 - **THEN** `ramp` is polled every 5 s, not every 60 s
 
 #### Scenario: Uniform interval
@@ -41,10 +49,10 @@ A module configured with a uniform poll interval SHALL poll all non-constant, no
 - **THEN** all three are polled about every 2 s
 
 ### Requirement: Poll interval parameter
-The library SHALL drive a module's polling by its `pollinterval` parameter when the module declares one. A `change` of it SHALL go to the module's handler first, and the value the handler returns SHALL be published as usual. Every published value of it (from a change, the initial value or an application push) SHALL re-time the module's polling: its fast tier, or its uniform interval. A value of 0 SHALL stop that polling until a positive value is published. Parameters with an interval of their own and the slow tier SHALL keep their intervals. Without an initial value, the parameter SHALL start with the module's configured interval, or 0 if none is configured.
+The library SHALL drive a module's polling by its `pollinterval` parameter when the module declares one. A `change` of it SHALL go to the module's handler first, and the value the handler returns SHALL be published as usual. Every published value of it (from a change, the initial value or an application push) SHALL re-time the module's polling: its fast tier, or its uniform interval. A value of 0 SHALL stop that polling until a positive value is published. Parameters with an interval of their own and the slow tier SHALL keep their intervals. Without an initial value, the parameter SHALL start with the module's fast or uniform interval (the configured one, else the default 5 s). On a module whose module-level polling is turned off, the parameter SHALL have no effect on polling.
 
 #### Scenario: Client tunes the rate
-- **WHEN** a client changes `cryo:pollinterval` from 1 to 0.2 on a module polled at 1 s
+- **WHEN** a client changes `cryo:pollinterval` from 1 to 0.2 on a module whose fast tier polls at 1 s
 - **THEN** the handler's change is called with 0.2, the client receives `changed cryo:pollinterval [0.2, ...]`, and `cryo:value` is polled about every 0.2 s from then on
 
 #### Scenario: Handler adjusts the value

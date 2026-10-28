@@ -29,6 +29,15 @@
 - [x] 5.2 Document polling (tiers, precedence, `pollinterval`, poll hook, updates for unchanged values) in the `must-server` crate docs/README, note the `Module::poll_interval` change, and add the `pollinterval`-parameter entry to the "Library behavior" section of `COMPATIBILITY.md`
 - [x] 5.3 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, and cross-check `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc` builds as CI does
 
+## 6. Default polling and the C ABI rules
+
+- [ ] 6.1 Model: replace the module's tiered/uniform/slow fields with one `PollMode` (`Tiered { fast }` defaulting to 5 s, `Uniform`, `Off`) plus the slow interval; add `Module::no_polling()`; reject more than one of `poll_interval`/`poll_all`/`no_polling`; warn for `slow_poll_interval` without tiers and for a `pollinterval` parameter on a module with polling off; seed `pollinterval` from the default 5 s; update the model tests (default tiers, no-base-class slow tier without configuration, polling-off-with-uniform error, `pollinterval` alone uses the default tiers)
+- [ ] 6.2 Runtime: verify the default-tiers (paused, 130 s: 26/26/2/2), module-without-a-fast-tier and polling-turned-off scenarios in `tests/polling.rs`; switch the polling tests that expect no polling to `no_polling()`
+- [ ] 6.3 Existing tests: run the workspace tests and give `no_polling()` to the test modules whose call counts, quiet clients or log contents default polling disturbs (`tests/runtime.rs`, `tests/log_files.rs`, `tests/monitor.rs`, `tests/slow_clients.rs`, `tests/events.rs`, `must-tui`, `must-ffi` tests); record which ones needed it
+- [ ] 6.4 C ABI: in `must-ffi/src/server/build.rs` choose per module between a qualifying `pollinterval` parameter (no poll calls, ignored properties reported as warnings for `SECoP_S_showErrors`), SHALL's properties (`poll_all`, or `no_polling` with only parameter properties; module property 0 → `no_polling`) and the defaults; verify all six `shall-server-abi` scenarios with C tests in `must-ffi-ctests` (callback mode, plus polling mode receiving stored `read` requests), and check existing C tests that default polling disturbs
+- [ ] 6.5 Docs: update the crate docs and README (polling by default, `no_polling`), and `COMPATIBILITY.md` (the three C cases; modules without configuration are now polled, also in polling mode; module property `pollinterval` 0 restores "nothing polled"; ignored properties next to a `pollinterval` parameter)
+- [ ] 6.6 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, and `cargo check` for `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc`
+
 ## Workflow follow-up
 
 - Archive after review.
