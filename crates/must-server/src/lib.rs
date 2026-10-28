@@ -91,7 +91,16 @@
 //!
 //! At each tick the node calls [`ModuleHandler::poll`] once with all parameters of the
 //! module that are due; override it to read them in one hardware transaction.
+//!
+//! # Discovery
+//!
+//! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP
+//! port, `equipment_id`, `firmware` and `description`, and announces itself once at
+//! startup, so that clients such as Frappy's `frappy-scan` find it without knowing the
+//! port. [`NodeBuilder::discovery`] with [`Discovery::off`], or `MUST_DISCOVERY=0`, turns
+//! it off. See [`discovery`] for the details.
 
+pub mod discovery;
 pub mod events;
 pub mod handler;
 pub mod launcher;
@@ -102,6 +111,7 @@ mod protocol;
 mod report;
 mod runtime;
 
+pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
 pub use launcher::show_status_tui;
 

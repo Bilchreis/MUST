@@ -21,6 +21,7 @@ use must_types::{
 use serde_json::Value as Json;
 use thiserror::Error;
 
+use crate::discovery::Discovery;
 use crate::handler::{ModuleHandler, NoHandler};
 use crate::logfiles::LogFiles;
 
@@ -283,6 +284,7 @@ pub(crate) struct NodeOptions {
     pub monitored: bool,
     /// `None`: from the environment ([`LogFiles::from_env`]).
     pub log_files: Option<LogFiles>,
+    pub discovery: Discovery,
 }
 
 /// Declares a SEC node. See the [module documentation](self).
@@ -313,6 +315,7 @@ impl NodeBuilder {
                 initial_read: true,
                 monitored: true,
                 log_files: None,
+                discovery: Discovery::default(),
             },
         }
     }
@@ -402,6 +405,14 @@ impl NodeBuilder {
     /// variables (see [`crate::logfiles`]; default: [`LogFiles::from_env`]).
     pub fn log_files(mut self, log_files: LogFiles) -> Self {
         self.options.log_files = Some(log_files);
+        self
+    }
+
+    /// Sets how the node takes part in SECoP's UDP discovery (default: on, port 10767,
+    /// announcing at startup; see [`crate::discovery`]). `MUST_DISCOVERY=0` turns it off
+    /// regardless.
+    pub fn discovery(mut self, discovery: Discovery) -> Self {
+        self.options.discovery = discovery;
         self
     }
 }

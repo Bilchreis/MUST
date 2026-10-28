@@ -850,3 +850,14 @@ fn integer_pollinterval_is_ordinary() {
     assert!(!module.poll.driven);
     assert_eq!(module.parameter("pollinterval").unwrap().initial, None);
 }
+
+#[test]
+fn discovery_is_on_by_default() {
+    let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
+    assert!(node.model.options.discovery.is_enabled());
+    let node = NodeBuilder::new("HZB-vm4", "test node")
+        .discovery(Discovery::off())
+        .build()
+        .unwrap();
+    assert!(!node.model.options.discovery.is_enabled());
+}

@@ -380,6 +380,7 @@ fn allowed_dependency(name: &str, windows: bool) -> bool {
             "kernel32.dll",
             "ntdll.dll",
             "ws2_32.dll",
+            "iphlpapi.dll",
             "advapi32.dll",
             "bcrypt.dll",
             "bcryptprimitives.dll",

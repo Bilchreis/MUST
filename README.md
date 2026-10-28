@@ -125,6 +125,25 @@ MUST_LOG_DIR=/tmp/must-logs MUST_LOG_DAYS=7 cargo run --example simple_node
 The line format, disk usage and the Rust API are described in
 [docs/log-files.md](docs/log-files.md).
 
+## Discovery
+
+Every node takes part in SECoP's
+[UDP discovery](https://github.com/SampleEnvironment/SECoP/blob/main/protocol/specification/discovery.rst):
+it answers `{"SECoP":"discover"}` broadcasts on UDP port 10767 with its TCP port,
+`equipment_id`, `firmware` and `description`, and announces itself once at startup.
+Several must and Frappy nodes can run on one host. Clients should broadcast: on Linux a
+request sent to one host directly reaches only one of its nodes. A node bound to a
+loopback address only answers local requests. Turn discovery off with `MUST_DISCOVERY=0`
+or `NodeBuilder::discovery(Discovery::off())`; on a host with a firewall, open 10767/udp
+for it to work. Frappy's `frappy-scan` finds the example node (it needs only Python, no
+installation):
+
+```bash
+cargo run --example simple_node
+# in another terminal, with a checkout of https://github.com/SampleEnvironment/frappy:
+python3 frappy/bin/frappy-scan
+```
+
 ## Replacing SHALL
 
 Download the libraries for your platform from the

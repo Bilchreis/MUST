@@ -13,7 +13,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use must_server::logfiles::LogFiles;
 use must_server::{
-    CallResult, Command, Ctx, HandlerResult, Module, ModuleHandler, NodeBuilder, Parameter, Reading,
+    CallResult, Command, Ctx, Discovery, HandlerResult, Module, ModuleHandler, NodeBuilder,
+    Parameter, Reading,
 };
 use must_types::{DataInfo, ErrorClass, SecopError, Value};
 use serde_json::{Value as Json, json};
@@ -183,6 +184,7 @@ pub fn node(sim: Arc<Sim>) -> NodeBuilder {
         .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .initial_read(false)
         .log_files(LogFiles::off())
+        .discovery(Discovery::off())
         .module(controller(sim))
         .unwrap()
         .module(sensor("t2"))
