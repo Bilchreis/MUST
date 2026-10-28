@@ -1,0 +1,103 @@
+name: Release
+
+# Pushing a version tag (v0.2.0) builds the SHALL-named libraries for all targets and
+# attaches them to a draft GitHub Release, which a maintainer reviews and publishes.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  version:
+    name: tag matches the workspace version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        shell: bash
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version in Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  dist:
+    name: dist ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          # 32-bit Windows (32-bit LabVIEW)
+          - os: windows-latest
+            target: i686-pc-windows-msvc
+    env:
+      ARCHIVE: must-shall-${{ needs.version.outputs.version }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+      # release builds start without a cache, so nothing from other branches ends up in them
+      # SHALL-named libraries, import libraries, must-tui and headers
+      - run: cargo xtask dist --target ${{ matrix.target }}
+      # exports against the headers, no Qt or C runtime DLLs, handles across both libraries
+      - run: cargo xtask check --target ${{ matrix.target }}
+      - name: archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse dist/${{ matrix.target }} $env:ARCHIVE
+          Copy-Item README.md, COMPATIBILITY.md, COPYING, COPYING.LESSER $env:ARCHIVE
+          Compress-Archive -Path $env:ARCHIVE -DestinationPath "$env:ARCHIVE.zip"
+      - name: archive (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cp -r dist/${{ matrix.target }} "$ARCHIVE"
+          cp README.md COMPATIBILITY.md COPYING COPYING.LESSER "$ARCHIVE"
+          tar czf "$ARCHIVE.tar.gz" "$ARCHIVE"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}.*
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: [version, dist]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: archives
+          merge-multiple: true
+      - name: create or update the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ls -l archives
+          # a re-run replaces the archives of the existing draft, never of a published release
+          if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2> /dev/null); then
+            if [ "$draft" != "true" ]; then
+              echo "::error::release $GITHUB_REF_NAME is already published; not replacing its files"
+              exit 1
+            fi
+            gh release upload "$GITHUB_REF_NAME" archives/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" archives/* --draft --verify-tag \
+              --title "must ${{ needs.version.outputs.version }}" --generate-notes
+          fi

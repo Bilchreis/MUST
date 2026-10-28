@@ -127,7 +127,9 @@ The line format, disk usage and the Rust API are described in
 
 ## Replacing SHALL
 
-Build the SHALL-named libraries and their headers into `dist/<target>/`:
+Download the libraries for your platform from the
+[Releases](https://github.com/Bilchreis/MUST/releases) page, or build the SHALL-named
+libraries and their headers into `dist/<target>/`:
 
 ```bash
 cargo xtask dist                                 # this machine's target
@@ -141,6 +143,7 @@ run unchanged; see [COMPATIBILITY.md](COMPATIBILITY.md) for the details and the
 differences to SHALL.
 
 The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.
+How releases are made is described in [docs/releasing.md](docs/releasing.md).
 
 ## License
 

@@ -7,9 +7,11 @@ and normally run unchanged. This page lists where must behaves differently.
 
 ## Replacing SHALL
 
-1. Build or download the libraries for your platform. `cargo xtask dist --target <triple>`
-   writes them to `dist/<triple>/`; CI uploads the same folder as an artifact named
-   `must-shall-<triple>`.
+1. Download the libraries for your platform from the
+   [Releases](https://github.com/Bilchreis/MUST/releases) page
+   (`must-shall-<version>-<triple>.zip` or `.tar.gz`), or build them:
+   `cargo xtask dist --target <triple>` writes them to `dist/<triple>/`, and CI uploads
+   the same folder as a workflow artifact named `must-shall-<triple>`.
 
    | Platform | Files |
    |---|---|
