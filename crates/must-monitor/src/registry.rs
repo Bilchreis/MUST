@@ -376,16 +376,29 @@ pub fn list(dir: &Path) -> Result<Vec<Listed>, RegistryError> {
 /// runs, so that only one runs per user.
 pub const TUI_LOCK: &str = "tui.lock";
 
+/// Name of the lock file in the registry directory that a process holds while it starts
+/// a status TUI and waits for it to come up, so that two processes never start one each.
+pub const LAUNCH_LOCK: &str = "tui-launch.lock";
+
 /// Takes the TUI lock in `dir` without waiting: `Some(file)` holds it until the file is
 /// dropped (or the process ends), `None` if another process holds it.
 pub fn try_lock_tui(dir: &Path) -> io::Result<Option<std::fs::File>> {
+    try_lock(&dir.join(TUI_LOCK))
+}
+
+/// Takes the launch lock in `dir` without waiting, like [`try_lock_tui`].
+pub fn try_lock_launch(dir: &Path) -> io::Result<Option<std::fs::File>> {
+    try_lock(&dir.join(LAUNCH_LOCK))
+}
+
+fn try_lock(path: &Path) -> io::Result<Option<std::fs::File>> {
     // read and write access: Windows refuses to lock append-only handles
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(dir.join(TUI_LOCK))?;
+        .open(path)?;
     match file.try_lock() {
         Ok(()) => Ok(Some(file)),
         Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -410,6 +423,12 @@ mod tests {
         assert!(super::try_lock_tui(&dir).unwrap().is_none());
         drop(held);
         assert!(!super::tui_running(&dir).unwrap(), "released with the file");
+        // the launch lock is a lock of its own
+        let launching = super::try_lock_launch(&dir).unwrap().expect("free");
+        assert!(super::try_lock_launch(&dir).unwrap().is_none());
+        assert!(!super::tui_running(&dir).unwrap());
+        drop(launching);
+        assert!(super::try_lock_launch(&dir).unwrap().is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

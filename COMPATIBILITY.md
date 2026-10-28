@@ -119,8 +119,9 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   at once and only reads. `bGUI` in `SECoP_S_initLibrary` and
   `SECoP_S_showStatusWindow(1)` open it in a window of its own (a console window on
   Windows; a terminal emulator on Linux with a graphical session), unless it runs
-  already. **Different from SHALL:** `SECoP_S_showStatusWindow(0)` does not close it,
-  since it may show other programs' nodes; the user closes it. Closing its window never
+  already, and open it again whenever it is closed. **Different from SHALL:**
+  `SECoP_S_showStatusWindow(0)` does not close it, since it may show other programs'
+  nodes; it stops opening it again, and the user closes it. Closing its window never
   ends the host. See [docs/status-tui.md](docs/status-tui.md).
 - **Monitoring** (new): every process with nodes opens a local monitoring endpoint (a
   Unix socket in `$XDG_RUNTIME_DIR/must` or `/tmp/must-<uid>`, a named pipe on Windows,
