@@ -30,6 +30,10 @@ When the library starts a read of a parameter, for a client's `read` or for a po
 - **WHEN** the handler of `m` is busy with a `change` and two clients read `m:value` meanwhile
 - **THEN** after the change the handler's read of `m:value` is called once, and both clients receive a reply with the same value and timestamp
 
+#### Scenario: Two clients share a read, a third is updated
+- **WHEN** client C has activated `m`, the handler of `m` is busy, and clients A and B read `m:p` meanwhile
+- **THEN** the handler reads `m:p` once; A and B each receive `reply m:p` with the same value and timestamp, and C receives one `update m:p` with that value and no reply
+
 #### Scenario: Reads around a waiting change
 - **WHEN** the handler of `m` is busy, and a `read m:target` from client A, a `change m:target 5` from client B and a `read m:target` from client C wait in that order
 - **THEN** the handler reads `m:target` once, before B's change, and A and C receive that value; B then receives `changed m:target [5, ...]` and activated clients an `update m:target` with 5
@@ -48,6 +52,10 @@ On a module configured for concurrent requests, a request to read a parameter th
 #### Scenario: Client joins a client's read
 - **WHEN** client A's read of `m:value` waits on the hardware and client B reads `m:value`
 - **THEN** the handler's read of `m:value` is called once and both clients receive its result
+
+#### Scenario: Two clients share a running read, a third is updated
+- **WHEN** client C has activated `m`, client A's read of `m:p` is running, and client B reads `m:p`
+- **THEN** the handler reads `m:p` once; A and B each receive `reply m:p` with the same value and timestamp, and C receives one `update m:p` with that value and no reply
 
 #### Scenario: Client joins a poll
 - **WHEN** a poll's read of `m:value` is running, no `change` or `do` of `m` has finished since it started, and a client reads `m:value`

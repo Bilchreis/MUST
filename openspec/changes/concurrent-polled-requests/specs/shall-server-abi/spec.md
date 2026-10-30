@@ -41,8 +41,8 @@ The library SHALL, when function pointers are disabled, queue each `read`, `chan
 - **THEN** the client reading `mod1:p1` receives its reply at once, without waiting for `mod1:p0`
 
 #### Scenario: Reads of one parameter merged
-- **WHEN** three clients read `mod1:value` before the application fetches the request
-- **THEN** the application gets one request, and after it is answered all three clients receive the reply
+- **WHEN** a fourth client has activated `mod1`, and three clients read `mod1:value` before the application fetches the request
+- **THEN** the application gets one request; after it is answered the three clients each receive `reply mod1:value` with the same value, and the fourth client receives one `update mod1:value`
 
 #### Scenario: Read after changed
 - **WHEN** the application has fetched a read of `mod1:status` without answering it, then answers client B's `change mod1:target 5`, and B then reads `mod1:status`
