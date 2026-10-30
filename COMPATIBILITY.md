@@ -84,10 +84,15 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   effect (requests are always served by several threads).
 - **Callbacks** (getters, setters, command functions) run on worker threads of the
   library, possibly several at once for different modules, never on the thread that
-  called `SECoP_S_initLibrary`. Calls for one module are not overlapped.
+  called `SECoP_S_initLibrary`. Calls for one module are not overlapped. A callback that
+  has not returned after 60 s gives the client `TimeoutError` (SHALL waited forever).
 - **Polled requests** wait 60 s for `SECoP_S_putCommandAnswer[2]`, as in SHALL; then the
-  client gets `TimeoutError`. Answering an unknown id (timed out, answered before, never
-  handed out) returns `SECoP_S_ERROR_INVALID_NAME`, as in SHALL.
+  client gets `TimeoutError`, and a request not yet fetched is no longer handed out.
+  Answering an unknown id (timed out, answered before, never handed out) returns
+  `SECoP_S_ERROR_INVALID_NAME`, as in SHALL.
+- **Node `timeout`**: nodes publish the property `timeout` 60 (s), the time a client
+  should wait for a reply; SHALL published none. A `timeout` property set by the program
+  replaces it and also shortens how long the node waits for callbacks and answers.
 - **Small buffers** in `SECoP_S_getStoredCommand[2]` work as in SHALL: the request is
   handed out anyway with `SECoP_S_WARNING_BUFFER_TOO_SMALL`, the text is cut (and
   NUL-terminated), and the size arguments receive the full text length without NUL.

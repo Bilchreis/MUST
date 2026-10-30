@@ -695,6 +695,33 @@ int ctest_server_poll_step(int step)
     }
 }
 
+/* a host that sets a short node timeout and never fetches a request: step 0 builds the
+   node, step 1 runs after the client got its TimeoutError */
+int ctest_server_abandoned(int step, unsigned short port)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+
+    if (step == 0) {
+        OK(SECoP_S_initLibrary(NULL, 0, 0, "abandon"));
+        OK(SECoP_S_createNode2("anode", "abandoned requests", "127.0.0.1", port, "abandon"));
+        OK(SECoP_S_addPropertyDouble("timeout", 0.5, "abandon"));
+        OK(SECoP_S_addModule("mod1", "abandon"));
+        OK(SECoP_S_addPropertyString("description", "module", "abandon"));
+        OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "abandon"));
+        OK(SECoP_S_addReadableParameter("value", NULL, "abandon"));
+        OK(SECoP_S_addPropertyString("description", "value", "abandon"));
+        OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "abandon"));
+        CHECK(complete("abandon") >= 0);
+        return 0;
+    }
+    /* nobody waits for the request any more: it is not handed out */
+    CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "abandon") == SECoP_S_ERROR_NO_DATA);
+    return 0;
+}
+
 /* --- stress */
 
 int ctest_server_stress_build(unsigned short port)

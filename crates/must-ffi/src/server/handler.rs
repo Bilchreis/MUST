@@ -216,20 +216,19 @@ impl ShallModule {
             },
         )
         .ok_or_else(|| internal("the application has finished using the library"))?;
+        // also when the node's timeout drops this future first
+        let _queued = state::Queued(id);
         let timeout = state::poll_timeout();
         match tokio::time::timeout(timeout, answer).await {
             Ok(Ok(answer)) => Ok(answer),
             Ok(Err(_)) => Err(internal(format!("{accessible}: the request was dropped"))),
-            Err(_) => {
-                state::forget(id);
-                Err(SecopError::new(
-                    ErrorClass::TimeoutError,
-                    format!(
-                        "{accessible}: no answer from the application within {} s",
-                        timeout.as_secs_f64()
-                    ),
-                ))
-            }
+            Err(_) => Err(SecopError::new(
+                ErrorClass::TimeoutError,
+                format!(
+                    "{accessible}: no answer from the application within {} s",
+                    timeout.as_secs_f64()
+                ),
+            )),
         }
     }
 }
