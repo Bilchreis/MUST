@@ -10,12 +10,11 @@ The queueing happens in must-server, so the fix belongs there. It also helps Rus
 
 - **Concurrent requests (opt-in per module).** A module can declare that its handler accepts overlapping calls. Its requests (`read`, `change`, `do`, poll ticks) then start as they arrive instead of one after another, up to a limit per module. Modules that do not opt in keep one call at a time. Requests of one connection stay in order, as today.
 - **Shared reads.**
-  - On every module, a `read` that waits behind other requests joins a waiting read of the same parameter, unless a `change` or `do` of the module is waiting between them. Both clients get the same reply from one handler call.
-  - On a module with concurrent requests, a `read` of a parameter that is already being read joins that read, as in SHALL.
-  - Polls and client reads of the same parameter share reads the same way.
+  - On every module, when a read of a parameter starts, every request still waiting to read that parameter shares it: client reads and that parameter in a waiting poll tick. They get the same reply from one handler call. SECoP asks a `read` for "a reasonable recent" value, and a waiting request gets one read after it arrived.
+  - On a module with concurrent requests, a request to read a parameter that is already being read joins that read, as in SHALL: a poll always, a client's `read` only if that read started after the module's last `change` or `do` that had finished when the client sent it. A client that got `changed` and then reads never receives a value from before the change, as SECoP requires for a BUSY status.
 - **Polls started together.** On a module with concurrent requests, the default poll hook starts the reads of all due parameters at once.
 - **C ABI:** modules in polling mode use concurrent requests. Callback mode keeps one call per module at a time, as in SHALL and as `COMPATIBILITY.md` promises. A shared read is one stored request; its answer replies to every waiting client.
-- **`COMPATIBILITY.md`:** polling-mode requests of one module are handed out as they arrive and reads of one parameter are merged, as in SHALL.
+- **`COMPATIBILITY.md`:** polling-mode requests of one module are handed out as they arrive and reads of one parameter are merged, as in SHALL, except that a read sent after a `changed` or `done` reply gets a request of its own.
 
 No breaking change: the opt-in defaults to off, and merging waiting reads only saves handler calls.
 
@@ -25,7 +24,7 @@ No breaking change: the opt-in defaults to off, and merging waiting reads only s
 None.
 
 ### Modified Capabilities
-- `sec-node-runtime`: "Request concurrency" gains the concurrent-requests opt-in; new requirement "Shared reads".
+- `sec-node-runtime`: "Request concurrency" gains the concurrent-requests opt-in; new requirements "Shared waiting reads", "Shared running reads" and "Concurrent polls".
 - `shall-server-abi`: "Polling mode" hands out a module's requests as they arrive and merges reads of one parameter; "Callback mode" states one call per module at a time.
 
 ## Impact

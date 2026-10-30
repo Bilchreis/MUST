@@ -18,7 +18,7 @@ The library SHALL, when function pointers are enabled, answer `read`, `change` a
 - **THEN** the getter of `mod1:b` is called only after the getter of `mod1:a` has returned
 
 ### Requirement: Polling mode
-The library SHALL, when function pointers are disabled, queue each `read`, `change` and `do` per context as it arrives, also while other requests of the same module are handed out and not yet answered, hand it out once through `SECoP_S_getStoredCommand[2]` (returning `SECoP_S_ERROR_NO_DATA` when empty), and reply to the client when `SECoP_S_putCommandAnswer[2]` is called with its id, in any order. A `read` of a parameter that is already queued or handed out SHALL not be queued again; its answer SHALL reply to every client waiting for it, as in SHALL.
+The library SHALL, when function pointers are disabled, queue each `read`, `change` and `do` per context as it arrives, also while other requests of the same module are handed out and not yet answered, hand it out once through `SECoP_S_getStoredCommand[2]` (returning `SECoP_S_ERROR_NO_DATA` when empty), and reply to the client when `SECoP_S_putCommandAnswer[2]` is called with its id, in any order. A `read` of a parameter that is already queued or handed out SHALL not be queued again, unless it was queued before a `change` or `do` of the module was answered and the new `read` came from a client after that answer; a poll SHALL never queue a second read of a parameter. One answer SHALL reply to every client waiting for it, as in SHALL.
 
 #### Scenario: Poll and answer
 - **WHEN** a client sends `change mod1:target 500` and the application calls `SECoP_S_getStoredCommand2` for its context
@@ -43,6 +43,14 @@ The library SHALL, when function pointers are disabled, queue each `read`, `chan
 #### Scenario: Reads of one parameter merged
 - **WHEN** three clients read `mod1:value` before the application fetches the request
 - **THEN** the application gets one request, and after it is answered all three clients receive the reply
+
+#### Scenario: Read after changed
+- **WHEN** the application has fetched a read of `mod1:status` without answering it, then answers client B's `change mod1:target 5`, and B then reads `mod1:status`
+- **THEN** the application gets a second request for `mod1:status`, and B's reply comes from its answer
+
+#### Scenario: Poll of a queued parameter
+- **WHEN** a client's read of `mod1:value` is queued or handed out and a poll tick falls due for `mod1:value`
+- **THEN** no second request for `mod1:value` is queued, and the answer to the client's read is sent as the update
 
 #### Scenario: Unanswered read does not block the module
 - **WHEN** the application leaves a read of `mod1:p0` unanswered and a client sends `change mod1:target 5`

@@ -24,34 +24,42 @@ The library SHALL process requests of one connection in the order received and S
 ## ADDED Requirements
 
 ### Requirement: Shared waiting reads
-The library SHALL let a `read` that waits for its module join an earlier waiting `read` of the same parameter, unless a `change` or `do` of that module waits between them. The handler SHALL then be called once, and every joined request SHALL receive the result (value or error) as its reply.
+When the library starts a read of a parameter, for a client's `read` or for a poll, every request still waiting for the module that would read the same parameter SHALL share that read instead of calling the handler again: a client's `read`, and that parameter in a waiting poll tick. Each joined `read` SHALL receive the result (value or error) as its reply, and the result SHALL be published once.
 
 #### Scenario: Reads waiting behind a change
 - **WHEN** the handler of `m` is busy with a `change` and two clients read `m:value` meanwhile
 - **THEN** after the change the handler's read of `m:value` is called once, and both clients receive a reply with the same value and timestamp
 
-#### Scenario: Change between the reads
-- **WHEN** reads of `m:value` from clients A and C wait with a `change m:target` from client B between them
-- **THEN** the handler reads `m:value` twice, and C's reply comes from the read after B's change
+#### Scenario: Reads around a waiting change
+- **WHEN** the handler of `m` is busy, and a `read m:target` from client A, a `change m:target 5` from client B and a `read m:target` from client C wait in that order
+- **THEN** the handler reads `m:target` once, before B's change, and A and C receive that value; B then receives `changed m:target [5, ...]` and activated clients an `update m:target` with 5
+
+#### Scenario: Poll tick across a change
+- **WHEN** the handler of `m` is busy, and a `read m:target` from client A, a `change m:target 5` from client B and a poll tick due for `m:target` wait in that order
+- **THEN** the poll makes no handler read of `m:target`; activated clients receive one `update m:target` from A's read and one from B's change
 
 #### Scenario: Shared error
-- **WHEN** a read joined by two clients fails with `CommunicationFailed`
+- **WHEN** a read shared by two clients fails with `CommunicationFailed`
 - **THEN** both clients receive `error_read` with `CommunicationFailed`
 
 ### Requirement: Shared running reads
-On a module configured for concurrent requests, the library SHALL let a `read` of a parameter that is being read join that read instead of calling the handler again, whether the running read serves a client or a poll. Every joined request SHALL receive the result as its reply. A shared read SHALL continue until it finishes or the node timeout passes, even when the request that started it is gone.
+On a module configured for concurrent requests, a request to read a parameter that is being read SHALL share that running read instead of calling the handler again: always for a poll, and for a client's `read` only if the running read started after the last `change` or `do` of the module that had finished before the `read` arrived. A shared read SHALL continue until it finishes or the node timeout passes, even when the request that started it is gone.
 
 #### Scenario: Client joins a client's read
 - **WHEN** client A's read of `m:value` waits on the hardware and client B reads `m:value`
 - **THEN** the handler's read of `m:value` is called once and both clients receive its result
 
 #### Scenario: Client joins a poll
-- **WHEN** a poll's read of `m:value` is running and a client reads `m:value`
+- **WHEN** a poll's read of `m:value` is running, no `change` or `do` of `m` has finished since it started, and a client reads `m:value`
 - **THEN** the handler is not called again; the client receives the poll's result as its reply, and activated clients receive one `update m:value`
 
 #### Scenario: Poll joins a client's read
 - **WHEN** a client's read of `m:value` is running and a poll tick falls due for `m:value`
 - **THEN** the handler is not called again for the poll, and activated clients receive one `update m:value` from the client's read
+
+#### Scenario: Read after changed sees the change
+- **WHEN** a read of `m:status` started while `m` was idle is still running, client B's `change m:target 5` finishes with the handler publishing `m:status` BUSY, and B then reads `m:status`
+- **THEN** B's read does not share the earlier read; the handler is called again and B receives the BUSY status
 
 #### Scenario: First reader leaves
 - **WHEN** client A starts a read of `m:value`, client B joins it, and A disconnects before the result
