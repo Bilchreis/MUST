@@ -366,6 +366,15 @@ fn polling() {
     assert_eq!(update[0], 4.5);
     assert_eq!(update[1]["t"], 1234.5);
     assert_eq!(update[1]["e"], 0.5);
+    // sizes that count the NUL, or a buffer with text after it, as in SHALL
+    assert_eq!(data(&active.recv_until("update mod1:value "))[0], 5.5);
+    let update = data(&active.recv_until("update mod1:value "));
+    assert_eq!(update[0], 6.5);
+    assert_eq!(update[1]["e"], 0.5);
+    let reply = poll_step(port, "read mod1:value", 8);
+    assert!(reply.starts_with("reply mod1:value "), "{reply}");
+    assert_eq!(data(&reply)[0], 7.5);
+    assert_eq!(data(&reply)[1]["e"], 0.75);
 
     done(c"poll");
     assert!(closed(port));

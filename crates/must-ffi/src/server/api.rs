@@ -44,12 +44,15 @@ unsafe fn text(s: *const c_char) -> Option<String> {
 }
 
 /// JSON from SHALL's `(const char*, int size)` arguments; `Ok(None)` for NULL or empty.
+/// As in SHALL, the text ends at the first NUL, so a size that counts the terminator or
+/// a whole buffer works.
 ///
 /// # Safety
 /// See [`sized_bytes`].
 unsafe fn sized_json(s: *const c_char, size: c_int) -> Result<Option<Json>, c_int> {
     // SAFETY: forwarded caller contract
-    match unsafe { sized_bytes(s, size) } {
+    let text = unsafe { sized_bytes(s, size) }.map(|b| b.split(|&c| c == 0).next().unwrap_or(b));
+    match text {
         None => Ok(None),
         Some(b) if b.iter().all(u8::is_ascii_whitespace) => Ok(None),
         Some(b) => serde_json::from_slice(b)

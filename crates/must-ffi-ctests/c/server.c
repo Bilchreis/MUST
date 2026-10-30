@@ -678,6 +678,16 @@ int ctest_server_poll_step(int step)
         CHECK(SECoP_S_updateParameter2("other:mod1:value", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NODE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:value", "\"text\"", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_VALUE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:go", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        /* as in SHALL, the text ends at the first NUL: a size counting the NUL or a whole
+           buffer works */
+        OK(SECoP_S_updateParameter2("pnode:mod1:value", "5.5", 4, NULL, 0, NAN));
+        OK(SECoP_S_updateParameter2("pnode:mod1:value", "6.5\0junk", 8, "0.5\0junk", 8, NAN));
+        return 0;
+
+    case 8: /* read mod1:value, answered with sizes that count the NUL and what follows */
+        OK(poll2(&id, &action, name, &name_size, value, &value_size));
+        CHECK(action == SECoP_S_ACTION_READ);
+        OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "7.5\0junk", 8, "0.75", 5, 0.0));
         return 0;
 
     default:
