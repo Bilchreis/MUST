@@ -28,10 +28,10 @@
 //! [`NodeBuilder::log_files`](crate::NodeBuilder::log_files) for one node.
 //!
 //! Logging never slows a node: lines go through a bounded queue to one writer thread per
-//! process; when the queue is full, lines are dropped and a `* dropped <n> lines` line
-//! marks the gap. Files are flushed every second and when the node stops. If a file
-//! cannot be written, the node logs one warning and file logging stops for it until the
-//! next day.
+//! process, which runs while any node logs and ends with the last one; when the queue is
+//! full, lines are dropped and a `* dropped <n> lines` line marks the gap. Files are
+//! flushed every second and when the node stops. If a file cannot be written, the node
+//! logs one warning and file logging stops for it until the next day.
 
 mod config;
 mod format;
@@ -67,8 +67,9 @@ pub(crate) struct LogHandle {
 }
 
 impl LogHandle {
-    /// Resolves once the node's file is flushed and closed after `NodeEvent::Stopped`
-    /// (or after a few seconds if the writer is stuck).
+    /// Resolves once the node's file is flushed and closed after `NodeEvent::Stopped`,
+    /// and for the last logging node the writer thread has ended (or after a few seconds
+    /// if the writer is stuck).
     pub(crate) async fn finished(&self) {
         let _ = tokio::time::timeout(CLOSE_TIMEOUT, self.finished.cancelled()).await;
     }
@@ -94,7 +95,7 @@ pub(crate) fn start(hub: &Arc<Hub>, config: Option<&LogFiles>) -> Option<LogHand
         );
         return None;
     };
-    let sender = writer::sender()?;
+    let sender = writer::acquire()?;
     let node = NEXT.fetch_add(1, Ordering::Relaxed);
     let finished = CancellationToken::new();
     let open = Command::Open {
@@ -132,12 +133,12 @@ async fn send(sender: &std::sync::mpsc::SyncSender<Command>, mut command: Comman
 /// The node's logger: turns its events into lines for the writer, never waiting for it.
 async fn run(
     mut events: tokio::sync::broadcast::Receiver<NodeEvent>,
-    sender: &'static std::sync::mpsc::SyncSender<Command>,
+    sender: std::sync::mpsc::SyncSender<Command>,
     node: LogId,
     open: Command,
     finished: CancellationToken,
 ) {
-    if send(sender, open).await {
+    if send(&sender, open).await {
         let mut formatter = LineFormatter::default();
         let mut lost: u64 = 0;
         loop {
@@ -168,19 +169,27 @@ async fn run(
                 if matches!(event, NodeEvent::Stopped) {
                     // the last line, and the count of lines lost before it, must not be
                     // dropped; the node is stopping anyway
-                    send(sender, command).await;
+                    send(&sender, command).await;
                     break;
                 }
-                match writer::try_send(sender, command) {
+                match writer::try_send(&sender, command) {
                     Ok(()) => lost = 0,
                     Err(_) => lost += 1,
                 }
             }
         }
         let (ack, closed) = tokio::sync::oneshot::channel();
-        if send(sender, Command::Close { node, ack }).await {
+        if send(&sender, Command::Close { node, ack }).await {
             let _ = tokio::time::timeout(CLOSE_TIMEOUT, closed).await;
         }
+    }
+    // the last logging node waits for the writer thread to end, so that a stopped node
+    // leaves no thread behind
+    if let Some(thread) = writer::release(sender) {
+        let joined = tokio::task::spawn_blocking(move || {
+            let _ = thread.join();
+        });
+        let _ = tokio::time::timeout(CLOSE_TIMEOUT, joined).await;
     }
     finished.cancel();
 }

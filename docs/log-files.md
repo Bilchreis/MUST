@@ -109,7 +109,9 @@ let node = NodeBuilder::new("cryo", "cryostat")
 
 - **Never slows a node.** Lines go through a bounded queue to one background writer thread
   per process. When the disk is too slow and the queue is full, lines are dropped and
-  the gap is marked with a line `* dropped <n> lines`.
+  the gap is marked with a line `* dropped <n> lines`. The thread runs while any node of
+  the process logs and ends when the last one stops, so a stopped program (e.g. after
+  `SECoP_S_doneLibrary`) has no logging thread left.
 - **Flushing.** Files are flushed at least once per second and when a node stops, so a log
   is complete up to about one second before a crash of the program, and up to the
   `* node stopped` line after a normal stop.
