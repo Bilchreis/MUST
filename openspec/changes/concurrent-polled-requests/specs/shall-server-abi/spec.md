@@ -13,6 +13,10 @@ The library SHALL, when function pointers are enabled, answer `read`, `change` a
 - **WHEN** a callback blocks for 1 s
 - **THEN** requests to other modules of the node are still answered meanwhile
 
+#### Scenario: Reads in close succession share a getter call
+- **WHEN** client A reads `mod1:value`, and client B reads `mod1:value` while A's getter call is running
+- **THEN** the getter of `mod1:value` is called once, and A and B both receive its value
+
 #### Scenario: One module at a time
 - **WHEN** the getter of `mod1:a` blocks for 1 s and another client reads `mod1:b`
 - **THEN** the getter of `mod1:b` is called only after the getter of `mod1:a` has returned

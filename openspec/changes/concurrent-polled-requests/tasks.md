@@ -9,8 +9,9 @@
 - [ ] 2.1 Give each module a shared state (waiting jobs, running reads with start epoch and reply senders, epoch counter) used by the actor and `Ctx`; let the actor run each job as a task and keep receiving into the waiting list while jobs run, starting the next job only after the previous one finished, with at most 64 waiting and running jobs; verify with the existing runtime and polling tests and the "One call at a time by default" scenario
 - [ ] 2.2 When a read of a parameter starts, take every waiting `Read`/`Refresh` of it and remove it from waiting `Poll` jobs (dropping empty ones); one handler read, one publish, replies to all; verify the "Reads waiting behind a change", "Two clients share a read, a third is updated", "Reads around a waiting change", "Poll tick across a change" and "Shared error" scenarios with runtime tests that count handler calls
 - [ ] 2.3 Add the epoch: `change`/`do` jobs increment it after publishing and before replying, `Job::Read` carries the epoch at sending, a read records it at start; verify with a unit test of the join rule (`start >= since`)
-- [ ] 2.4 Run jobs of modules with concurrent requests as soon as a permit of a `Semaphore(64)` is free; a read of a parameter that is running joins it (polls always, client reads when `start >= since`); the shared read runs as its own task and keeps running when a waiter goes away; verify the "Concurrent requests", "Order within a connection", "Client joins a client's read", "Two clients share a running read, a third is updated", "Read after changed sees the change" and "First reader leaves" scenarios, and that a 65th running request waits until one finishes
-- [ ] 2.5 Check that side effects still precede replies on modules with concurrent requests; verify the "Status update before changed" case of the "Ordering of side effects" requirement on such a module
+- [ ] 2.4 On every module, attach a received `Read`/`Refresh` of a running parameter to that read and remove a running parameter from a received `Poll` job (polls always, client reads when `start >= since`); the shared read runs as its own task and keeps running when a waiter goes away; verify the "Idle module, reads in close succession", "Client joins a client's read", "Two clients share a running read, a third is updated", "Client joins a poll", "Poll joins a client's read" and "First reader leaves" scenarios on a module without concurrent requests
+- [ ] 2.5 Run jobs of modules with concurrent requests as soon as a permit of a `Semaphore(64)` is free; verify the "Concurrent requests", "Order within a connection" and "Read after changed sees the change" scenarios, the running-read scenarios of 2.4 on such a module, and that a 65th running request waits until one finishes
+- [ ] 2.6 Check that side effects still precede replies on modules with concurrent requests; verify the "Status update before changed" case of the "Ordering of side effects" requirement on such a module
 
 ## 3. Polls
 
@@ -22,8 +23,8 @@
 
 - [ ] 4.1 Call `Module::concurrent_requests()` for modules of polling-mode contexts in `crates/must-ffi/src/server/build.rs`, never in callback mode; verify with a unit test of the build
 - [ ] 4.2 Add C tests in `crates/must-ffi-ctests` (with their Rust drivers in `tests/server.rs`) for the polling-mode scenarios "Requests of one module at once", "Answers in any order", "Reads of one parameter merged", "Read after changed", "Poll of a queued parameter", "Unanswered read does not block the module" and "Poll tick queued at once"
-- [ ] 4.3 Add a callback-mode C test for "One module at a time" (a blocking getter of `mod1:a` delays the getter of `mod1:b` but not a read of another module)
-- [ ] 4.4 Update `COMPATIBILITY.md` ("Callbacks" and "Polled requests" under "Library behavior"): polling-mode requests are handed out as they arrive, reads of one parameter are merged except for a read sent after a `changed` or `done` reply, answers may come in any order
+- [ ] 4.3 Add callback-mode C tests for "One module at a time" (a blocking getter of `mod1:a` delays the getter of `mod1:b` but not a read of another module) and "Reads in close succession share a getter call" (counting getter calls)
+- [ ] 4.4 Update `COMPATIBILITY.md` ("Callbacks" and "Polled requests" under "Library behavior"): polling-mode requests are handed out as they arrive, reads of one parameter are merged except for a read sent after a `changed` or `done` reply, answers may come in any order; in callback mode, reads of one parameter in close succession share one getter call
 
 ## 5. Checks
 

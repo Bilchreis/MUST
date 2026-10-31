@@ -56,7 +56,9 @@ A `change` or `do` job increments the module's epoch after its handler returned 
 Whenever a read of `p` starts (a client `Read`, a startup `Refresh`, or a poll through `Ctx::read`), it removes from the waiting list every `Read` and `Refresh` of `p` and removes `p` from every waiting `Poll` job (a `Poll` job left empty is dropped). Their reply senders are added to the read. Each of them arrived before the read started, so its value is at least as recent as the request ("Shared waiting reads"). This needs no epoch check.
 
 ### Running reads
-On a module with concurrent requests, a request to read `p` while `p` is in the running-reads table joins it: a poll always, a client `read` when `start >= since`. Otherwise it starts a new read, which replaces the table entry for later joiners.
+On every module, a request to read `p` while `p` is in the running-reads table joins it: a poll always, a client `read` when `start >= since`. Otherwise it starts a new read, which replaces the table entry for later joiners.
+
+The actor applies this as soon as it receives a job, before the job reaches the waiting list: a `Read` or `Refresh` of a running `p` is attached to that read, and `p` is removed from an arriving `Poll` job. On a module with one call at a time, the running read is the module's current job, so no `change` or `do` can finish while it runs and a client read always passes the epoch check; two reads in close succession on an idle module therefore share one handler call. The epoch check matters on modules with concurrent requests, where a `change` can finish while a read is running.
 
 A shared read runs as its own task: one guarded handler read, one publish (value or `error_update`), then it removes its table entry and sends the result to every sender. A waiter that goes away only drops its receiver, so the read continues for the others ("First reader leaves"). The read itself ends at the node timeout.
 

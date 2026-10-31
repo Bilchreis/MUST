@@ -47,11 +47,15 @@ When the library starts a read of a parameter, for a client's `read` or for a po
 - **THEN** both clients receive `error_read` with `CommunicationFailed`
 
 ### Requirement: Shared running reads
-On a module configured for concurrent requests, a request to read a parameter that is being read SHALL share that running read instead of calling the handler again: always for a poll, and for a client's `read` only if the running read started after the last `change` or `do` of the module that had finished before the `read` arrived. A shared read SHALL continue until it finishes or the node timeout passes, even when the request that started it is gone.
+On every module, a request to read a parameter that is being read SHALL share that running read instead of calling the handler again: always for a poll, and for a client's `read` only if the running read started after the last `change` or `do` of the module that had finished before the `read` arrived. A shared read SHALL continue until it finishes or the node timeout passes, even when the request that started it is gone.
 
 #### Scenario: Client joins a client's read
 - **WHEN** client A's read of `m:value` waits on the hardware and client B reads `m:value`
 - **THEN** the handler's read of `m:value` is called once and both clients receive its result
+
+#### Scenario: Idle module, reads in close succession
+- **WHEN** a module without concurrent requests is idle, client A reads `m:p`, and client B reads `m:p` while A's read is running
+- **THEN** B's read shares A's: the handler reads `m:p` once and both clients receive its result
 
 #### Scenario: Two clients share a running read, a third is updated
 - **WHEN** client C has activated `m`, client A's read of `m:p` is running, and client B reads `m:p`
@@ -66,7 +70,7 @@ On a module configured for concurrent requests, a request to read a parameter th
 - **THEN** the handler is not called again for the poll, and activated clients receive one `update m:value` from the client's read
 
 #### Scenario: Read after changed sees the change
-- **WHEN** a read of `m:status` started while `m` was idle is still running, client B's `change m:target 5` finishes with the handler publishing `m:status` BUSY, and B then reads `m:status`
+- **WHEN** on a module configured for concurrent requests a read of `m:status` started while `m` was idle is still running, client B's `change m:target 5` finishes with the handler publishing `m:status` BUSY, and B then reads `m:status`
 - **THEN** B's read does not share the earlier read; the handler is called again and B receives the BUSY status
 
 #### Scenario: First reader leaves
