@@ -7,7 +7,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
-use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use chrono::{Local, NaiveDate};
@@ -48,24 +49,61 @@ pub(crate) enum Command {
     },
 }
 
-/// The sender to the writer thread, started on first use; `None` if it cannot start.
-pub(crate) fn sender() -> Option<&'static SyncSender<Command>> {
-    static SENDER: OnceLock<Option<SyncSender<Command>>> = OnceLock::new();
-    SENDER
-        .get_or_init(|| {
-            let (tx, rx) = sync_channel(QUEUE);
-            match std::thread::Builder::new()
-                .name("must-log-writer".into())
-                .spawn(move || run(&rx))
-            {
-                Ok(_) => Some(tx),
-                Err(e) => {
-                    tracing::warn!("cannot start the log writer thread, no log files: {e}");
-                    None
-                }
+/// The writer thread while any node logs.
+struct Running {
+    sender: SyncSender<Command>,
+    thread: JoinHandle<()>,
+    /// Nodes holding a sender from [`acquire`].
+    users: usize,
+}
+
+static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+
+fn running() -> MutexGuard<'static, Option<Running>> {
+    RUNNING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// A sender to the writer thread for one node, starting the thread if no node logs;
+/// `None` if it cannot start. Give it back with [`release`].
+pub(crate) fn acquire() -> Option<SyncSender<Command>> {
+    let mut running = running();
+    if running.is_none() {
+        let (sender, rx) = sync_channel(QUEUE);
+        match std::thread::Builder::new()
+            .name("must-log-writer".into())
+            .spawn(move || run(&rx))
+        {
+            Ok(thread) => {
+                *running = Some(Running {
+                    sender,
+                    thread,
+                    users: 0,
+                });
             }
-        })
-        .as_ref()
+            Err(e) => {
+                tracing::warn!("cannot start the log writer thread, no log files: {e}");
+                return None;
+            }
+        }
+    }
+    let running = running.as_mut()?;
+    running.users += 1;
+    Some(running.sender.clone())
+}
+
+/// Gives back a sender from [`acquire`]. For the last node, the writer thread ends once
+/// it has handled what was sent; the returned handle joins it. No thread is left running
+/// when no node logs, so a host may unload the library (e.g. LabVIEW unloading the DLL).
+pub(crate) fn release(sender: SyncSender<Command>) -> Option<JoinHandle<()>> {
+    drop(sender);
+    let mut guard = running();
+    let running = guard.as_mut()?;
+    running.users = running.users.saturating_sub(1);
+    if running.users > 0 {
+        return None;
+    }
+    // dropping the last sender disconnects the channel, which ends the thread
+    guard.take().map(|r| r.thread)
 }
 
 /// Hands `command` to the writer without blocking; gives it back if the queue is full
@@ -107,6 +145,8 @@ fn run(rx: &Receiver<Command>) {
             next_clean = now + CLEAN_INTERVAL;
         }
     }
+    // every node has closed its file; flush whatever a node left open regardless
+    writer.flush_all();
 }
 
 /// The open file of a node.

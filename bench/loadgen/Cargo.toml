@@ -1,0 +1,13 @@
+[package]
+name = "loadgen"
+version = "0.0.0"
+edition = "2024"
+license = "LGPL-3.0-or-later"
+publish = false
+description = "SECoP load client for must's benchmarks (bench/README.md)"
+
+# not a member of the must workspace
+[workspace]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }

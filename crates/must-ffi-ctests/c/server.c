@@ -678,11 +678,48 @@ int ctest_server_poll_step(int step)
         CHECK(SECoP_S_updateParameter2("other:mod1:value", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NODE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:value", "\"text\"", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_VALUE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:go", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        /* as in SHALL, the text ends at the first NUL: a size counting the NUL or a whole
+           buffer works */
+        OK(SECoP_S_updateParameter2("pnode:mod1:value", "5.5", 4, NULL, 0, NAN));
+        OK(SECoP_S_updateParameter2("pnode:mod1:value", "6.5\0junk", 8, "0.5\0junk", 8, NAN));
+        return 0;
+
+    case 8: /* read mod1:value, answered with sizes that count the NUL and what follows */
+        OK(poll2(&id, &action, name, &name_size, value, &value_size));
+        CHECK(action == SECoP_S_ACTION_READ);
+        OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "7.5\0junk", 8, "0.75", 5, 0.0));
         return 0;
 
     default:
         return __LINE__;
     }
+}
+
+/* a host that sets a short node timeout and never fetches a request: step 0 builds the
+   node, step 1 runs after the client got its TimeoutError */
+int ctest_server_abandoned(int step, unsigned short port)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+
+    if (step == 0) {
+        OK(SECoP_S_initLibrary(NULL, 0, 0, "abandon"));
+        OK(SECoP_S_createNode2("anode", "abandoned requests", "127.0.0.1", port, "abandon"));
+        OK(SECoP_S_addPropertyDouble("timeout", 0.5, "abandon"));
+        OK(SECoP_S_addModule("mod1", "abandon"));
+        OK(SECoP_S_addPropertyString("description", "module", "abandon"));
+        OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "abandon"));
+        OK(SECoP_S_addReadableParameter("value", NULL, "abandon"));
+        OK(SECoP_S_addPropertyString("description", "value", "abandon"));
+        OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "abandon"));
+        CHECK(complete("abandon") >= 0);
+        return 0;
+    }
+    /* nobody waits for the request any more: it is not handed out */
+    CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "abandon") == SECoP_S_ERROR_NO_DATA);
+    return 0;
 }
 
 /* --- stress */

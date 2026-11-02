@@ -320,6 +320,8 @@ fn polling() {
     let port = free_port();
     // SAFETY: a C test with a port argument
     check("polling", unsafe { c::ctest_server_polling(port) });
+    // SHALL's 60 s, published to clients
+    assert_eq!(Client::connect(port).describe()["timeout"], 60.0);
 
     let mut active = Client::connect(port);
     active.send("activate mod1");
@@ -366,7 +368,36 @@ fn polling() {
     assert_eq!(update[0], 4.5);
     assert_eq!(update[1]["t"], 1234.5);
     assert_eq!(update[1]["e"], 0.5);
+    // sizes that count the NUL, or a buffer with text after it, as in SHALL
+    assert_eq!(data(&active.recv_until("update mod1:value "))[0], 5.5);
+    let update = data(&active.recv_until("update mod1:value "));
+    assert_eq!(update[0], 6.5);
+    assert_eq!(update[1]["e"], 0.5);
+    let reply = poll_step(port, "read mod1:value", 8);
+    assert!(reply.starts_with("reply mod1:value "), "{reply}");
+    assert_eq!(data(&reply)[0], 7.5);
+    assert_eq!(data(&reply)[1]["e"], 0.75);
 
     done(c"poll");
+    assert!(closed(port));
+}
+
+#[test]
+fn abandoned_request_is_not_handed_out() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a step and a port
+    check("abandoned", unsafe { c::ctest_server_abandoned(0, port) });
+    let mut client = Client::connect(port);
+    assert_eq!(client.describe()["timeout"], 0.5, "the host's timeout wins");
+    // the node gives up after its timeout, before the 60 s of a polled request
+    let reply = client.request("read mod1:value");
+    assert!(reply.starts_with("error_read mod1:value "), "{reply}");
+    assert_eq!(data(&reply)[0], "TimeoutError");
+    // SAFETY: a C test with a step and a port
+    check("abandoned step 1", unsafe {
+        c::ctest_server_abandoned(1, port)
+    });
+    done(c"abandon");
     assert!(closed(port));
 }

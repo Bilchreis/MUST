@@ -23,6 +23,10 @@ use crate::variant;
 /// `SECOP_POLLING_TIMEOUT` of SHALL, in milliseconds.
 const DEFAULT_POLL_TIMEOUT_MS: u64 = 60_000;
 
+/// The node `timeout` of nodes built through the C ABI, in seconds: SHALL's 60 s, for
+/// polled requests and callbacks alike, instead of must's default of 10 s.
+pub(crate) const NODE_TIMEOUT: f64 = 60.0;
+
 static POLL_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_POLL_TIMEOUT_MS);
 
 /// How long a polled request waits for `SECoP_S_putCommandAnswer`.
@@ -160,6 +164,17 @@ pub(crate) fn enqueue(context: &str, pending: Pending) -> Option<u64> {
     Some(id)
 }
 
+/// A queued request of a module. Dropping it (answered, timed out, or abandoned because
+/// the node gave up on it) removes what is left of it, so the host is never handed a
+/// request nobody waits for, and a late answer is refused.
+pub(crate) struct Queued(pub u64);
+
+impl Drop for Queued {
+    fn drop(&mut self) {
+        forget(self.0);
+    }
+}
+
 /// Drops a request that timed out, so that a late answer is rejected.
 pub(crate) fn forget(id: u64) {
     let mut state = lock();
@@ -197,5 +212,68 @@ pub(crate) fn shut_down(runtime: Runtime) {
         runtime.shutdown_background();
     } else {
         runtime.shutdown_timeout(Duration::from_secs(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A context of its own: the state is global and shared with other tests.
+    const CONTEXT: &str = "state-tests-queued";
+
+    fn request() -> (u64, oneshot::Receiver<Answer>) {
+        let (reply, answer) = oneshot::channel();
+        let pending = Pending {
+            node: "n".into(),
+            module: "m".into(),
+            accessible: "p".into(),
+            action: 1,
+            value: None,
+            reply,
+        };
+        (enqueue(CONTEXT, pending).expect("context exists"), answer)
+    }
+
+    fn queued() -> usize {
+        lock().contexts[CONTEXT].queue.len()
+    }
+
+    #[test]
+    fn dropped_request_leaves_the_queue_and_the_handed_out() {
+        lock().contexts.insert(
+            CONTEXT.into(),
+            Context {
+                callbacks: false,
+                current: None,
+                queue: VecDeque::new(),
+            },
+        );
+
+        // abandoned before the host fetched it: never handed out
+        let (id, _answer) = request();
+        let guard = Queued(id);
+        assert_eq!(queued(), 1);
+        drop(guard);
+        assert_eq!(queued(), 0);
+
+        // abandoned after the host fetched it: its answer is refused
+        let (id, _answer) = request();
+        let guard = Queued(id);
+        {
+            let mut state = lock();
+            let (id, pending) = state
+                .contexts
+                .get_mut(CONTEXT)
+                .unwrap()
+                .queue
+                .pop_front()
+                .unwrap();
+            state.handed_out.insert(id, pending);
+        }
+        drop(guard);
+        assert!(!lock().handed_out.contains_key(&id));
+
+        lock().contexts.remove(CONTEXT);
     }
 }

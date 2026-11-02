@@ -17,6 +17,7 @@ use serde_json::{Map, Value as Json};
 
 use super::codes::err;
 use super::handler::{Accessible, ShallModule};
+use super::state::NODE_TIMEOUT;
 use crate::variant::{self, CSECoPbaseType, Kind};
 
 /// `SECoP_S_getsetFunction`: getter or setter of a parameter.
@@ -390,10 +391,12 @@ impl DraftNode {
         let mut props = self.props.clone();
         let description = take_string(&mut props, "description");
         // the C ABI registers its nodes with the monitor itself, from creation on
+        // SHALL waits 60 s for the application; a `timeout` property of the host wins
         let mut node = NodeBuilder::new(&self.name, &description)
             .bind(self.bind)
             .initial_read(callbacks)
-            .monitored(false);
+            .monitored(false)
+            .timeout(NODE_TIMEOUT);
         for (key, value) in props {
             node = if is_settable(Level::Node, &key) {
                 match node.property(&key, value) {
