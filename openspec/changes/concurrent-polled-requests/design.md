@@ -71,6 +71,58 @@ Today `Connection::read_loop` awaits each request's reply before it takes the ne
 
 The connection then sends the replies in request order and handles the held frame afterwards, as today. It needs no sharing logic of its own: the module shares the repeated reads with the running read under the rules above, including the epoch check (scenario "Read after another client's change").
 
+A repeated read shares the running read; client A gets one reply per request:
+
+```mermaid
+sequenceDiagram
+    participant A as Client A
+    participant C as Connection
+    participant M as Module task
+    participant H as Handler / C program
+
+    A->>C: read m:p
+    C->>M: Read p
+    M->>H: read p (one handler call)
+    A->>C: read m:p
+    Note over C: a read of p from A is in flight and the next frame is read p: send it on at once
+    C->>M: Read p (shares the running read)
+    H-->>M: value
+    M-->>C: value (for both reads)
+    C-->>A: reply m:p [value]
+    C-->>A: reply m:p [value]
+```
+
+Another request in between ends the look-ahead, so the replies keep the request order:
+
+```mermaid
+sequenceDiagram
+    participant A as Client A
+    participant C as Connection
+    participant M as Module task
+    participant H as Handler / C program
+
+    A->>C: read m:p
+    C->>M: Read p
+    M->>H: read p
+    A->>C: read m:q
+    Note over C: not a read of p: hold it, the look-ahead stops
+    A->>C: read m:p
+    Note over C: waits behind read m:q
+    H-->>M: value p
+    M-->>C: value p
+    C-->>A: reply m:p
+    C->>M: Read q
+    M->>H: read q
+    H-->>M: value q
+    M-->>C: value q
+    C-->>A: reply m:q
+    C->>M: Read p (new read, or shares another client's running read)
+    M->>H: read p
+    H-->>M: value p
+    M-->>C: value p
+    C-->>A: reply m:p
+```
+
 *Alternative:* count the repeats in the connection and send one job with a reply count. Rejected: it would bypass the epoch check and duplicate the module's sharing rules.
 
 *Alternative:* pipeline every request of a connection and reorder the replies. Rejected: a `change` followed by a `read` of the same connection must keep its order (scenario "Order within a connection"), and only identical reads can share a handler call anyway.
