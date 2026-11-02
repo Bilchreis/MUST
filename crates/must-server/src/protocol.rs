@@ -2,6 +2,7 @@
 
 //! SECoP message framing, parsing and formatting. No I/O happens here.
 
+use std::fmt::Display;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use must_types::{SECOP_DRAFT_DATE, SECOP_VERSION, SecopError, error_report};
@@ -165,7 +166,7 @@ pub(crate) fn pong(token: Option<&str>, t: f64) -> String {
 }
 
 /// `<action> <specifier> <data report>` for `reply`, `changed`, `done` and `update`.
-pub(crate) fn data_message(action: &str, specifier: &str, data_report: &Json) -> String {
+pub(crate) fn data_message(action: &str, specifier: &str, data_report: &impl Display) -> String {
     format!("{action} {specifier} {data_report}\n")
 }
 

@@ -50,3 +50,15 @@ With `concurrent-polled-requests`, every row of "until no data" is expected to d
 | one `SECoP_S_updateParameter2` call | 7.9 µs | 1.2 µs |
 
 See issue #16 for the CPU hotspots behind the difference.
+
+After issue #16, on another machine (node pinned to 4 threads, load client to 4 others; median of 5 alternating runs), before → after:
+
+| | Log files and monitoring on | Off |
+|---|---|---|
+| Rust example node, 16 clients × 8 in flight | 143k → 166k replies/s | 240k → 283k replies/s |
+| C callbacks, 16 clients × 8 in flight, one module | 101k → 114k replies/s | 181k → 193k replies/s |
+| one `SECoP_S_updateParameter2` call | 3.6 → 2.7 µs | 0.99 → 0.42 µs |
+
+Instructions counted with callgrind, log files and monitoring on: 66k → 41k per read reply of the Rust node, 12.9k → 8.5k per update call (including start-up and idle work, so approximate).
+
+The fixes also help a node with both off, so on stays at about 60% of off under full load. What is left is the work of logging itself: every request makes three events, which two tasks follow and a thread writes as three lines of text, and an update wakes those tasks.

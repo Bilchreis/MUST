@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
-use serde_json::Value as Json;
 use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -35,11 +34,15 @@ pub use node::{RunningNode, StartError};
 /// [`NodeEvent::Log`]), so that log collectors can tell them apart.
 pub const NODE_LOG_TARGET: &str = "must_server::node";
 
+/// A data report as JSON text. A value is serialized once, for the `update` line, the reply
+/// and the log alike.
+pub(crate) type Report = Arc<str>;
+
 /// The last known state of a parameter.
 #[derive(Debug, Clone)]
 pub(crate) enum CacheEntry {
     /// Value and its data report as sent to clients.
-    Value { value: Value, report: Json },
+    Value { value: Value, report: Report },
     /// The last attempt to obtain the value failed.
     Error { error: SecopError, t: f64 },
 }
@@ -142,7 +145,7 @@ impl Hub {
                 if let Some(value) = &param.initial
                     && let Ok(json) = param.datainfo.encode(value)
                 {
-                    let report = data_report(json, &Qualifiers::at(now()));
+                    let report = report_text(&data_report(json, &Qualifiers::at(now())));
                     let entry = CacheEntry::Value {
                         value: value.clone(),
                         report,
@@ -377,7 +380,7 @@ impl Hub {
         module: &str,
         parameter: &str,
         reading: Reading,
-    ) -> Result<Json, SecopError> {
+    ) -> Result<Report, SecopError> {
         let Some(param) = self
             .model
             .modules
@@ -414,7 +417,7 @@ impl Hub {
             t: Some(reading.t.unwrap_or_else(now)),
             e: reading.e,
         };
-        let report = data_report(json, &qualifiers);
+        let report = report_text(&data_report(json, &qualifiers));
         if parameter == POLLINTERVAL
             && let Some(interval) = self.poll_intervals.get(module)
         {
@@ -451,25 +454,29 @@ impl Hub {
     }
 
     fn store(&self, module: &str, parameter: &str, entry: CacheEntry) {
-        let line: Arc<str> = update_line(module, parameter, &entry).into();
+        let observed = self.observed();
+        let mut line: Option<Arc<str>> =
+            observed.then(|| update_line(module, parameter, &entry).into());
         let limit = self.model.options.max_outgoing_bytes;
         let mut closed = Vec::new();
         {
             let mut state = self.lock();
-            state
-                .cache
-                .insert((module.to_owned(), parameter.to_owned()), entry);
             let mut overflowing = Vec::new();
             for (id, conn) in &state.conns {
                 if !conn.activation.includes(module) {
                     continue;
                 }
+                let line =
+                    line.get_or_insert_with(|| update_line(module, parameter, &entry).into());
                 if conn.stats.updates.load(Ordering::Acquire) + line.len() > limit {
                     overflowing.push(*id);
                 } else {
                     conn.push(line.clone(), true);
                 }
             }
+            state
+                .cache
+                .insert((module.to_owned(), parameter.to_owned()), entry);
             for id in &overflowing {
                 if let Some(conn) = state.conns.remove(id) {
                     conn.stats.overflowed.store(true, Ordering::Release);
@@ -486,7 +493,7 @@ impl Hub {
             );
         }
         debug!(module, parameter, "updated");
-        if self.observed() {
+        if observed && let Some(line) = line {
             self.emit(NodeEvent::Updated {
                 module: module.to_owned(),
                 parameter: parameter.to_owned(),
@@ -496,14 +503,18 @@ impl Hub {
     }
 }
 
+/// The text of a data report; faster than through `Display`, and a JSON value cannot fail.
+pub(crate) fn report_text(report: &serde_json::Value) -> Report {
+    serde_json::to_string(report).unwrap_or_default().into()
+}
+
 /// `update` or `error_update` line for a cache entry.
 fn update_line(module: &str, parameter: &str, entry: &CacheEntry) -> String {
-    let specifier = format!("{module}:{parameter}");
     match entry {
-        CacheEntry::Value { report, .. } => protocol::data_message("update", &specifier, report),
+        CacheEntry::Value { report, .. } => format!("update {module}:{parameter} {report}\n"),
         CacheEntry::Error { error, t } => {
             let report = must_types::error_report(error, Some(*t));
-            format!("error_update {specifier} {report}\n")
+            format!("error_update {module}:{parameter} {report}\n")
         }
     }
 }
