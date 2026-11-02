@@ -656,6 +656,71 @@ fn reads_in_close_succession_share_a_getter_call() {
     done(c"cbc");
 }
 
+fn cb_hang_node(pollinterval: f64) -> u16 {
+    let port = free_port();
+    // SAFETY: a C test with a port and an interval
+    check("cb_hang_build", unsafe {
+        c::ctest_cb_hang_build(port, pollinterval)
+    });
+    port
+}
+
+#[test]
+fn no_overlap_after_a_timeout() {
+    let _serial = serial();
+    let port = cb_hang_node(0.0);
+    let mut client = Client::connect(port);
+    client.send("read mod1:a");
+    getter_running();
+    let reply = client.recv();
+    assert!(reply.starts_with("error_read mod1:a "), "{reply}");
+    assert_eq!(data(&reply)[0], "TimeoutError");
+
+    // the getter of mod1:a is still running: nothing else of the module starts
+    let reply = client.request("read mod1:b");
+    assert_eq!(data(&reply)[0], "TimeoutError", "{reply}");
+    let reply = client.request("change mod1:target 1.5");
+    assert_eq!(data(&reply)[0], "TimeoutError", "{reply}");
+    assert_eq!(cb_calls(c"b"), 0);
+    let reply = Client::connect(port).request("read mod2:c");
+    assert!(
+        reply.starts_with("reply mod2:c "),
+        "another module: {reply}"
+    );
+
+    // a request waiting when the getter returns goes on
+    client.send("read mod1:b");
+    // SAFETY: a C function without arguments
+    unsafe { c::ctest_cb_release() };
+    let reply = client.recv();
+    assert!(reply.starts_with("reply mod1:b "), "{reply}");
+    settle();
+    assert_eq!(cb_calls(c"a"), 1, "the getter was called once");
+    assert_eq!(cb_calls(c"target"), 0, "a timed-out change stays undone");
+    done(c"cbc");
+}
+
+#[test]
+fn polling_does_not_pile_up_behind_a_hung_getter() {
+    let _serial = serial();
+    let port = cb_hang_node(0.1);
+    getter_running();
+    // several timeouts and poll ticks
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(cb_calls(c"a"), 1);
+    assert_eq!(cb_calls(c"b"), 0);
+    // SAFETY: a C function without arguments
+    unsafe { c::ctest_cb_release() };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cb_calls(c"b") == 0 {
+        assert!(Instant::now() < deadline, "polling did not recover");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let reply = Client::connect(port).request("read mod1:a");
+    assert!(reply.starts_with("reply mod1:a "), "{reply}");
+    done(c"cbc");
+}
+
 #[test]
 fn repeated_read_from_one_client_in_callback_mode() {
     let _serial = serial();

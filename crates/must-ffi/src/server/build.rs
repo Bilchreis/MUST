@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::ffi::{CString, c_char, c_int};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use must_server::model::{
@@ -619,6 +620,7 @@ impl DraftNode {
             context: context.to_owned(),
             callbacks,
             accessibles,
+            gate: Arc::default(),
         }))
     }
 }
