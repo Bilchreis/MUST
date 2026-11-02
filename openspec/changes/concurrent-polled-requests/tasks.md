@@ -13,11 +13,13 @@
 - [ ] 2.5 Run jobs of modules with concurrent requests as soon as a permit of a `Semaphore(64)` is free; verify the "Concurrent requests", "Order within a connection" and "Read after changed sees the change" scenarios, the running-read scenarios of 2.4 on such a module, and that a 65th running request waits until one finishes
 - [ ] 2.6 Check that side effects still precede replies on modules with concurrent requests; verify the "Status update before changed" case of the "Ordering of side effects" requirement on such a module
 
+- [ ] 2.7 In `runtime/connection.rs`, while a client's non-cached `read` of a parameter is in flight, keep taking frames under the backpressure check: send each directly following `read` of the same parameter to the module at once and queue its reply, hold the first other frame, then send the replies in order and handle the held frame; verify the "Repeated read shares the running read", "Another request in between", "Read after another client's change" and "Slow client" scenarios with connection tests that count handler calls
+
 ## 3. Polls
 
 - [ ] 3.1 Add `Ctx::read` (reads like a poll: joins a running read of the parameter, else starts one that takes the waiting reads of that parameter, and publishes the result) and give `Ctx` the module's handler and shared state; document it on `Ctx`
 - [ ] 3.2 Change the default `ModuleHandler::poll` to read through `Ctx::read`, all due parameters at once on modules with concurrent requests, one after another otherwise; run poll ticks of such modules as their own tasks; verify the "Reads started together", "Hanging read", "Client joins a poll" and "Poll joins a client's read" scenarios, and that the existing polling tests (`tests/polling.rs`) still pass
-- [ ] 3.3 Document concurrent requests, shared reads (with the rule for reads after a `change` or `do`) and the poll hook's behavior in the `must-server` crate docs
+- [ ] 3.3 Document concurrent requests, shared reads (with the rule for reads after a `change` or `do`), repeated reads on one connection and the poll hook's behavior in the `must-server` crate docs
 
 ## 4. C ABI
 

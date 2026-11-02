@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Request concurrency
-The library SHALL process requests of one connection in the order received and SHALL call a module's handler for one request at a time, while requests for different modules and from different connections may run concurrently. A module configured for concurrent requests SHALL instead have its handler called for each request (`read`, `change`, `do`, poll tick) as it arrives, while other requests of that module are still running, up to a limit of 64 running requests per module; further requests wait until one finishes.
+The library SHALL process requests of one connection in the order received, except that repeated reads are taken together as described in "Repeated reads on one connection", and SHALL call a module's handler for one request at a time, while requests for different modules and from different connections may run concurrently. A module configured for concurrent requests SHALL instead have its handler called for each request (`read`, `change`, `do`, poll tick) as it arrives, while other requests of that module are still running, up to a limit of 64 running requests per module; further requests wait until one finishes.
 
 #### Scenario: Two modules in parallel
 - **WHEN** a slow read on module `a` is in progress and another client reads module `b`
@@ -76,6 +76,25 @@ On every module, a request to read a parameter that is being read SHALL share th
 #### Scenario: First reader leaves
 - **WHEN** client A starts a read of `m:value`, client B joins it, and A disconnects before the result
 - **THEN** the read continues and B receives the reply
+
+### Requirement: Repeated reads on one connection
+While a client's `read` of a parameter is being handled, the library SHALL also take that client's following requests as long as each is a `read` of the same parameter, and pass each on at once, so that it can share the running read under the rules for shared reads. It SHALL send the replies in the order of the requests. The first other request SHALL wait until all earlier requests of that client are answered.
+
+#### Scenario: Repeated read shares the running read
+- **WHEN** client A sends `read m:p` twice in a row, and the first is still being read when the second arrives
+- **THEN** the handler reads `m:p` once, and A receives two `reply m:p` with the same value and timestamp
+
+#### Scenario: Another request in between
+- **WHEN** client A sends `read m:p`, `read m:q` and `read m:p` while the first is still being read
+- **THEN** `read m:q` is handled after the first reply and the second `read m:p` after the reply to `m:q`; A receives the replies in the order p, q, p, and the handler reads `m:p` twice
+
+#### Scenario: Read after another client's change
+- **WHEN** on a module configured for concurrent requests client A's read of `m:status` is running, client B's `change m:target 5` finishes, and A then sends `read m:status` again
+- **THEN** A's second read does not share the first, and its reply comes from a read after B's change
+
+#### Scenario: Slow client
+- **WHEN** client A's outgoing messages exceed the node's limit while its `read m:p` is being handled
+- **THEN** the node takes none of A's following requests, not even a `read m:p`, until A has received enough
 
 ### Requirement: Concurrent polls
 On a module configured for concurrent requests, the default poll hook SHALL start the reads of all parameters due at a tick at once and publish each result when it arrives. A tick SHALL not wait for an earlier tick's reads that are still running.

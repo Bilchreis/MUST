@@ -25,7 +25,7 @@ SECoP's `read` asks for "a reasonable recent 'current' value"; a cached or the m
 - A client's `read` sent after a `changed` (or `done`) reply never gets a value read before that change.
 
 **Non-Goals:**
-- Concurrent requests within one connection. A connection still waits for each reply before reading its next request (requirement "Request concurrency").
+- Concurrent requests within one connection, apart from directly repeated reads of one parameter. A connection still waits for each reply before taking a request of any other kind (requirement "Request concurrency").
 - Concurrency in callback mode. SHALL calls one module's functions on one thread.
 - `SECoP_S_filterStoredCommand[2]` and the other functions of issue #14.
 - Sharing `change` or `do` requests.
@@ -63,6 +63,17 @@ The actor applies this as soon as it receives a job, before the job reaches the 
 A shared read runs as its own task: one guarded handler read, one publish (value or `error_update`), then it removes its table entry and sends the result to every sender. A waiter that goes away only drops its receiver, so the read continues for the others ("First reader leaves"). The read itself ends at the node timeout.
 
 *Alternative:* `futures::future::Shared`. Rejected to avoid adding `futures` for one use; the sender list is a few lines.
+
+### Repeated reads on one connection
+Today `Connection::read_loop` awaits each request's reply before it takes the next frame. While a client's non-cached `read` of `p` is in flight, the connection now keeps taking frames, subject to the same backpressure check as before:
+- a `read` of the same `p` is sent to the module at once as its own `Job::Read` (recording the epoch at that moment), and its reply future is queued behind the first;
+- the first other frame (another request, a read of another parameter, a malformed or too long line) is held, and the look-ahead stops.
+
+The connection then sends the replies in request order and handles the held frame afterwards, as today. It needs no sharing logic of its own: the module shares the repeated reads with the running read under the rules above, including the epoch check (scenario "Read after another client's change").
+
+*Alternative:* count the repeats in the connection and send one job with a reply count. Rejected: it would bypass the epoch check and duplicate the module's sharing rules.
+
+*Alternative:* pipeline every request of a connection and reorder the replies. Rejected: a `change` followed by a `read` of the same connection must keep its order (scenario "Order within a connection"), and only identical reads can share a handler call anyway.
 
 ### Polls read through `Ctx`
 `Ctx` gets `pub async fn read(&self, parameter: &str) -> Result<Reading, SecopError>` that reads like a poll: it joins a running read of the parameter if there is one (always, being a poll), otherwise starts a read that also takes the waiting reads of that parameter, and it publishes the result. `Ctx` carries the module's handler (`Arc<dyn ModuleHandler>`) and the shared module state for this.
