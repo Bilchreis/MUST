@@ -31,7 +31,7 @@
 ## 5. Checks
 
 - [x] 5.1 Re-run the latency benchmark from the audit (C host polling every 50 ms, calling GET CMD until it returns no data) and confirm: 4 waiting reads ≈ 50 ms, 8 reads of one parameter ≈ 50 ms, no client stall from a slow-tier tick
-- [ ] 5.2 Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `MUST_TUI=0 cargo test --workspace`, and confirm CI passes on Linux x86_64, Windows x86_64 and Windows i686
+- [x] 5.2 Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `MUST_TUI=0 cargo test --workspace`, and confirm CI passes on Linux x86_64, Windows x86_64 and Windows i686
 
 ## Workflow follow-up
 
