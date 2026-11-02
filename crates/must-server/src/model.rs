@@ -429,6 +429,7 @@ pub struct Module {
     uniform_poll: Option<Duration>,
     slow_poll: Option<Duration>,
     polling_off: bool,
+    concurrent: bool,
 }
 
 enum Accessible {
@@ -452,6 +453,7 @@ impl Module {
             uniform_poll: None,
             slow_poll: None,
             polling_off: false,
+            concurrent: false,
         }
     }
 
@@ -590,6 +592,25 @@ impl Module {
     pub fn no_polling(mut self) -> Self {
         self.polling_off = true;
         self
+    }
+
+    /// Declares that the module's handler accepts overlapping calls: each request
+    /// (`read`, `change`, `do`, poll tick) starts as it arrives, while others are still
+    /// running, up to 64 running requests. Without it, the handler is called for one
+    /// request at a time.
+    ///
+    /// The calls of a handler may then overlap in any combination, and requests of
+    /// different clients may finish in any order, also a `change` and a `read` of the same
+    /// parameter. Requests of one connection stay in order.
+    pub fn concurrent_requests(mut self) -> Self {
+        self.concurrent = true;
+        self
+    }
+
+    /// Whether [`concurrent_requests`](Self::concurrent_requests) was called.
+    #[must_use]
+    pub fn has_concurrent_requests(&self) -> bool {
+        self.concurrent
     }
 }
 
@@ -761,6 +782,8 @@ pub(crate) struct ModuleModel {
     pub accessibles: IndexMap<String, AccessibleModel>,
     pub handler: Arc<dyn ModuleHandler>,
     pub poll: ModulePoll,
+    /// Whether the handler accepts overlapping calls.
+    pub concurrent: bool,
 }
 
 /// How a module polls, resolved from its declaration.
@@ -949,6 +972,7 @@ fn finish_module(m: Module) -> ModuleModel {
         &[]
     };
     let off = m.polling_off;
+    let concurrent = m.concurrent;
     let tiered = !off && m.uniform_poll.is_none();
     let driven = !off && drives_polling(&m);
     let fast = if off {
@@ -1027,6 +1051,7 @@ fn finish_module(m: Module) -> ModuleModel {
             slow: m.slow_poll.unwrap_or(DEFAULT_SLOW_POLL),
             driven,
         },
+        concurrent,
     }
 }
 

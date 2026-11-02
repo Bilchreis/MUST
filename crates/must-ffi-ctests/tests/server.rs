@@ -401,3 +401,275 @@ fn abandoned_request_is_not_handed_out() {
     done(c"abandon");
     assert!(closed(port));
 }
+
+// --- several requests of one module at once
+
+/// `SECoP_S_ACTION_READ` and `SECoP_S_ACTION_CHANGE`.
+const ACTION_CHANGE: c_int = 2;
+const ACTION_READ: c_int = 1;
+
+fn fetch(name: Option<&CStr>, action: c_int) {
+    let name = name.map_or(std::ptr::null(), CStr::as_ptr);
+    // SAFETY: a C test taking a NUL-terminated string or NULL
+    check("conc_fetch", unsafe { c::ctest_conc_fetch(name, action) });
+}
+
+fn nothing_more() {
+    // SAFETY: a C test without arguments
+    check("conc_none", unsafe { c::ctest_conc_none() });
+}
+
+fn answer(name: &CStr, value: &CStr) {
+    // SAFETY: a C test taking NUL-terminated strings
+    check("conc_answer", unsafe {
+        c::ctest_conc_answer(name.as_ptr(), value.as_ptr())
+    });
+}
+
+/// A polling-mode node of `ctest_conc_build`, and its port.
+fn conc_node(kind: c_int) -> u16 {
+    let port = free_port();
+    // SAFETY: a C test with a port and a number
+    check("conc_build", unsafe { c::ctest_conc_build(port, kind) });
+    port
+}
+
+/// Time for requests sent to reach the library's queue.
+fn settle() {
+    std::thread::sleep(Duration::from_millis(100));
+}
+
+#[test]
+fn requests_of_one_module_at_once() {
+    let _serial = serial();
+    let port = conc_node(0);
+    let mut clients = Vec::new();
+    for p in 0..4 {
+        let mut client = Client::connect(port);
+        client.send(&format!("read mod1:p{p}"));
+        clients.push(client);
+    }
+    settle();
+    for _ in 0..4 {
+        fetch(None, ACTION_READ);
+    }
+    nothing_more();
+    answer(c"cn:mod1:p0", c"0.5");
+    answer(c"cn:mod1:p1", c"1.5");
+    answer(c"cn:mod1:p2", c"2.5");
+    answer(c"cn:mod1:p3", c"3.5");
+    for (p, (client, value)) in clients.iter_mut().zip([0.5, 1.5, 2.5, 3.5]).enumerate() {
+        let reply = client.recv();
+        assert!(reply.starts_with(&format!("reply mod1:p{p} ")), "{reply}");
+        assert_eq!(data(&reply)[0], value);
+    }
+    done(c"conc");
+}
+
+#[test]
+fn answers_in_any_order() {
+    let _serial = serial();
+    let port = conc_node(0);
+    let (mut c0, mut c1) = (Client::connect(port), Client::connect(port));
+    c0.send("read mod1:p0");
+    c1.send("read mod1:p1");
+    fetch(None, ACTION_READ);
+    fetch(None, ACTION_READ);
+    answer(c"cn:mod1:p1", c"1.5");
+    let reply = c1.recv();
+    assert!(reply.starts_with("reply mod1:p1 "), "at once: {reply}");
+    answer(c"cn:mod1:p0", c"0.5");
+    assert!(c0.recv().starts_with("reply mod1:p0 "));
+    done(c"conc");
+}
+
+#[test]
+fn reads_of_one_parameter_merged() {
+    let _serial = serial();
+    let port = conc_node(0);
+    let mut watcher = Client::connect(port);
+    watcher.send("activate mod1");
+    watcher.recv_until("active");
+    let mut clients: Vec<_> = (0..3).map(|_| Client::connect(port)).collect();
+    for client in &mut clients {
+        client.send("read mod1:p0");
+    }
+    settle();
+    fetch(Some(c"cn:mod1:p0"), ACTION_READ);
+    nothing_more();
+    answer(c"cn:mod1:p0", c"4.5");
+    let replies: Vec<_> = clients.iter_mut().map(|c| data(&c.recv())).collect();
+    assert_eq!(replies[0][0], 4.5);
+    assert_eq!(replies[0], replies[1]);
+    assert_eq!(replies[0], replies[2]);
+    let update = watcher.recv();
+    assert!(update.starts_with("update mod1:p0 "), "{update}");
+    assert_eq!(data(&update), replies[0]);
+    watcher.send("ping end");
+    let next = watcher.recv();
+    assert!(next.starts_with("pong end"), "one update only: {next}");
+    done(c"conc");
+}
+
+#[test]
+fn repeated_read_from_one_client() {
+    let _serial = serial();
+    let port = conc_node(0);
+    let mut client = Client::connect(port);
+    client.send("read mod1:p0");
+    fetch(Some(c"cn:mod1:p0"), ACTION_READ);
+    client.send("read mod1:p0");
+    settle();
+    nothing_more();
+    answer(c"cn:mod1:p0", c"4.5");
+    let (first, second) = (data(&client.recv()), data(&client.recv()));
+    assert_eq!(first[0], 4.5);
+    assert_eq!(first, second);
+    done(c"conc");
+}
+
+#[test]
+fn read_after_changed() {
+    let _serial = serial();
+    let port = conc_node(0);
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+    a.send("read mod1:p0");
+    fetch(Some(c"cn:mod1:p0"), ACTION_READ);
+    b.send("change mod1:target 5");
+    fetch(Some(c"cn:mod1:target"), ACTION_CHANGE);
+    answer(c"cn:mod1:target", c"5");
+    assert!(b.recv().starts_with("changed mod1:target "));
+    b.send("read mod1:p0");
+    fetch(Some(c"cn:mod1:p0"), ACTION_READ);
+    answer(c"cn:mod1:p0", c"2.5");
+    assert_eq!(data(&b.recv())[0], 2.5, "the answer to its own request");
+    answer(c"cn:mod1:p0", c"1.5");
+    assert_eq!(data(&a.recv())[0], 1.5);
+    done(c"conc");
+}
+
+#[test]
+fn poll_of_a_queued_parameter() {
+    let _serial = serial();
+    let port = conc_node(1);
+    let mut watcher = Client::connect(port);
+    watcher.send("activate mod1");
+    watcher.recv_until("active");
+    let mut client = Client::connect(port);
+    client.send("read mod1:value");
+    fetch(Some(c"cn:mod1:value"), ACTION_READ);
+    // ticks fall due every 0.2 s
+    std::thread::sleep(Duration::from_millis(500));
+    nothing_more();
+    answer(c"cn:mod1:value", c"4.5");
+    assert!(client.recv().starts_with("reply mod1:value [4.5,"));
+    let update = watcher.recv();
+    assert!(update.starts_with("update mod1:value [4.5,"), "{update}");
+    done(c"conc");
+}
+
+#[test]
+fn unanswered_read_does_not_block_the_module() {
+    let _serial = serial();
+    let port = conc_node(0);
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+    a.send("read mod1:p0");
+    fetch(Some(c"cn:mod1:p0"), ACTION_READ);
+    b.send("change mod1:target 5");
+    fetch(Some(c"cn:mod1:target"), ACTION_CHANGE);
+    answer(c"cn:mod1:target", c"5");
+    assert!(b.recv().starts_with("changed mod1:target "));
+    done(c"conc");
+}
+
+#[test]
+fn poll_tick_queued_at_once() {
+    let _serial = serial();
+    let _port = conc_node(2);
+    fetch(None, ACTION_READ);
+    fetch(None, ACTION_READ);
+    fetch(None, ACTION_READ);
+    nothing_more();
+    done(c"conc");
+}
+
+// --- one module at a time in callback mode
+
+fn cb_calls(parameter: &CStr) -> c_int {
+    // SAFETY: a C test taking a NUL-terminated string
+    unsafe { c::ctest_cb_calls(parameter.as_ptr()) }
+}
+
+/// Waits until the getter of `mod1:a` runs.
+fn getter_running() {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cb_calls(c"a") == 0 {
+        assert!(Instant::now() < deadline, "the getter was not called");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn cb_node() -> u16 {
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("cb_build", unsafe { c::ctest_cb_build(port) });
+    port
+}
+
+#[test]
+fn one_module_at_a_time_in_callback_mode() {
+    let _serial = serial();
+    let port = cb_node();
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+    a.send("read mod1:a");
+    getter_running();
+    b.send("read mod1:b");
+    let reply = Client::connect(port).request("read mod2:c");
+    assert!(
+        reply.starts_with("reply mod2:c "),
+        "another module: {reply}"
+    );
+    settle();
+    assert_eq!(cb_calls(c"b"), 0, "the getter of mod1:a has not returned");
+    // SAFETY: a C function without arguments
+    unsafe { c::ctest_cb_release() };
+    assert!(a.recv().starts_with("reply mod1:a "));
+    assert!(b.recv().starts_with("reply mod1:b "));
+    done(c"cbc");
+}
+
+#[test]
+fn reads_in_close_succession_share_a_getter_call() {
+    let _serial = serial();
+    let port = cb_node();
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+    a.send("read mod1:a");
+    getter_running();
+    b.send("read mod1:a");
+    settle();
+    // SAFETY: a C function without arguments
+    unsafe { c::ctest_cb_release() };
+    let (first, second) = (data(&a.recv()), data(&b.recv()));
+    assert_eq!(first[0], 2.5);
+    assert_eq!(first, second);
+    assert_eq!(cb_calls(c"a"), 1);
+    done(c"cbc");
+}
+
+#[test]
+fn repeated_read_from_one_client_in_callback_mode() {
+    let _serial = serial();
+    let port = cb_node();
+    let mut client = Client::connect(port);
+    client.send("read mod1:a");
+    getter_running();
+    client.send("read mod1:a");
+    settle();
+    // SAFETY: a C function without arguments
+    unsafe { c::ctest_cb_release() };
+    let (first, second) = (data(&client.recv()), data(&client.recv()));
+    assert_eq!(first[0], 2.5);
+    assert_eq!(first, second);
+    assert_eq!(cb_calls(c"a"), 1);
+    done(c"cbc");
+}

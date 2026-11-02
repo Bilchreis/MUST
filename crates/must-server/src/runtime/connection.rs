@@ -3,7 +3,7 @@
 //! One client connection: a reader that dispatches requests in order, and a writer that
 //! drains the connection's outgoing queue.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -105,27 +105,54 @@ struct Connection {
     close: CancellationToken,
 }
 
+/// A connection's incoming bytes, split into requests.
+struct Incoming<'r, R> {
+    reader: &'r mut R,
+    splitter: LineSplitter,
+    buf: Vec<u8>,
+    /// A frame taken while looking for repeated reads, to be handled next.
+    held: Option<Frame>,
+    /// Why no more bytes will come.
+    ended: Option<String>,
+}
+
+impl<R: AsyncReadExt + Unpin> Incoming<'_, R> {
+    /// Reads more bytes from the client; cancel safe.
+    async fn fill(&mut self) {
+        match self.reader.read(&mut self.buf).await {
+            Ok(0) => self.ended = Some("closed by client".into()),
+            Ok(n) => self.splitter.feed(&self.buf[..n]),
+            Err(e) => self.ended = Some(format!("read error: {e}")),
+        }
+    }
+}
+
+/// How many replies a connection waits for at most while it takes repeated reads, so that
+/// a client flooding a slow read cannot grow its queue without limit.
+const MAX_REPEATED_READS: usize = 64;
+
 impl Connection {
     /// Reads and handles requests; returns why it stopped.
     async fn read_loop(&mut self, reader: &mut (impl AsyncReadExt + Unpin)) -> String {
-        let limit = self.hub.model.options.max_outgoing_bytes;
-        let mut splitter = LineSplitter::new(self.hub.model.options.max_line_length);
-        let mut buf = vec![0u8; 16 * 1024];
+        let mut incoming = Incoming {
+            reader,
+            splitter: LineSplitter::new(self.hub.model.options.max_line_length),
+            buf: vec![0u8; 16 * 1024],
+            held: None,
+            ended: None,
+        };
         loop {
-            while let Some(frame) = splitter.next_frame() {
+            while let Some(frame) = incoming
+                .held
+                .take()
+                .or_else(|| incoming.splitter.next_frame())
+            {
                 // backpressure: do not take the next request while too much is queued
-                while self.stats.total.load(Ordering::Acquire) > limit {
-                    let drained = self.stats.drained.notified();
-                    if self.stats.total.load(Ordering::Acquire) <= limit {
-                        break;
-                    }
-                    tokio::select! {
-                        () = self.close.cancelled() => return self.closed_reason(),
-                        () = drained => {}
-                    }
+                if !self.drained().await {
+                    return self.closed_reason();
                 }
                 match frame {
-                    Frame::Line(line) => self.handle(&line).await,
+                    Frame::Line(line) => self.handle(&line, &mut incoming).await,
                     Frame::TooLong => self.error(
                         "",
                         None,
@@ -133,16 +160,30 @@ impl Connection {
                     ),
                 }
             }
-            let n = tokio::select! {
+            if let Some(reason) = incoming.ended.take() {
+                return reason;
+            }
+            tokio::select! {
                 () = self.close.cancelled() => return self.closed_reason(),
-                n = reader.read(&mut buf) => n,
-            };
-            match n {
-                Ok(0) => return "closed by client".into(),
-                Ok(n) => splitter.feed(&buf[..n]),
-                Err(e) => return format!("read error: {e}"),
+                () = incoming.fill() => {}
             }
         }
+    }
+
+    /// Waits until the outgoing queue is within its limit; `false` if the connection closed.
+    async fn drained(&self) -> bool {
+        let limit = self.hub.model.options.max_outgoing_bytes;
+        while self.stats.total.load(Ordering::Acquire) > limit {
+            let drained = self.stats.drained.notified();
+            if self.stats.total.load(Ordering::Acquire) <= limit {
+                break;
+            }
+            tokio::select! {
+                () = self.close.cancelled() => return false,
+                () = drained => {}
+            }
+        }
+        true
     }
 
     fn closed_reason(&self) -> String {
@@ -162,7 +203,7 @@ impl Connection {
         self.reply(protocol::error_message(action, specifier, &error));
     }
 
-    async fn handle(&mut self, line: &str) {
+    fn note_received(&self, line: &str) {
         if !line.is_empty() {
             debug!(id = self.id, "< {line}");
             if self.hub.observed() {
@@ -172,6 +213,14 @@ impl Connection {
                 });
             }
         }
+    }
+
+    async fn handle<R: AsyncReadExt + Unpin>(
+        &mut self,
+        line: &str,
+        incoming: &mut Incoming<'_, R>,
+    ) {
+        self.note_received(line);
         match parse_request(line) {
             Request::Empty => {}
             Request::Identify => self.hub.identify(self.id),
@@ -190,7 +239,7 @@ impl Connection {
             }
             Request::Activate(module) => self.hub.activate(self.id, module),
             Request::Deactivate(module) => self.hub.deactivate(self.id, module),
-            Request::Read(spec) => self.read(spec).await,
+            Request::Read(spec) => self.read(spec, incoming).await,
             Request::Change(spec, data) => self.change(spec, data).await,
             Request::Do(spec, data) => self.call(spec, data).await,
             Request::Unsupported { action, specifier } => {
@@ -229,7 +278,11 @@ impl Connection {
         Some((module, accessible, Arc::clone(&self.hub)))
     }
 
-    async fn read(&self, spec: Option<&str>) {
+    async fn read<R: AsyncReadExt + Unpin>(
+        &self,
+        spec: Option<&str>,
+        incoming: &mut Incoming<'_, R>,
+    ) {
         let Some((module, parameter, hub)) = self.resolve("read", spec) else {
             return;
         };
@@ -246,23 +299,72 @@ impl Connection {
             let report = data_report(json, &Qualifiers::at(now()));
             return self.reply(protocol::data_message("reply", spec, &report));
         }
-        let result = if param.cached {
-            match hub.cached(module, parameter) {
-                Some(CacheEntry::Value { report, .. }) => Ok(report),
-                Some(CacheEntry::Error { error, .. }) => Err(error),
-                None => Err(SecopError::new(
-                    ErrorClass::ReadFailed,
-                    "no value available yet",
-                )),
-            }
-        } else {
-            self.run(module, |reply| Job::Read {
-                parameter: parameter.to_owned(),
-                reply,
-            })
-            .await
+        if !param.cached {
+            return self
+                .read_with_repeats(module, parameter, spec, incoming)
+                .await;
+        }
+        let result = match hub.cached(module, parameter) {
+            Some(CacheEntry::Value { report, .. }) => Ok(report),
+            Some(CacheEntry::Error { error, .. }) => Err(error),
+            None => Err(SecopError::new(
+                ErrorClass::ReadFailed,
+                "no value available yet",
+            )),
         };
         self.answer("read", "reply", spec, result);
+    }
+
+    /// Reads through the module. Until the replies are sent it keeps taking the client's
+    /// requests as long as each is a read of the same parameter: the module may share those
+    /// with the running read. The first other request is held for after the replies.
+    async fn read_with_repeats<R: AsyncReadExt + Unpin>(
+        &self,
+        module: &str,
+        parameter: &str,
+        spec: &str,
+        incoming: &mut Incoming<'_, R>,
+    ) {
+        let mut replies = VecDeque::new();
+        replies.push_back(self.send_read(module, parameter).await);
+        loop {
+            let looking = incoming.held.is_none()
+                && incoming.ended.is_none()
+                && replies.len() < MAX_REPEATED_READS;
+            let Some(reply) = replies.front_mut() else {
+                return;
+            };
+            tokio::select! {
+                result = reply => {
+                    let result = result.unwrap_or_else(|_| Err(shutting_down()));
+                    replies.pop_front();
+                    self.answer("read", "reply", spec, result);
+                }
+                () = self.close.cancelled() => return,
+                frame = next_frame_drained(self, incoming), if looking => match frame {
+                    Some(Frame::Line(line)) if is_read_of(&line, spec) => {
+                        self.note_received(&line);
+                        replies.push_back(self.send_read(module, parameter).await);
+                    }
+                    Some(frame) => incoming.held = Some(frame),
+                    None => {}
+                },
+            }
+        }
+    }
+
+    /// Sends a read to a module; the receiver gets its result.
+    async fn send_read(&self, module: &str, parameter: &str) -> oneshot::Receiver<JobResult> {
+        let (reply, result) = oneshot::channel();
+        let actor = &self.actors[module];
+        let job = Job::Read {
+            parameter: parameter.to_owned(),
+            since: actor.epoch(),
+            reply,
+        };
+        // on failure the sender is dropped, which the receiver reports as shutting down
+        let _ = actor.jobs.send(job).await;
+        result
     }
 
     async fn change(&self, spec: Option<&str>, data: Option<&str>) {
@@ -338,12 +440,12 @@ impl Connection {
         job: impl FnOnce(oneshot::Sender<JobResult>) -> Job,
     ) -> JobResult {
         let (tx, rx) = oneshot::channel();
-        let gone = || SecopError::new(ErrorClass::InternalError, "the node is shutting down");
         self.actors[module]
+            .jobs
             .send(job(tx))
             .await
-            .map_err(|_| gone())?;
-        rx.await.map_err(|_| gone())?
+            .map_err(|_| shutting_down())?;
+        rx.await.map_err(|_| shutting_down())?
     }
 
     fn answer(&self, action: &str, reply_action: &str, spec: &str, result: JobResult) {
@@ -352,6 +454,30 @@ impl Connection {
             Err(error) => self.error(action, Some(spec), error),
         }
     }
+}
+
+/// The next frame once the outgoing queue is within its limit; `None` if there was none
+/// yet and bytes were read instead. Cancel safe.
+async fn next_frame_drained<R: AsyncReadExt + Unpin>(
+    connection: &Connection,
+    incoming: &mut Incoming<'_, R>,
+) -> Option<Frame> {
+    if !connection.drained().await {
+        return std::future::pending().await;
+    }
+    if let Some(frame) = incoming.splitter.next_frame() {
+        return Some(frame);
+    }
+    incoming.fill().await;
+    None
+}
+
+fn is_read_of(line: &str, spec: &str) -> bool {
+    matches!(parse_request(line), Request::Read(Some(s)) if s == spec)
+}
+
+fn shutting_down() -> SecopError {
+    SecopError::new(ErrorClass::InternalError, "the node is shutting down")
 }
 
 fn parse_json(data: &str) -> Result<Json, SecopError> {

@@ -437,6 +437,11 @@ impl DraftNode {
         let mut props = draft.props.clone();
         let description = take_string(&mut props, "description");
         let mut module = Module::new(&draft.name, &description);
+        // requests go to the application's queue as they arrive; callbacks of one module
+        // stay one at a time, as SHALL calls them on one thread
+        if !callbacks {
+            module = module.concurrent_requests();
+        }
         // a `pollinterval` parameter replaces SHALL's properties; without either, the
         // library's default tiers apply
         let poll_parameter = draft.has_poll_parameter();
@@ -807,6 +812,19 @@ mod tests {
         );
         assert_eq!(node.add_property("visibility", 3.into()), err::SUCCESS);
         assert_eq!(node.modules[0].props["visibility"], "expert");
+    }
+
+    #[test]
+    fn only_polling_mode_has_concurrent_requests() {
+        let mut node = DraftNode::new("n", "a node", "127.0.0.1:0".parse().unwrap());
+        node.add_module("m");
+        let concurrent = |callbacks| {
+            node.build_module(&node.modules[0], "c", callbacks, &mut Vec::new())
+                .expect("the module builds")
+                .has_concurrent_requests()
+        };
+        assert!(concurrent(false));
+        assert!(!concurrent(true));
     }
 
     #[test]

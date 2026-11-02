@@ -67,6 +67,13 @@ pub mod server {
         pub fn ctest_server_poll_count(parameter: *const c_char) -> c_int;
         pub fn ctest_server_polling(port: c_ushort) -> c_int;
         pub fn ctest_server_poll_step(step: c_int) -> c_int;
+        pub fn ctest_conc_build(port: c_ushort, kind: c_int) -> c_int;
+        pub fn ctest_conc_fetch(name: *const c_char, action: c_int) -> c_int;
+        pub fn ctest_conc_none() -> c_int;
+        pub fn ctest_conc_answer(name: *const c_char, value: *const c_char) -> c_int;
+        pub fn ctest_cb_build(port: c_ushort) -> c_int;
+        pub fn ctest_cb_calls(parameter: *const c_char) -> c_int;
+        pub fn ctest_cb_release();
         pub fn ctest_server_abandoned(step: c_int, port: c_ushort) -> c_int;
         pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
         pub fn ctest_monitor_building() -> c_int;
