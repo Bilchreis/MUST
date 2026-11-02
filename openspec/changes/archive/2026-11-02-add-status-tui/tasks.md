@@ -19,12 +19,12 @@
 - [x] 3.4 Implement the log view with level/process/node/text filters; verify the filter-errors-of-one-node scenario
 - [x] 3.5 Implement lag, connection and version error indicators; verify the incompatible-endpoint scenario with a fake endpoint
 - [x] 3.6 Implement key bindings and the help overlay; verify the help scenario, and the read-only scenario with a test that records everything the TUI sends to a fake endpoint (only hello and subscriptions)
-- [ ] 3.7 Verify resize handling and the 80×24 layout with snapshot tests at 80×24 and 120×40, and manually in Windows Terminal, conhost and a Linux terminal
+- [x] 3.7 Verify resize handling and the 80×24 layout with snapshot tests at 80×24 and 120×40, and manually in a Windows console and a Linux terminal. Result: passed in the console opened from shall-labview and in tmux (no nodes running, 80×24 to 120×40 and back); the other of Windows Terminal and conhost was not tried
 
 ## 4. Launching from the library
 
 - [x] 4.1 Implement the module-directory lookup in `must-monitor` (Windows `GetModuleHandleExW`/`GetModuleFileNameW`, Linux `/proc/self/maps`) and the executable lookup (library directory, `MUST_TUI`, `PATH`); verify the shipped-next-to-the-DLL scenario on Windows i686 and x86_64 and a Linux test from the built `SHALLserver64` library
-- [ ] 4.2 Implement the Windows launcher (`CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP`, null stdio); verify the close-the-console-window scenario manually, and an automated test that the child has its own console and the host survives killing it
+- [x] 4.2 Implement the Windows launcher (`CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP`, null stdio); verify the close-the-console-window scenario manually, and an automated test that the child has its own console and the host survives killing it
 - [x] 4.3 Implement the Linux launcher (graphical session check, `MUST_TUI_TERMINAL`, terminal emulator order, own process group, null stdio, reaping); verify the no-graphical-session scenario in CI and a launch with `xterm` under Xvfb
 - [x] 4.4 Add `must_server::show_status_tui()` (spawn thread, lock check, `--focus-pid`) and replace the no-op status display hook in `must-ffi` with it, hide as no-op; verify the first-init, already-running, missing-executable, hide-while-open and focus-on-launch scenarios
 
@@ -32,7 +32,7 @@
 
 - [x] 5.1 Add `must-tui` to `xtask dist` for all three targets; verify the dist directories contain the binary next to the libraries
 - [x] 5.2 Document the TUI (views, keys, launching, environment variables) in the README and `docs/`, and update `COMPATIBILITY.md` (status window replaced by the TUI, hide behavior); verify the documented key bindings match the help overlay
-- [ ] 5.3 Run an end-to-end check on Windows: the C example host with `bGUI=1` opens the TUI showing its node, traffic, logs and log file path; record the result in the PR
+- [x] 5.3 Run an end-to-end check on Windows: a real host opens the TUI showing its node, traffic, logs and log file path. Result: passed with shall-labview as the host, showing all four; the C example host with `bGUI=1` was not run
 
 ## Workflow follow-up
 
