@@ -24,9 +24,9 @@
 ## 4. C ABI
 
 - [ ] 4.1 Call `Module::concurrent_requests()` for modules of polling-mode contexts in `crates/must-ffi/src/server/build.rs`, never in callback mode; verify with a unit test of the build
-- [ ] 4.2 Add C tests in `crates/must-ffi-ctests` (with their Rust drivers in `tests/server.rs`) for the polling-mode scenarios "Requests of one module at once", "Answers in any order", "Reads of one parameter merged", "Read after changed", "Poll of a queued parameter", "Unanswered read does not block the module" and "Poll tick queued at once"
-- [ ] 4.3 Add callback-mode C tests for "One module at a time" (a blocking getter of `mod1:a` delays the getter of `mod1:b` but not a read of another module) and "Reads in close succession share a getter call" (counting getter calls)
-- [ ] 4.4 Update `COMPATIBILITY.md` ("Callbacks" and "Polled requests" under "Library behavior"): polling-mode requests are handed out as they arrive, reads of one parameter are merged except for a read sent after a `changed` or `done` reply, answers may come in any order; in callback mode, reads of one parameter in close succession share one getter call
+- [ ] 4.2 Add C tests in `crates/must-ffi-ctests` (with their Rust drivers in `tests/server.rs`) for the polling-mode scenarios "Requests of one module at once", "Answers in any order", "Reads of one parameter merged", "Repeated read from one client", "Read after changed", "Poll of a queued parameter", "Unanswered read does not block the module" and "Poll tick queued at once"
+- [ ] 4.3 Add callback-mode C tests for "One module at a time" (a blocking getter of `mod1:a` delays the getter of `mod1:b` but not a read of another module), "Reads in close succession share a getter call" and "Repeated read from one client in callback mode" (counting getter calls)
+- [ ] 4.4 Update `COMPATIBILITY.md` ("Callbacks" and "Polled requests" under "Library behavior"): polling-mode requests are handed out as they arrive, reads of one parameter are merged except for a read sent after a `changed` or `done` reply, answers may come in any order; in callback mode, reads of one parameter in close succession share one getter call; a client that sends the same read twice in a row gets two replies from one getter call or stored request, where SHALL sent one reply
 
 ## 5. Checks
 

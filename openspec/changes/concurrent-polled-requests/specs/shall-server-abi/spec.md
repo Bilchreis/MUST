@@ -17,6 +17,10 @@ The library SHALL, when function pointers are enabled, answer `read`, `change` a
 - **WHEN** client A reads `mod1:value`, and client B reads `mod1:value` while A's getter call is running
 - **THEN** the getter of `mod1:value` is called once, and A and B both receive its value
 
+#### Scenario: Repeated read from one client in callback mode
+- **WHEN** client A sends `read mod1:value` twice in a row, and the getter is still running for the first when the second arrives
+- **THEN** the getter of `mod1:value` is called once, and A receives two `reply mod1:value` with the same value
+
 #### Scenario: One module at a time
 - **WHEN** the getter of `mod1:a` blocks for 1 s and another client reads `mod1:b`
 - **THEN** the getter of `mod1:b` is called only after the getter of `mod1:a` has returned
@@ -47,6 +51,10 @@ The library SHALL, when function pointers are disabled, queue each `read`, `chan
 #### Scenario: Reads of one parameter merged
 - **WHEN** a fourth client has activated `mod1`, and three clients read `mod1:value` before the application fetches the request
 - **THEN** the application gets one request; after it is answered the three clients each receive `reply mod1:value` with the same value, and the fourth client receives one `update mod1:value`
+
+#### Scenario: Repeated read from one client
+- **WHEN** client A sends `read mod1:value` twice in a row before the application has answered the first
+- **THEN** the application gets one request, and after it is answered A receives two `reply mod1:value` with the same value, where SHALL sent one
 
 #### Scenario: Read after changed
 - **WHEN** the application has fetched a read of `mod1:status` without answering it, then answers client B's `change mod1:target 5`, and B then reads `mod1:status`
