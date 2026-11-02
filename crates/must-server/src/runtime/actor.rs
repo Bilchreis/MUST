@@ -9,18 +9,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
-use serde_json::Value as Json;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use super::Hub;
+use super::{Hub, Report, report_text};
 use crate::events::LogLevel;
 use crate::handler::{Ctx, ModuleHandler, Reading};
 use crate::protocol::now;
 
 /// The result sent back for a request: a data report, or an error to reply with.
-pub(crate) type JobResult = Result<Json, SecopError>;
+pub(crate) type JobResult = Result<Report, SecopError>;
 
 /// The most jobs a module holds, waiting and running, and the most it runs at once when
 /// it has concurrent requests.
@@ -489,13 +488,13 @@ fn done_report(hub: &Hub, module: &str, command: &str, reading: Option<Reading>)
             format!("the node produced an invalid result: {err}"),
         )
     })?;
-    Ok(data_report(
+    Ok(report_text(&data_report(
         json,
         &Qualifiers {
             t: Some(t.unwrap_or_else(now)),
             e,
         },
-    ))
+    )))
 }
 
 #[cfg(test)]

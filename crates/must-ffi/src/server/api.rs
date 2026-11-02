@@ -743,11 +743,13 @@ fn update(name: &str, value: Json, sigma: Option<Json>, t: f64) -> Result<c_int,
         *initial = Some(value);
         return Ok(err::SUCCESS);
     };
-    let info = acc
-        .datainfo
-        .as_ref()
-        .and_then(crate::variant::Node::to_datainfo)
-        .ok_or(err::INVALID_VALUE)?;
+    if acc.info.is_none() {
+        acc.info = acc
+            .datainfo
+            .as_ref()
+            .and_then(crate::variant::Node::to_datainfo);
+    }
+    let info = acc.info.as_ref().ok_or(err::INVALID_VALUE)?;
     let value = info
         .decode(&value, Mode::Report)
         .map_err(|_| err::INVALID_VALUE)?;

@@ -3,8 +3,9 @@
 Every process that runs must SEC nodes (a Rust program using `must-server`, or a C or
 LabVIEW program using the SHALL C ABI) offers one local **monitoring endpoint**. Through
 it, tools such as `must-tui` see the process's nodes, their clients, the messages on the
-wire, parameter values and log records. The endpoint is read-only and never slows down a
-node.
+wire, parameter values and log records. The endpoint is read-only and a slow monitor never
+holds up a node, though following a node's events takes some CPU even with no monitor
+connected.
 
 Monitoring is on by default. Turn it off with the environment variable
 `MUST_MONITOR=0`, or in Rust with `must_server::monitor::set_enabled(false)` before the
