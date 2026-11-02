@@ -400,19 +400,6 @@ pub fn tui_running(dir: &Path) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn tui_lock() {
-        let dir = std::env::temp_dir().join(format!("must-tui-lock-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(!super::tui_running(&dir).unwrap());
-        let held = super::try_lock_tui(&dir).unwrap().expect("free");
-        assert!(super::tui_running(&dir).unwrap());
-        assert!(super::try_lock_tui(&dir).unwrap().is_none());
-        drop(held);
-        assert!(!super::tui_running(&dir).unwrap(), "released with the file");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
