@@ -146,3 +146,9 @@ jobs:
         run: PYTHONPATH=frappy timeout 120 python crates/must-server/tests/interop/frappy_client.py localhost:2055
       - name: check the example node's description with secop-checker
         run: PYTHONPATH=secop-checker timeout 60 python crates/must-server/tests/interop/check_describe.py 127.0.0.1:2055
+      - run: pip install -r frappy/requirements.txt
+      - name: share the discovery port with a Frappy node
+        # frappy-server needs a version: git describe finds no tag in this shallow checkout
+        run: |
+          echo 0.0.0+ci > frappy/frappy/RELEASE-VERSION
+          timeout 120 python crates/must-server/tests/interop/frappy_discovery.py target/debug/examples/simple_node frappy
