@@ -71,6 +71,9 @@ pub(crate) struct DraftAccessible {
     pub props: Map<String, Json>,
     /// The datainfo, as SHALL's variant type (which accepts SECoP 1.0 descriptions).
     pub datainfo: Option<variant::Node>,
+    /// `datainfo` as SECoP 2.0, kept once a running node's parameter is updated (the datainfo
+    /// cannot change then), so that it is not rebuilt for every update.
+    pub info: Option<DataInfo>,
     /// SHALL's `pollinterval` property, if given.
     pub poll: Option<ShallPoll>,
     pub kind: AccessibleKind,
@@ -219,6 +222,7 @@ impl DraftNode {
             name: name.to_owned(),
             props: Map::new(),
             datainfo: None,
+            info: None,
             poll: None,
             kind,
         });

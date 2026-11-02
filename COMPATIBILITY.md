@@ -155,7 +155,8 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   default under `%LOCALAPPDATA%\must\logs` (Windows) or `~/.local/state/must/logs`
   (Linux), and deletes files older than 2 days. Configure it with environment variables
   set before the program starts: `MUST_LOG_FILES=0` (off), `MUST_LOG_DIR` (directory),
-  `MUST_LOG_DAYS` (retention). Logging never slows a node; there is no size limit, so
+  `MUST_LOG_DAYS` (retention). Logging never waits for the disk, though it takes CPU (about
+  40% of the peak request rate, see [bench/README.md](bench/README.md)); there is no size limit, so
   check the disk usage estimate in [docs/log-files.md](docs/log-files.md) for nodes with
   fast polling. The files contain all values exchanged with clients.
 - **Polling** depends on what the module declares:

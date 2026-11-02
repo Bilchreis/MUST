@@ -27,9 +27,11 @@
 //! `MUST_LOG_DIR` and `MUST_LOG_DAYS` configure it for the process, and
 //! [`NodeBuilder::log_files`](crate::NodeBuilder::log_files) for one node.
 //!
-//! Logging never slows a node: lines go through a bounded queue to one writer thread per
-//! process, which runs while any node logs and ends with the last one; when the queue is
-//! full, lines are dropped and a `* dropped <n> lines` line marks the gap. Files are
+//! Logging never makes a node wait for the disk, but formatting the lines takes CPU: under
+//! full load a node with log files and monitoring handles about 60% of the requests it does
+//! without. Lines go through a bounded queue to one writer thread per process, which runs
+//! while any node logs and ends with the last one; when the queue is full, lines are
+//! dropped and a `* dropped <n> lines` line marks the gap. Files are
 //! flushed every second and when the node stops. If a file cannot be written, the node
 //! logs one warning and file logging stops for it until the next day.
 
@@ -52,7 +54,7 @@ pub use config::{
 #[doc(hidden)]
 pub use writer::pause_writer;
 
-use self::format::{LineFormatter, dropped, node_folder, timestamp};
+use self::format::{LineClock, LineFormatter, dropped, node_folder};
 use self::writer::{Command, LogId};
 use crate::events::{LogLevel, NodeEvent};
 use crate::runtime::Hub;
@@ -140,6 +142,7 @@ async fn run(
 ) {
     if send(&sender, open).await {
         let mut formatter = LineFormatter::default();
+        let mut clock = LineClock::default();
         let mut lost: u64 = 0;
         loop {
             let event = match events.recv().await {
@@ -151,19 +154,18 @@ async fn run(
                 Err(RecvError::Closed) => break,
             };
             if let Some(text) = formatter.format(&event) {
-                let now = Local::now();
-                let time = timestamp(&now);
+                let (time, date) = clock.now();
                 let mut lines = String::with_capacity(text.len() + 40);
                 if lost > 0 {
                     let _ = writeln!(lines, "{time} {}", dropped(lost));
                 }
-                lines.push_str(&time);
+                lines.push_str(time);
                 lines.push(' ');
                 lines.push_str(&text);
                 lines.push('\n');
                 let command = Command::Lines {
                     node,
-                    date: now.date_naive(),
+                    date,
                     text: lines,
                 };
                 if matches!(event, NodeEvent::Stopped) {

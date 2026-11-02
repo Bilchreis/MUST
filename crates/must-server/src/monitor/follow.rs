@@ -112,6 +112,9 @@ fn handle(inner: &mut Inner, node: NodeId, event: NodeEvent) {
             parameter,
             line,
         } => {
+            if inner.peers.is_empty() {
+                return;
+            }
             let state = parse_update(&module, &parameter, &line);
             for peer in &inner.peers {
                 peer.update(node, state.clone());
