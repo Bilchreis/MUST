@@ -861,3 +861,18 @@ fn discovery_is_on_by_default() {
         .unwrap();
     assert!(!node.model.options.discovery.is_enabled());
 }
+
+#[test]
+fn concurrent_requests_are_opt_in() {
+    let built = node()
+        .module(sensor("plain"))
+        .unwrap()
+        .module(sensor("overlapping").concurrent_requests())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(!built.model.modules["plain"].concurrent);
+    assert!(built.model.modules["overlapping"].concurrent);
+    assert!(!sensor("m").has_concurrent_requests());
+    assert!(sensor("m").concurrent_requests().has_concurrent_requests());
+}

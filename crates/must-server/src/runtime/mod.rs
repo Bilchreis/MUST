@@ -28,6 +28,7 @@ use crate::handler::Reading;
 use crate::model::{NodeModel, POLLINTERVAL};
 use crate::protocol::{self, now};
 
+pub(crate) use actor::ModuleShared;
 pub use node::{RunningNode, StartError};
 
 /// `tracing` target of the records a node logs about itself (also sent as

@@ -8,8 +8,7 @@ use serde_json::Value as Json;
 
 use std::sync::Arc;
 
-use crate::events::LogLevel;
-use crate::runtime::Hub;
+use crate::runtime::{Hub, ModuleShared};
 
 /// A value obtained from the hardware, with optional qualifiers.
 #[derive(Debug, Clone, PartialEq)]
@@ -59,9 +58,11 @@ pub type HandlerResult = Result<Reading, SecopError>;
 
 /// Context passed to handler calls. Updates sent through it reach activated clients
 /// before the reply to the request being handled.
+#[derive(Clone)]
 pub struct Ctx {
     pub(crate) hub: Arc<Hub>,
     pub(crate) module: String,
+    pub(crate) shared: Arc<ModuleShared>,
 }
 
 impl Ctx {
@@ -83,12 +84,29 @@ impl Ctx {
     pub fn update_error(&self, parameter: &str, error: SecopError) {
         self.hub.publish_error(&self.module, parameter, error);
     }
+
+    /// Reads a parameter of this module the way a poll does and publishes the result: it
+    /// shares a running read of the parameter if there is one, otherwise it calls
+    /// [`ModuleHandler::read`] once, also for every request waiting to read the parameter.
+    ///
+    /// The read goes on when this future is dropped. Do not await it from the handler's
+    /// read of the same parameter, which would wait for itself until the node's timeout.
+    pub async fn read(&self, parameter: &str) -> Result<Reading, SecopError> {
+        self.shared.read_for_poll(parameter).await
+    }
+
+    /// Whether the module's handler accepts overlapping calls, see
+    /// [`Module::concurrent_requests`](crate::Module::concurrent_requests).
+    pub fn concurrent_requests(&self) -> bool {
+        self.shared.concurrent()
+    }
 }
 
 /// Hardware access for one module. Every method has a default that reports the action as
 /// not implemented, so a module implements only what it supports.
 ///
-/// The node calls the handler of a module for one request at a time.
+/// The node calls the handler of a module for one request at a time, unless the module
+/// is declared with [`Module::concurrent_requests`](crate::Module::concurrent_requests).
 #[async_trait]
 pub trait ModuleHandler: Send + Sync {
     /// The module's `implementation` property unless the module sets one: by default the
@@ -118,24 +136,23 @@ pub trait ModuleHandler: Send + Sync {
     }
 
     /// Polls the parameters `due` at this tick of the module's polling, in declaration
-    /// order. The node sends only what is published through `ctx`: the default reads
-    /// each parameter with [`read`](Self::read) and publishes the value or error.
-    /// Override it to obtain several parameters in one hardware transaction.
+    /// order. The node sends only what is published through `ctx`: the default reads each
+    /// parameter with [`Ctx::read`], which publishes the value or error, one after another
+    /// or, on a module with concurrent requests, all at once. Override it to obtain several
+    /// parameters in one hardware transaction.
     async fn poll(&self, ctx: &Ctx, due: &[&str]) {
-        for &parameter in due {
-            match self.read(ctx, parameter).await {
-                Ok(reading) => {
-                    // an invalid value is logged and published as an error by the node
-                    let _ = ctx.update(parameter, reading);
-                }
-                Err(error) => {
-                    ctx.hub.log(
-                        LogLevel::Warn,
-                        Some(&ctx.module),
-                        format!("reading `{parameter}` failed: {error}"),
-                    );
-                    ctx.update_error(parameter, error);
-                }
+        if ctx.concurrent_requests() {
+            let mut reads = tokio::task::JoinSet::new();
+            for &parameter in due {
+                let (ctx, parameter) = (ctx.clone(), parameter.to_owned());
+                reads.spawn(async move {
+                    let _ = ctx.read(&parameter).await;
+                });
+            }
+            while reads.join_next().await.is_some() {}
+        } else {
+            for &parameter in due {
+                let _ = ctx.read(parameter).await;
             }
         }
     }

@@ -180,7 +180,7 @@ fn start_polling(
                 continue;
             }
             if hub.model.options.initial_read && param.initial.is_none() {
-                let _ = actor.try_send(Job::Refresh {
+                let _ = actor.jobs.try_send(Job::Refresh {
                     parameter: pname.clone(),
                 });
             }
@@ -296,7 +296,7 @@ async fn poll_module(
                 let due = schedule.take_due(Instant::now());
                 if !due.is_empty() {
                     // skip this tick if the module is busy with a backlog
-                    let _ = actor.try_send(Job::Poll { parameters: due });
+                    let _ = actor.jobs.try_send(Job::Poll { parameters: due });
                 }
             }
             ok = retimed => {

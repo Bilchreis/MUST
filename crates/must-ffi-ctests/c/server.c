@@ -362,6 +362,77 @@ int ctest_server_callbacks(unsigned short port)
     return 0;
 }
 
+/* --- one module at a time in callback mode: the getter of mod1:a waits to be released */
+
+static volatile int g_cb_released = 0;
+static volatile int g_cb_a = 0, g_cb_b = 0, g_cb_c = 0;
+
+static void get_cb(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                   CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)ppSigma;
+    (void)timestamp;
+    if (strcmp(name, "cbc:mod1:a") == 0) {
+        int i;
+        ++g_cb_a;
+        for (i = 0; i < 1000 && !g_cb_released; ++i)
+            sleep_ms(5);
+    } else if (strcmp(name, "cbc:mod1:b") == 0) {
+        ++g_cb_b;
+    } else {
+        ++g_cb_c;
+    }
+    SECoP_V_modifyDouble(*ppData, 0, 0, 2.5);
+    *piError = SECoP_S_SUCCESS;
+}
+
+static enum SECoP_S_error add_cb_param(const char* name)
+{
+    enum SECoP_S_error rc = SECoP_S_addReadableParameter(name, get_cb, "cbc");
+    if (rc < 0)
+        return rc;
+    rc = SECoP_S_addPropertyString("description", name, "cbc");
+    if (rc < 0)
+        return rc;
+    return SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "cbc");
+}
+
+int ctest_cb_build(unsigned short port)
+{
+    g_cb_released = 0;
+    g_cb_a = g_cb_b = g_cb_c = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "cbc"));
+    OK(SECoP_S_createNode2("cbc", "one module at a time", "127.0.0.1", port, "cbc"));
+    OK(SECoP_S_addModule("mod1", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "cbc"));
+    OK(add_cb_param("a"));
+    OK(add_cb_param("b"));
+    OK(SECoP_S_addModule("mod2", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "another module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "cbc"));
+    OK(add_cb_param("c"));
+    CHECK(complete("cbc") >= 0);
+    return 0;
+}
+
+int ctest_cb_calls(const char* parameter)
+{
+    switch (parameter[0]) {
+    case 'a':
+        return g_cb_a;
+    case 'b':
+        return g_cb_b;
+    default:
+        return g_cb_c;
+    }
+}
+
+void ctest_cb_release(void)
+{
+    g_cb_released = 1;
+}
+
 /* --- polling in callback mode: SHALL's pollinterval keeps one interval for all */
 
 /* reads per parameter of the "drv" module, and setter calls of its pollinterval */
@@ -693,6 +764,103 @@ int ctest_server_poll_step(int step)
     default:
         return __LINE__;
     }
+}
+
+/* --- several requests of one module at once, in polling mode: the Rust side sends
+   requests, these functions play the host */
+
+static struct {
+    char name[64];
+    unsigned long long id;
+} g_fetched[16];
+static int g_fetched_count = 0;
+
+static enum SECoP_S_error add_conc_param(const char* name, int writable)
+{
+    enum SECoP_S_error rc = writable ? SECoP_S_addWritableParameter(name, NULL, NULL, "conc")
+                                     : SECoP_S_addReadableParameter(name, NULL, "conc");
+    if (rc < 0)
+        return rc;
+    rc = SECoP_S_addPropertyString("description", name, "conc");
+    if (rc < 0)
+        return rc;
+    return SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "conc");
+}
+
+/* kind 0: mod1 with p0 to p3 and target, not polled;
+   kind 1: mod1 with value, polled every 0.2 s;
+   kind 2: mod1 with value, p0 and target, polled every 0.2 s */
+int ctest_conc_build(unsigned short port, int kind)
+{
+    g_fetched_count = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "conc"));
+    OK(SECoP_S_createNode2("cn", "concurrent requests", "127.0.0.1", port, "conc"));
+    OK(SECoP_S_addModule("mod1", "conc"));
+    OK(SECoP_S_addPropertyString("description", "polled module", "conc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", kind == 0 ? 0.0 : 0.2, "conc"));
+    if (kind == 0) {
+        OK(add_conc_param("p0", 0));
+        OK(add_conc_param("p1", 0));
+        OK(add_conc_param("p2", 0));
+        OK(add_conc_param("p3", 0));
+    }
+    if (kind != 0)
+        OK(add_conc_param("value", 0));
+    if (kind == 2)
+        OK(add_conc_param("p0", 0));
+    if (kind != 1)
+        OK(add_conc_param("target", 1));
+    CHECK(complete("conc") >= 0);
+    return 0;
+}
+
+/* fetches the next request, without answering any: of the given name unless NULL */
+int ctest_conc_fetch(const char* expected, int action)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action got = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int i;
+    enum SECoP_S_error rc = SECoP_S_ERROR_NO_DATA;
+    for (i = 0; i < 500 && rc == SECoP_S_ERROR_NO_DATA; ++i) {
+        int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+        rc = SECoP_S_getStoredCommand2(&id, &got, name, &name_size, value, &value_size, "conc");
+        if (rc == SECoP_S_ERROR_NO_DATA)
+            sleep_ms(10);
+    }
+    OK(rc);
+    CHECK((int)got == action);
+    CHECK(expected == NULL || strcmp(name, expected) == 0);
+    CHECK(g_fetched_count < 16);
+    strcpy(g_fetched[g_fetched_count].name, name);
+    g_fetched[g_fetched_count].id = id;
+    ++g_fetched_count;
+    return 0;
+}
+
+/* no request is waiting */
+int ctest_conc_none(void)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+    CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "conc") == SECoP_S_ERROR_NO_DATA);
+    return 0;
+}
+
+/* answers the request of that name fetched last */
+int ctest_conc_answer(const char* name, const char* value)
+{
+    int i;
+    for (i = g_fetched_count - 1; i >= 0; --i) {
+        if (g_fetched[i].id != 0 && strcmp(g_fetched[i].name, name) == 0) {
+            OK(SECoP_S_putCommandAnswer2(g_fetched[i].id, SECoP_S_SUCCESS, value, -1, NULL, 0, 0.0));
+            g_fetched[i].id = 0;
+            return 0;
+        }
+    }
+    return __LINE__;
 }
 
 /* a host that sets a short node timeout and never fetches a request: step 0 builds the

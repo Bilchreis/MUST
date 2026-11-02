@@ -92,6 +92,34 @@
 //! At each tick the node calls [`ModuleHandler::poll`] once with all parameters of the
 //! module that are due; override it to read them in one hardware transaction.
 //!
+//! With concurrent requests (below) the default hook starts the reads of all due
+//! parameters at once, and a tick does not wait for an earlier tick's reads; otherwise it
+//! reads them one after another. A parameter that is being read is not read again for a
+//! poll, whichever request started that read.
+//!
+//! # Concurrent requests and shared reads
+//!
+//! A node calls a module's handler for one request at a time. A module declared with
+//! [`Module::concurrent_requests`] has its handler called for each request as it arrives
+//! instead, up to 64 running requests; its calls overlap, and requests of different
+//! clients may finish in any order.
+//!
+//! On every module, reads of one parameter share a handler call: their clients get the
+//! same reply, and activated clients one update.
+//!
+//! - When a read starts, it takes all requests still waiting to read that parameter,
+//!   client reads and polls, also those behind a waiting `change` or `do`.
+//! - A request to read a parameter that is being read shares that read: a poll always, a
+//!   client's `read` only if that read started after the module's last `change` or `do`
+//!   that had finished when the client sent it. A client that received `changed` or `done`
+//!   and then reads therefore never receives a value from before it.
+//! - A shared read goes on when the client that started it disconnects.
+//!
+//! A connection handles its requests in order, waiting for each reply, except that while
+//! a `read` of a parameter runs it also takes directly following reads of that parameter,
+//! at most 64, which share the read under these rules. The client gets one reply per
+//! request, in order.
+//!
 //! # Discovery
 //!
 //! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP

@@ -84,12 +84,21 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   effect (requests are always served by several threads).
 - **Callbacks** (getters, setters, command functions) run on worker threads of the
   library, possibly several at once for different modules, never on the thread that
-  called `SECoP_S_initLibrary`. Calls for one module are not overlapped. A callback that
-  has not returned after 60 s gives the client `TimeoutError` (SHALL waited forever).
-- **Polled requests** wait 60 s for `SECoP_S_putCommandAnswer[2]`, as in SHALL; then the
+  called `SECoP_S_initLibrary`. Calls for one module are not overlapped. Reads of one
+  parameter in close succession share one getter call. A callback that has not returned
+  after 60 s gives the client `TimeoutError` (SHALL waited forever).
+- **Polled requests** are handed out as they arrive, also while other requests of the
+  same module are not answered yet, and may be answered in any order, as in SHALL. Reads
+  of one parameter are merged into one request whose answer replies to every waiting
+  client, as in SHALL, except for a read sent after a `changed` or `done` reply of that
+  module: it gets a request of its own, so that it never returns a value from before the
+  change. They wait 60 s for `SECoP_S_putCommandAnswer[2]`, as in SHALL; then the
   client gets `TimeoutError`, and a request not yet fetched is no longer handed out.
   Answering an unknown id (timed out, answered before, never handed out) returns
   `SECoP_S_ERROR_INVALID_NAME`, as in SHALL.
+- **Repeated reads**: a client that sends the same `read` twice in a row, the second
+  before the first is answered, gets two replies from one getter call or stored request,
+  in both modes, where SHALL sent one reply.
 - **Node `timeout`**: nodes publish the property `timeout` 60 (s), the time a client
   should wait for a reply; SHALL published none. A `timeout` property set by the program
   replaces it and also shortens how long the node waits for callbacks and answers.
