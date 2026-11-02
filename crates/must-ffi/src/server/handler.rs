@@ -7,13 +7,14 @@
 use std::collections::HashMap;
 use std::ffi::{CString, c_int};
 use std::ptr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use must_server::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
 use must_types::datainfo::CommandInfo;
 use must_types::{DataInfo, ErrorClass, Mode, SecopError, Value};
 use serde_json::Value as Json;
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex, oneshot};
 
 use super::build::{CallFunction, GetSet};
 use super::codes::{action, to_secop};
@@ -47,6 +48,9 @@ pub(crate) struct ShallModule {
     pub context: String,
     pub callbacks: bool,
     pub accessibles: HashMap<String, Accessible>,
+    /// Held while a callback of the module runs, also after the node's timeout gave up on
+    /// it: aborting a task does not stop a function on the blocking pool.
+    pub gate: Arc<Mutex<()>>,
 }
 
 /// The application's answer to a request, from a callback or `SECoP_S_putCommandAnswer`.
@@ -187,15 +191,23 @@ fn collect(
     answer
 }
 
-/// Runs a call of the application on tokio's blocking pool, so a slow function does not
-/// stall the node.
-async fn blocking(call: impl FnOnce() -> Answer + Send + 'static) -> Result<Answer, SecopError> {
-    tokio::task::spawn_blocking(call)
+impl ShallModule {
+    /// Runs a call of the application on tokio's blocking pool, so a slow function does not
+    /// stall the node, once the module's previous call has returned. The node's timeout can
+    /// drop this while it waits for the gate: the call never starts and takes no thread.
+    async fn blocking(
+        &self,
+        call: impl FnOnce() -> Answer + Send + 'static,
+    ) -> Result<Answer, SecopError> {
+        let gate = Arc::clone(&self.gate).lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _gate = gate;
+            call()
+        })
         .await
         .map_err(|e| internal(format!("the application's function failed: {e}")))
-}
+    }
 
-impl ShallModule {
     /// Queues a request for `SECoP_S_getStoredCommand` and waits for its answer.
     async fn request(
         &self,
@@ -253,7 +265,8 @@ impl ModuleHandler for ShallModule {
         let answer = if self.callbacks {
             let getter = getter.ok_or_else(|| missing("getter", parameter))?;
             let (name, value) = (full_name.clone(), proto.clone());
-            blocking(move || call_getset(getter, &name, value, true)).await?
+            self.blocking(move || call_getset(getter, &name, value, true))
+                .await?
         } else {
             self.request(action::READ, parameter, None).await?
         };
@@ -279,7 +292,8 @@ impl ModuleHandler for ShallModule {
         let answer = if self.callbacks {
             let setter = setter.ok_or_else(|| missing("setter", parameter))?;
             let name = full_name.clone();
-            blocking(move || call_getset(setter, &name, node, false)).await?
+            self.blocking(move || call_getset(setter, &name, node, false))
+                .await?
         } else {
             let mut answer = self.request(action::CHANGE, parameter, Some(node)).await?;
             // an answer without value confirms the requested one
@@ -318,7 +332,8 @@ impl ModuleHandler for ShallModule {
             let name = full_name.clone();
             let result = result_type.clone().unwrap_or_else(null);
             let argument = argument.unwrap_or_else(null);
-            blocking(move || call_function(function, &name, argument, result)).await?
+            self.blocking(move || call_function(function, &name, argument, result))
+                .await?
         } else {
             self.request(action::DO, command, argument).await?
         };

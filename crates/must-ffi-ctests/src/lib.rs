@@ -72,6 +72,7 @@ pub mod server {
         pub fn ctest_conc_none() -> c_int;
         pub fn ctest_conc_answer(name: *const c_char, value: *const c_char) -> c_int;
         pub fn ctest_cb_build(port: c_ushort) -> c_int;
+        pub fn ctest_cb_hang_build(port: c_ushort, pollinterval: f64) -> c_int;
         pub fn ctest_cb_calls(parameter: *const c_char) -> c_int;
         pub fn ctest_cb_release();
         pub fn ctest_server_abandoned(step: c_int, port: c_ushort) -> c_int;

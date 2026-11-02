@@ -84,9 +84,13 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   effect (requests are always served by several threads).
 - **Callbacks** (getters, setters, command functions) run on worker threads of the
   library, possibly several at once for different modules, never on the thread that
-  called `SECoP_S_initLibrary`. Calls for one module are not overlapped. Reads of one
-  parameter in close succession share one getter call. A callback that has not returned
-  after 60 s gives the client `TimeoutError` (SHALL waited forever).
+  called `SECoP_S_initLibrary`. Calls for one module are not overlapped, even after a
+  timeout. Reads of one parameter in close succession share one getter call. A callback
+  that has not returned after 60 s gives the client `TimeoutError` (SHALL waited
+  forever); until it has returned, further requests for its module wait and may also get
+  `TimeoutError`, in which case their callbacks are not called. A callback must not wait
+  for a request to its own module, for example through a SECoP connection to its own
+  node: that request cannot start until the callback has returned.
 - **Polled requests** are handed out as they arrive, also while other requests of the
   same module are not answered yet, and may be answered in any order, as in SHALL. Reads
   of one parameter are merged into one request whose answer replies to every waiting

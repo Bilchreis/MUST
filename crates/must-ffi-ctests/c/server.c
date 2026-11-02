@@ -365,7 +365,7 @@ int ctest_server_callbacks(unsigned short port)
 /* --- one module at a time in callback mode: the getter of mod1:a waits to be released */
 
 static volatile int g_cb_released = 0;
-static volatile int g_cb_a = 0, g_cb_b = 0, g_cb_c = 0;
+static volatile int g_cb_a = 0, g_cb_b = 0, g_cb_c = 0, g_cb_target = 0;
 
 static void get_cb(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
                    CSECoPbaseType** ppSigma, double* timestamp)
@@ -416,6 +416,41 @@ int ctest_cb_build(unsigned short port)
     return 0;
 }
 
+static void set_cb(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                   CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppData;
+    (void)ppSigma;
+    (void)timestamp;
+    ++g_cb_target;
+    *piError = SECoP_S_SUCCESS;
+}
+
+/* the same with a short node timeout, so the getter of mod1:a outlives it, and a setter */
+int ctest_cb_hang_build(unsigned short port, double pollinterval)
+{
+    g_cb_released = 0;
+    g_cb_a = g_cb_b = g_cb_c = g_cb_target = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "cbc"));
+    OK(SECoP_S_createNode2("cbc", "calls outliving the timeout", "127.0.0.1", port, "cbc"));
+    OK(SECoP_S_addPropertyDouble("timeout", 0.3, "cbc"));
+    OK(SECoP_S_addModule("mod1", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", pollinterval, "cbc"));
+    OK(add_cb_param("a"));
+    OK(add_cb_param("b"));
+    OK(SECoP_S_addWritableParameter("target", get_cb, set_cb, "cbc"));
+    OK(SECoP_S_addPropertyString("description", "target", "cbc"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "cbc"));
+    OK(SECoP_S_addModule("mod2", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "another module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "cbc"));
+    OK(add_cb_param("c"));
+    CHECK(complete("cbc") >= 0);
+    return 0;
+}
+
 int ctest_cb_calls(const char* parameter)
 {
     switch (parameter[0]) {
@@ -423,6 +458,8 @@ int ctest_cb_calls(const char* parameter)
         return g_cb_a;
     case 'b':
         return g_cb_b;
+    case 't':
+        return g_cb_target;
     default:
         return g_cb_c;
     }
