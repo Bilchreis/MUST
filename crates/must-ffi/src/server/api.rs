@@ -140,7 +140,8 @@ fn new_context(callbacks: bool) -> Context {
 }
 
 /// Stops the nodes of a context and forgets the context (its queued requests are
-/// dropped). Unless `bNodeOnly`, the library's threads end when no context remains.
+/// dropped). Unless `bNodeOnly`, the library's threads end when no context remains (and
+/// the status TUI is no longer opened again when closed).
 ///
 /// # Safety
 /// `szContextID` must be NULL or a NUL-terminated string.
@@ -170,6 +171,8 @@ pub unsafe extern "C" fn SECoP_S_doneLibrary(bNodeOnly: c_int, szContextID: *con
         state::stop(std::mem::take(&mut running), handle);
         if let Some(runtime) = runtime {
             state::shut_down(runtime);
+            // no node left to show: stop reopening the TUI
+            status::show(false);
         }
     });
 }

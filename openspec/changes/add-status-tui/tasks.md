@@ -28,6 +28,9 @@
 - [x] 4.3 Implement the Linux launcher (graphical session check, `MUST_TUI_TERMINAL`, terminal emulator order, own process group, null stdio, reaping); verify the no-graphical-session scenario in CI and a launch with `xterm` under Xvfb
 - [x] 4.4 Add `must_server::show_status_tui()` (spawn thread, lock check, `--focus-pid`) and replace the no-op status display hook in `must-ffi` with it, hide as no-op; verify the first-init, already-running, missing-executable, hide-while-open and focus-on-launch scenarios
 
+- [x] 4.5 Keep the TUI open: a keeper thread per process (`show_status_tui` starts or wakes it, `hide_status_tui` stops and joins it; `SECoP_S_showStatusWindow(0)` and the last `SECoP_S_doneLibrary` hide), the `tui-launch.lock` held until the TUI is up, retry backoff and change-only logging; verify the user-closes-the-TUI, close-after-hide, two-hosts and launch-blocked scenarios with launcher unit tests (a recording terminal, the test taking and dropping the TUI lock)
+- [ ] 4.6 Verify the user-closes-the-TUI and library-done scenarios manually from LabVIEW on Windows (close the console window: it reopens within about 5 s; two LabVIEW processes open only one)
+
 ## 5. Distribution and docs
 
 - [x] 5.1 Add `must-tui` to `xtask dist` for all three targets; verify the dist directories contain the binary next to the libraries

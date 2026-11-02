@@ -45,12 +45,41 @@ The launch SHALL never block the calling thread for more than a short process-sp
 - **WHEN** no `must-tui` executable can be found
 - **THEN** `SECoP_S_initLibrary` still returns `SECoP_S_SUCCESS` and only a warning is logged
 
+### Requirement: Keep the TUI open
+After a launch request, the library SHALL look at least every 5 seconds whether a TUI runs for the current user and, if none does, launch it again, until the host hides the status display or ends the library. A launch request while it keeps the TUI open SHALL look at once.
+
+#### Scenario: User closes the TUI
+- **WHEN** a host called `SECoP_S_initLibrary` with `bGUI` set and the user closes the TUI window
+- **THEN** a new TUI window opens within about 5 seconds, focused on the host
+
+#### Scenario: Library done
+- **WHEN** a host calls `SECoP_S_doneLibrary(0, ...)` for its last context and the user then closes the TUI
+- **THEN** no new TUI is opened
+
+### Requirement: One launch at a time
+While a process starts a TUI, until the TUI runs or 20 seconds have passed, no other process or thread SHALL start one.
+
+#### Scenario: Two hosts notice the TUI is gone
+- **WHEN** two processes that keep the TUI open both look after the user closed it
+- **THEN** exactly one new TUI is started
+
+### Requirement: Back off from failing launches
+When a launch fails or the started TUI does not come up within 20 seconds, the library SHALL try again at doubling intervals starting at 5 seconds and up to 5 minutes, and SHALL log each kind of outcome once when it changes rather than at every attempt.
+
+#### Scenario: Launch blocked
+- **WHEN** endpoint protection kills every `must-tui.exe` the host starts
+- **THEN** the host tries again at growing intervals, logs one warning, and keeps running normally
+
 ### Requirement: Hide request
-The library SHALL accept `SECoP_S_showStatusWindow(0)` and leave a running TUI open, since it may show other processes' nodes; the user closes the TUI.
+The library SHALL accept `SECoP_S_showStatusWindow(0)`, stop opening the TUI again, and leave a running TUI open, since it may show other processes' nodes; the user closes the TUI.
 
 #### Scenario: Hide while open
 - **WHEN** a host calls `SECoP_S_showStatusWindow(0)` while a TUI is open
 - **THEN** the call returns and the TUI stays open
+
+#### Scenario: Close after hide
+- **WHEN** a host called `SECoP_S_showStatusWindow(0)` and the user then closes the TUI
+- **THEN** no new TUI is opened
 
 ### Requirement: Focus the launching process
 The library SHALL pass the host's process id to the TUI it starts, and the TUI SHALL select that process's first node once it appears.

@@ -89,7 +89,17 @@ The launcher lives in `must-server` (`launcher.rs`, `show_status_tui()`), so Rus
 - A detached thread waits for the terminal process to reap it.
 
 ### Launch call path
-The hook spawns on a dedicated short-lived thread and returns immediately. Failures are logged via `tracing`, which the monitor forwards. `--focus-pid <pid>` tells the TUI which process to select first.
+The hook starts one keeper thread per process (`must-tui-keeper`) and returns immediately; calling it again while the keeper runs wakes it to look at once. Failures are logged via `tracing`, which the monitor forwards. `--focus-pid <pid>` tells the TUI which process to select first.
+
+### Keeping the TUI open
+A user who closes the TUI by accident cannot always start it by hand (endpoint protection on a lab PC may block running `must-tui.exe` from Explorer while allowing LabVIEW to start it). So the keeper opens it again:
+- Every 5 s it takes `tui-launch.lock` in the registry directory non-blockingly. If another process holds it, that process is starting a TUI, and the keeper looks again next time.
+- Holding it, the keeper checks `tui.lock` and, if no TUI runs, starts one, then keeps `tui-launch.lock` until the TUI holds `tui.lock`, at most 20 s. Two hosts (or two looks of one host while a slow TUI starts) therefore never start two TUIs.
+- A TUI that does not come up in time, or a launch that fails (no executable, no terminal, no graphical session), is tried again after 5 s, then at doubling intervals up to 5 minutes. Each outcome is logged when it changes, each start always, so a blocked launch gives one warning rather than one every few seconds.
+- `SECoP_S_showStatusWindow(0)`, `must_server::hide_status_tui()` and the `SECoP_S_doneLibrary` that ends the library's threads stop the keeper and wait for it (at most a spawn or the start wait's next 200 ms poll), so no keeper thread runs code from an unloaded DLL. `MUST_TUI=0` stops it too.
+- Any close counts, `q` included: the TUI cannot tell the host why it ended, and a host that showed the status window means it to stay. Hosts that want it closed call `SECoP_S_showStatusWindow(0)` first.
+
+*Alternative:* the TUI tells hosts it was quit on purpose (a marker file). Rejected for now: a closed console window (the common case) cannot write it, and the hide call already covers deliberate closing.
 
 ### Distribution
 `xtask dist` adds `must-tui[.exe]` built for the same target triple. A 32-bit TUI beside 32-bit DLLs is fine, since the monitoring protocol is bitness-neutral.
@@ -100,4 +110,6 @@ The hook spawns on a dedicated short-lived thread and returns immediately. Failu
 - [Some terminals need different argument syntax] → Known emulators get their correct flag; `$TERMINAL` is used with `-e`, the de-facto convention.
 - [conhost has limited colors and Unicode] → Use only the 16 base colors and ASCII-safe borders by default; detect Windows Terminal (`WT_SESSION`) for richer symbols.
 - [SHALL's `SECoP_S_showStatusWindow(0)` closed the window; must leaves it open] → Documented in `COMPATIBILITY.md`; the TUI is shared across processes, so one host must not close it for others.
+- [A reopened TUI can feel insistent: closing it brings it back within 5 s] → That is the point for lab hosts; `SECoP_S_showStatusWindow(0)` or `MUST_TUI=0` stops it.
+- [A launch blocked by endpoint protection could be retried forever] → Retries back off to every 5 minutes and log once; `SECoP_S_showStatusWindow(1)` retries at once.
 - [A log file path can be long] → The detail view shortens the middle with `…` to fit and shows the full path in a footer when selected.

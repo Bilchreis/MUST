@@ -16,7 +16,14 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
 - **From a program:** `SECoP_S_initLibrary` with `bGUI` set, or
   `SECoP_S_showStatusWindow(1)`, opens it in a window of its own, as SHALL's flags opened
   the status window. Rust programs call `must_server::show_status_tui()`. Nothing
-  happens if a TUI already runs, and the call never fails or waits.
+  happens if a TUI already runs, and the call never fails or waits. The program then
+  keeps the TUI open: it looks every 5 s and opens it again when it was closed (by its
+  window, `q` or a crash), until `SECoP_S_showStatusWindow(0)`
+  (`must_server::hide_status_tui()`) or the last `SECoP_S_doneLibrary` that ends the
+  library's threads. Several programs never open two: only one starts a TUI at a time.
+  A TUI that does not come up within 20 s (blocked by endpoint protection, say) is tried
+  again after 5 s, then at doubling intervals up to 5 minutes, with one warning log
+  record; `SECoP_S_showStatusWindow(1)` tries again at once.
   - **Windows:** a new console window. Closing it ends only the TUI, never LabVIEW or
     your program.
   - **Linux:** a terminal emulator, when there is a graphical session (`DISPLAY` or
@@ -27,7 +34,8 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
 
   The TUI keeps running when the program that opened it ends, and it starts with that
   program's first node selected. `SECoP_S_showStatusWindow(0)` leaves it open, since it
-  may show other programs' nodes too; close it with `q`.
+  may show other programs' nodes too, and only stops opening it again; then close it
+  with `q`.
 
   `must-tui` is looked for next to the must library (`SHALLserver64.dll` and so on, or
   the program for Rust), then at `MUST_TUI`, then on `PATH`. If it is not found, a

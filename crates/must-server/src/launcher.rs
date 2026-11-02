@@ -3,9 +3,13 @@
 //! Opening the status TUI (`must-tui`) in a window of its own, as SHALL's status window
 //! flags ask for (`bGUI`, `SECoP_S_showStatusWindow`).
 //!
-//! [`show_status_tui`] returns at once; a short-lived thread does the work. It starts
-//! nothing if a TUI already runs for the user (the TUI holds a lock in the monitoring
-//! registry directory). The executable is looked for next to the library (or program)
+//! [`show_status_tui`] returns at once; a thread of its own does the work and keeps the
+//! TUI open: it looks every [`CHECK_INTERVAL`] and opens the TUI again when it was closed,
+//! until [`hide_status_tui`]. It starts nothing while a TUI runs for the user (the TUI
+//! holds a lock in the monitoring registry directory) or another process is starting one
+//! (it holds a second lock there until its TUI is up). A TUI that does not come up within
+//! [`START_TIMEOUT`] (blocked, or failed) is tried again at growing intervals, up to
+//! [`MAX_RETRY`]. The executable is looked for next to the library (or program)
 //! containing must, then at `MUST_TUI`, then on `PATH`. `MUST_TUI=0` turns launching off.
 //!
 //! - **Windows:** the TUI gets a console window of its own; closing it ends only the TUI.
@@ -20,6 +24,10 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Mutex, PoisonError};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use must_monitor::{platform, registry};
 
@@ -36,7 +44,17 @@ pub const EXECUTABLE: &str = if cfg!(windows) {
     "must-tui"
 };
 
-/// What [`launch`] did.
+/// How often a shown TUI is looked for, to open it again when it was closed.
+pub const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+/// How long a started TUI may take to come up (to take its lock).
+pub const START_TIMEOUT: Duration = Duration::from_secs(20);
+/// The longest wait between attempts while the TUI cannot be opened.
+pub const MAX_RETRY: Duration = Duration::from_secs(300);
+
+/// How often a TUI being started is looked for.
+const START_POLL: Duration = Duration::from_millis(200);
+
+/// What [`launch`] (or a look of the thread keeping the TUI open) did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
     /// Started: the pid of the TUI (Windows) or of its terminal emulator (Linux).
@@ -48,6 +66,14 @@ pub enum Launch {
     },
     /// A TUI already runs for this user.
     AlreadyRunning,
+    /// Another process is starting a TUI.
+    Starting,
+    /// A TUI was started but did not come up within [`START_TIMEOUT`]: blocked (by
+    /// endpoint protection, say) or failed.
+    NotUp {
+        /// The TUI executable.
+        program: PathBuf,
+    },
     /// Launching is turned off (`MUST_TUI=0`).
     TurnedOff,
     /// No TUI executable was found in these places.
@@ -66,14 +92,179 @@ pub enum Launch {
     Failed(String),
 }
 
-/// Opens the status TUI in a window of its own unless one runs already; returns at once
-/// and logs what happened.
+/// The thread keeping the TUI open, while there is one.
+static KEEPER: Mutex<Option<Keeper>> = Mutex::new(None);
+
+struct Keeper {
+    /// Wakes the thread to look now; dropping it stops the thread.
+    wake: Sender<()>,
+    thread: JoinHandle<()>,
+}
+
+/// Timing of the thread keeping the TUI open.
+#[derive(Debug, Clone, Copy)]
+struct Timing {
+    interval: Duration,
+    start_timeout: Duration,
+    max_retry: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            interval: CHECK_INTERVAL,
+            start_timeout: START_TIMEOUT,
+            max_retry: MAX_RETRY,
+        }
+    }
+}
+
+/// Opens the status TUI in a window of its own unless one runs already, and keeps it open
+/// (opens it again when it is closed) until [`hide_status_tui`]; returns at once and logs
+/// what happened.
 pub fn show_status_tui() {
+    let mut keeper = KEEPER.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(k) = keeper.as_ref()
+        && !k.thread.is_finished()
+    {
+        // look now, not at the next interval
+        let _ = k.wake.send(());
+        return;
+    }
+    let (wake, woken) = mpsc::channel();
     let spawned = std::thread::Builder::new()
-        .name("must-tui-launch".into())
-        .spawn(|| report(&launch()));
-    if let Err(e) = spawned {
-        tracing::warn!("cannot open the status TUI: {e}");
+        .name("must-tui-keeper".into())
+        .spawn(move || {
+            let dir = match registry::registry_dir() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    let reason = format!("no monitoring registry directory: {e}");
+                    return report(&Launch::Failed(reason), false);
+                }
+            };
+            let var = |name: &str| std::env::var_os(name);
+            let library = library_dir();
+            let pid = std::process::id();
+            keep_open(
+                Timing::default(),
+                &dir,
+                library.as_deref(),
+                &var,
+                pid,
+                &woken,
+            );
+        });
+    match spawned {
+        Ok(thread) => *keeper = Some(Keeper { wake, thread }),
+        Err(e) => tracing::warn!("cannot open the status TUI: {e}"),
+    }
+}
+
+/// Stops keeping the status TUI open; a TUI that runs stays open (it may show other
+/// processes' nodes). Waits for a launch in progress, at most a process-spawn time.
+pub fn hide_status_tui() {
+    let keeper = KEEPER.lock().unwrap_or_else(PoisonError::into_inner).take();
+    if let Some(Keeper { wake, thread }) = keeper {
+        drop(wake);
+        if thread.thread().id() != std::thread::current().id() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Keeps the TUI open until `woken` is disconnected (or launching is turned off): looks
+/// now, then after each wait, and at once when woken.
+fn keep_open(
+    timing: Timing,
+    dir: &Path,
+    library_dir: Option<&Path>,
+    var: &dyn Fn(&str) -> Option<OsString>,
+    pid: u32,
+    woken: &Receiver<()>,
+) {
+    let mut failures = 0;
+    let mut last: Option<Launch> = None;
+    loop {
+        let Some(outcome) = look(timing, dir, library_dir, var, pid, woken) else {
+            return;
+        };
+        let wait = match outcome {
+            Launch::AlreadyRunning | Launch::Starting | Launch::Started { .. } => {
+                failures = 0;
+                timing.interval
+            }
+            Launch::TurnedOff => return report(&outcome, false),
+            _ => {
+                failures += 1;
+                retry_wait(timing, failures)
+            }
+        };
+        // each start is worth a record; anything else only when it changes
+        let was_up = matches!(last, Some(Launch::AlreadyRunning | Launch::Started { .. }));
+        let same = last
+            .as_ref()
+            .is_some_and(|l| std::mem::discriminant(l) == std::mem::discriminant(&outcome));
+        if matches!(outcome, Launch::Started { .. }) || !same {
+            report(&outcome, was_up);
+        }
+        last = Some(outcome);
+        match woken.recv_timeout(wait) {
+            Ok(()) => {
+                // asked to show it: look now, as if for the first time
+                while woken.try_recv().is_ok() {}
+                failures = 0;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+/// The wait after `failures` looks in a row that could not open the TUI: the interval,
+/// doubled after each further failure, at most `max_retry`.
+fn retry_wait(timing: Timing, failures: u32) -> Duration {
+    let factor = 1u32 << failures.saturating_sub(1).min(16);
+    timing
+        .interval
+        .saturating_mul(factor)
+        .min(timing.max_retry)
+        .max(timing.interval)
+}
+
+/// One look: opens the TUI unless it runs or another process is starting one, holding
+/// the launch lock until a TUI started here is up. `None` if told to stop meanwhile.
+fn look(
+    timing: Timing,
+    dir: &Path,
+    library_dir: Option<&Path>,
+    var: &dyn Fn(&str) -> Option<OsString>,
+    pid: u32,
+    woken: &Receiver<()>,
+) -> Option<Launch> {
+    let _launching = match registry::try_lock_launch(dir) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => return Some(Launch::Starting),
+        Err(e) => return Some(Launch::Failed(format!("cannot take the launch lock: {e}"))),
+    };
+    let outcome = launch_in(dir, library_dir, var, pid);
+    let Launch::Started { program, .. } = &outcome else {
+        return Some(outcome);
+    };
+    let deadline = Instant::now() + timing.start_timeout;
+    loop {
+        match registry::tui_running(dir) {
+            Ok(true) => return Some(outcome),
+            Ok(false) => {}
+            Err(e) => return Some(Launch::Failed(format!("cannot check for the TUI: {e}"))),
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            let program = program.clone();
+            return Some(Launch::NotUp { program });
+        }
+        if let Err(RecvTimeoutError::Disconnected) = woken.recv_timeout(left.min(START_POLL)) {
+            return None;
+        }
     }
 }
 
@@ -88,12 +279,23 @@ pub fn launch() -> Launch {
     launch_in(&dir, library_dir().as_deref(), &var, std::process::id())
 }
 
-fn report(outcome: &Launch) {
+/// Logs what a launch did; `reopened` when the TUI ran before and was closed.
+fn report(outcome: &Launch, reopened: bool) {
     match outcome {
+        Launch::Started { program, .. } if reopened => {
+            tracing::info!("status TUI closed, opened again: {}", program.display());
+        }
         Launch::Started { program, .. } => {
             tracing::info!("status TUI started: {}", program.display());
         }
         Launch::AlreadyRunning => tracing::info!("the status TUI is already running"),
+        Launch::Starting => tracing::debug!("another process is starting the status TUI"),
+        Launch::NotUp { program } => tracing::warn!(
+            "status TUI started ({}) but it did not come up within {}s; it may have been \
+             blocked or failed to start; trying again at growing intervals",
+            program.display(),
+            START_TIMEOUT.as_secs()
+        ),
         Launch::TurnedOff => {
             tracing::info!("opening the status TUI is turned off ({TUI_VARIABLE}=0)");
         }
@@ -269,6 +471,13 @@ mod tests {
 
     use super::*;
 
+    /// Held by the tests that take locks or start processes: a child forked by one test
+    /// holds the other tests' lock files (and so their locks) until it executes.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("must-launcher-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -327,6 +536,7 @@ mod tests {
 
     #[test]
     fn already_running_and_missing_executable() {
+        let _serial = serial();
         let base = temp("running");
         let registry = base.join("registry");
         registry::prepare_dir(&registry).unwrap();
@@ -357,6 +567,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn linux_without_graphical_session_or_terminal() {
+        let _serial = serial();
         let base = temp("linux");
         let registry = base.join("registry");
         registry::prepare_dir(&registry).unwrap();
@@ -392,8 +603,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn linux_terminal_order_and_command_line() {
-        use std::os::unix::fs::PermissionsExt;
-
+        let _serial = serial();
         let base = temp("terminal");
         let registry = base.join("registry");
         registry::prepare_dir(&registry).unwrap();
@@ -407,8 +617,9 @@ mod tests {
             format!("#!/bin/sh\necho \"$@\" > '{}'\n", record.display()),
         )
         .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let command = format!("{} --title must", script.display());
+        // run by sh: executing a file just written fails while a forked test child still
+        // holds it open for writing (ETXTBSY)
+        let command = format!("/bin/sh {} --title must", script.display());
         let var = |name: &str| match name {
             TUI_VARIABLE => Some(tui.clone().into_os_string()),
             TERMINAL_VARIABLE => Some(OsString::from(&command)),
@@ -433,5 +644,194 @@ mod tests {
             format!("--title must {} --focus-pid 4242", tui.display())
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn retry_waits_grow_to_the_limit() {
+        let timing = Timing {
+            interval: Duration::from_secs(5),
+            start_timeout: START_TIMEOUT,
+            max_retry: Duration::from_secs(60),
+        };
+        let waits: Vec<u64> = (1..=6).map(|f| retry_wait(timing, f).as_secs()).collect();
+        assert_eq!(waits, [5, 10, 20, 40, 60, 60]);
+        assert_eq!(retry_wait(timing, u32::MAX), Duration::from_secs(60));
+        // the defaults
+        assert_eq!(retry_wait(Timing::default(), 1), CHECK_INTERVAL);
+        assert_eq!(retry_wait(Timing::default(), 100), MAX_RETRY);
+    }
+
+    #[test]
+    fn keeper_stops_without_an_executable() {
+        let _serial = serial();
+        let base = temp("keeper-missing");
+        let registry = base.join("registry");
+        registry::prepare_dir(&registry).unwrap();
+        let var = env(&[("PATH", &base.join("nowhere"))]);
+        let (wake, woken) = mpsc::channel();
+        let fast = Timing {
+            interval: Duration::from_millis(20),
+            start_timeout: Duration::from_millis(100),
+            max_retry: Duration::from_millis(50),
+        };
+        std::thread::scope(|scope| {
+            let keeper = scope.spawn(|| keep_open(fast, &registry, None, &var, 1, &{ woken }));
+            std::thread::sleep(Duration::from_millis(150));
+            assert!(!keeper.is_finished(), "keeps looking");
+            drop(wake);
+        });
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A registry, a TUI executable and a "terminal" appending its arguments to a file.
+    #[cfg(not(windows))]
+    struct FakeTerminal {
+        base: PathBuf,
+        registry: PathBuf,
+        tui: PathBuf,
+        command: String,
+        record: PathBuf,
+    }
+
+    #[cfg(not(windows))]
+    impl FakeTerminal {
+        fn new(name: &str) -> Self {
+            let base = temp(name);
+            let registry = base.join("registry");
+            registry::prepare_dir(&registry).unwrap();
+            let tui = base.join(EXECUTABLE);
+            touch(&tui);
+            let record = base.join("args");
+            let script = base.join("fake-terminal");
+            std::fs::write(
+                &script,
+                format!("#!/bin/sh\necho \"$@\" >> '{}'\n", record.display()),
+            )
+            .unwrap();
+            // run by sh, not executed: see linux_terminal_order_and_command_line
+            let command = format!("/bin/sh {}", script.display());
+            FakeTerminal {
+                base,
+                registry,
+                tui,
+                command,
+                record,
+            }
+        }
+
+        fn var(&self, name: &str) -> Option<OsString> {
+            match name {
+                TUI_VARIABLE => Some(self.tui.clone().into_os_string()),
+                TERMINAL_VARIABLE => Some(OsString::from(&self.command)),
+                "WAYLAND_DISPLAY" => Some(OsString::from("wayland-0")),
+                "PATH" => Some(OsString::from("/usr/bin:/bin")),
+                _ => None,
+            }
+        }
+
+        /// How often the terminal was started.
+        fn starts(&self) -> usize {
+            std::fs::read_to_string(&self.record).map_or(0, |r| r.lines().count())
+        }
+
+        fn wait_for_starts(&self, n: usize) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.starts() < n {
+                assert!(Instant::now() < deadline, "not started {n} times");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    impl Drop for FakeTerminal {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    #[cfg(not(windows))]
+    const FAST: Timing = Timing {
+        interval: Duration::from_millis(30),
+        start_timeout: Duration::from_secs(5),
+        max_retry: Duration::from_millis(100),
+    };
+
+    #[cfg(not(windows))]
+    #[test]
+    fn keeper_opens_a_closed_tui_again() {
+        let _serial = serial();
+        let t = FakeTerminal::new("keeper-reopen");
+        let var = |name: &str| t.var(name);
+        let (wake, woken) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let keeper = scope.spawn(|| keep_open(FAST, &t.registry, None, &var, 7, &{ woken }));
+            t.wait_for_starts(1);
+            // the TUI comes up and stays: nothing more is started
+            let tui = registry::try_lock_tui(&t.registry).unwrap().unwrap();
+            std::thread::sleep(FAST.interval * 8);
+            assert_eq!(t.starts(), 1);
+            // the user closes it: it is opened again
+            drop(tui);
+            t.wait_for_starts(2);
+            let tui = registry::try_lock_tui(&t.registry).unwrap().unwrap();
+            // hiding stops the keeper; the TUI stays
+            drop(wake);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !keeper.is_finished() {
+                assert!(Instant::now() < deadline, "keeper still running");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            drop(tui);
+            std::thread::sleep(FAST.interval * 4);
+            assert_eq!(t.starts(), 2, "not opened again once hidden");
+        });
+        let record = std::fs::read_to_string(&t.record).unwrap();
+        let expected = format!("{} --focus-pid 7", t.tui.display());
+        assert!(record.lines().all(|l| l == expected), "{record}");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn keeper_waits_for_another_process_starting_one() {
+        let _serial = serial();
+        let t = FakeTerminal::new("keeper-starting");
+        let var = |name: &str| t.var(name);
+        let (wake, woken) = mpsc::channel();
+        let launching = registry::try_lock_launch(&t.registry).unwrap().unwrap();
+        std::thread::scope(|scope| {
+            scope.spawn(|| keep_open(FAST, &t.registry, None, &var, 7, &{ woken }));
+            std::thread::sleep(FAST.interval * 6);
+            assert_eq!(t.starts(), 0, "another process is starting one");
+            drop(launching);
+            t.wait_for_starts(1);
+            drop(wake);
+        });
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn a_tui_that_does_not_come_up() {
+        let _serial = serial();
+        let t = FakeTerminal::new("keeper-not-up");
+        let var = |name: &str| t.var(name);
+        let (wake, woken) = mpsc::channel();
+        let quick = Timing {
+            start_timeout: Duration::from_millis(100),
+            ..FAST
+        };
+        let outcome = look(quick, &t.registry, None, &var, 7, &woken);
+        assert_eq!(
+            outcome,
+            Some(Launch::NotUp {
+                program: t.tui.clone()
+            })
+        );
+        // the launch lock is released after the look
+        assert!(registry::try_lock_launch(&t.registry).unwrap().is_some());
+        // hiding while waiting for it to come up ends the look
+        drop(wake);
+        assert_eq!(look(FAST, &t.registry, None, &var, 7, &woken), None);
+        t.wait_for_starts(2);
     }
 }

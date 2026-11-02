@@ -89,7 +89,8 @@ in [docs/monitoring-protocol.md](docs/monitoring-protocol.md). Turn it off with
 state, clients, parameter values and statuses, message traffic, log records and log
 files. It only reads. Run it in a terminal (`cargo run -p must-tui`, or `must-tui` from
 `dist/<target>/`); programs that set SHALL's `bGUI` flag or call
-`SECoP_S_showStatusWindow(1)` open it in a window of their own. Views, keys and settings
+`SECoP_S_showStatusWindow(1)` open it in a window of their own, and open it again when
+it is closed. Views, keys and settings
 are described in [docs/status-tui.md](docs/status-tui.md).
 
 ## Polling
