@@ -17,16 +17,12 @@ use async_trait::async_trait;
 use common::{Client, error_class, kelvin, parse, status, status_info};
 use must_server::logfiles::LogFiles;
 use must_server::{
-    CallResult, Command, Ctx, Discovery, HandlerResult, Module, ModuleHandler, NodeBuilder,
-    NodeEvent, Parameter, RunningNode,
+    Ctx, Discovery, HandlerResult, Module, ModuleHandler, NodeBuilder, NodeEvent, Parameter,
+    RunningNode,
 };
-use must_types::{DataInfo, ErrorClass, SecopError, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpSocket;
+use must_types::{ErrorClass, SecopError, Value};
 use tokio::runtime::Handle;
 use tokio::sync::{Semaphore, broadcast};
-
-const MIB: usize = 1 << 20;
 
 /// A gate for the next calls of an accessible.
 struct Hold {
@@ -102,7 +98,6 @@ impl ModuleHandler for Hw {
         let value = match parameter {
             "status" if self.busy.load(Ordering::SeqCst) > 0 => status(300, "ramping"),
             "status" => status(100, "idle"),
-            "text" => Value::String(String::new()),
             "fail" => {
                 self.enter(parameter).await;
                 return Err(SecopError::new(ErrorClass::CommunicationFailed, "no link"));
@@ -123,11 +118,6 @@ impl ModuleHandler for Hw {
         let _ = parameter;
         Ok(value.into())
     }
-
-    async fn call(&self, _ctx: &Ctx, _command: &str, _argument: Option<Value>) -> CallResult {
-        let text = Value::String("x".repeat(20 * MIB));
-        Ok(Some(text.into()))
-    }
 }
 
 /// A Writable module `m` that is not polled.
@@ -143,21 +133,6 @@ fn module(hw: &Arc<Hw>, concurrent: bool) -> Module {
         .parameter(Parameter::new("busy", kelvin(), "keeps the module busy"))
         .unwrap()
         .parameter(Parameter::new("fail", kelvin(), "fails"))
-        .unwrap()
-        .parameter(
-            Parameter::new("text", DataInfo::string().build().unwrap(), "large values")
-                .cached()
-                .initial_value(Value::String(String::new())),
-        )
-        .unwrap()
-        .command(Command::new(
-            "blob",
-            DataInfo::command()
-                .result(&DataInfo::string().build().unwrap())
-                .build()
-                .unwrap(),
-            "returns a large string",
-        ))
         .unwrap()
         .handler_arc(Arc::clone(hw) as Arc<dyn ModuleHandler>)
         .no_polling();
@@ -689,62 +664,6 @@ async fn read_after_another_clients_change() {
     gate.add_permits(1);
     assert_eq!(reply(&mut a).await.2[0][0], 100, "from before the change");
     assert_eq!(reply(&mut a).await.2[0][0], 300, "from after the change");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn slow_client_gets_no_following_request_taken() {
-    let hw = Arc::new(Hw::default());
-    let n = builder(module(&hw, false))
-        .max_outgoing_bytes(32 * MIB)
-        .build()
-        .unwrap()
-        .spawn(&Handle::current())
-        .unwrap();
-    let mut events = n.subscribe();
-    let gate = hw.hold("value", 1);
-    let socket = TcpSocket::new_v4().unwrap();
-    socket.set_recv_buffer_size(4096).unwrap();
-    let mut stream = socket.connect(n.local_addr()).await.unwrap();
-    // a reply that stays in the node's queue, within the limit, then a read in flight
-    stream
-        .write_all(b"activate m\ndo m:blob\nread m:value\n")
-        .await
-        .unwrap();
-    hw.called("value", 1).await;
-    // an update takes the queue over the limit, within the limit for updates
-    n.update("m", "text", Value::String("y".repeat(20 * MIB)))
-        .unwrap();
-    stream.write_all(b"read m:value\n").await.unwrap();
-    pause().await;
-    pause().await;
-    let mut reads_received = 0;
-    while let Ok(event) = events.try_recv() {
-        if matches!(&event, NodeEvent::MessageReceived { line, .. } if &**line == "read m:value") {
-            reads_received += 1;
-        }
-    }
-    assert_eq!(reads_received, 1, "the second read is not taken");
-    gate.add_permits(1);
-
-    // the client catches up: it gets both replies
-    let mut reader = BufReader::new(stream);
-    let mut replies = 0;
-    let mut line = String::new();
-    while replies < 2 {
-        line.clear();
-        tokio::time::timeout(Duration::from_secs(20), reader.read_line(&mut line))
-            .await
-            .expect("the node goes on once the client reads")
-            .unwrap();
-        if line.starts_with("reply m:value ") {
-            replies += 1;
-        }
-    }
-    assert_eq!(
-        hw.calls("value"),
-        2,
-        "not shared: taken after the first reply"
-    );
 }
 
 // --- concurrent polls

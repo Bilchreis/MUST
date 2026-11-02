@@ -498,3 +498,118 @@ fn no_such_parameter(module: &ModuleModel, parameter: &str) -> SecopError {
     };
     SecopError::new(ErrorClass::NoSuchParameter, message)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use must_types::{DataInfo, Value};
+    use tokio::io::{AsyncWriteExt, duplex};
+    use tokio::sync::Semaphore;
+    use tokio_util::task::TaskTracker;
+
+    use super::super::actor::spawn_actor;
+    use super::*;
+    use crate::handler::{Ctx, HandlerResult, ModuleHandler};
+    use crate::{Module, NodeBuilder, Parameter};
+
+    /// Counts its reads; each waits at the gate.
+    struct Gated {
+        gate: Arc<Semaphore>,
+        reads: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ModuleHandler for Gated {
+        async fn read(&self, _ctx: &Ctx, _parameter: &str) -> HandlerResult {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            self.gate.acquire().await.unwrap().forget();
+            Ok(Value::Double(1.0).into())
+        }
+    }
+
+    /// The outgoing queue is set directly: how much an unread socket absorbs depends on
+    /// the operating system.
+    #[tokio::test]
+    async fn slow_client_gets_no_following_request_taken() {
+        let handler = Arc::new(Gated {
+            gate: Arc::new(Semaphore::new(0)),
+            reads: AtomicUsize::new(0),
+        });
+        let value = DataInfo::double().build().unwrap();
+        let node = NodeBuilder::new("n", "a node")
+            .max_outgoing_bytes(1000)
+            .module(
+                Module::new("m", "a module")
+                    .interface_classes(["Readable"])
+                    .parameter(Parameter::new("value", value.clone(), "value"))
+                    .unwrap()
+                    .parameter(Parameter::new(
+                        "status",
+                        DataInfo::tuple(&[
+                            DataInfo::enumeration([("IDLE", 100)]).build().unwrap(),
+                            DataInfo::string().build().unwrap(),
+                        ])
+                        .build()
+                        .unwrap(),
+                        "status",
+                    ))
+                    .unwrap()
+                    .no_polling()
+                    .handler_arc(Arc::clone(&handler) as Arc<dyn ModuleHandler>),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+        let hub = Arc::new(Hub::new(Arc::clone(&node.model), "{}".into()));
+        let close = CancellationToken::new();
+        let tracker = TaskTracker::new();
+        let actor = spawn_actor(&hub, "m", &tracker, close.clone());
+        let (tx, mut outgoing) = mpsc::unbounded_channel();
+        let stats = Arc::new(QueueStats::default());
+        let peer = SocketAddr::from(([127, 0, 0, 1], 1));
+        let id = hub.register(peer, tx, Arc::clone(&stats), close.clone());
+        let mut connection = Connection {
+            hub: Arc::clone(&hub),
+            actors: Arc::new(HashMap::from([("m".to_owned(), actor)])),
+            id,
+            stats: Arc::clone(&stats),
+            close: close.clone(),
+        };
+        let (mut client, mut reader) = duplex(1024);
+        let serving = tokio::spawn(async move { connection.read_loop(&mut reader).await });
+        let pause = || tokio::time::sleep(Duration::from_millis(100));
+
+        client.write_all(b"read m:value\n").await.unwrap();
+        pause().await;
+        assert_eq!(handler.reads.load(Ordering::SeqCst), 1);
+
+        // too much is queued while the read is handled: its repeat is not taken
+        stats.total.store(2000, Ordering::Release);
+        client.write_all(b"read m:value\n").await.unwrap();
+        pause().await;
+        handler.gate.add_permits(1);
+        let first = outgoing.recv().await.unwrap();
+        assert!(first.line.starts_with("reply m:value "), "{}", first.line);
+        pause().await;
+        assert_eq!(
+            handler.reads.load(Ordering::SeqCst),
+            1,
+            "the second read is not taken"
+        );
+
+        // the client has received enough: it is taken, after the first reply, so not shared
+        stats.total.store(0, Ordering::Release);
+        stats.drained.notify_waiters();
+        handler.gate.add_permits(1);
+        let second = outgoing.recv().await.unwrap();
+        assert!(second.line.starts_with("reply m:value "), "{}", second.line);
+        assert_eq!(handler.reads.load(Ordering::SeqCst), 2);
+
+        drop(client);
+        assert_eq!(serving.await.unwrap(), "closed by client");
+        close.cancel();
+    }
+}
