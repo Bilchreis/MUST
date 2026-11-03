@@ -460,3 +460,65 @@ async fn status_helper_is_valid() {
     // the status values used by the simulation fit the status datainfo
     assert!(common::status_info().encode(&status(300, "x")).is_ok());
 }
+
+/// Keeps a publisher from its first read, as a handler feeding a background task would.
+#[derive(Default)]
+struct Keeper {
+    publisher: std::sync::OnceLock<must_server::Publisher>,
+}
+
+#[async_trait::async_trait]
+impl must_server::ModuleHandler for Keeper {
+    async fn read(&self, ctx: &must_server::Ctx, _parameter: &str) -> must_server::HandlerResult {
+        let _ = self.publisher.set(ctx.publisher());
+        Ok(Value::Double(1.0).into())
+    }
+}
+
+#[tokio::test]
+async fn stored_publisher_does_not_keep_the_node_alive() {
+    let keeper = Arc::new(Keeper::default());
+    let n = start(
+        NodeBuilder::new("keeper", "a node")
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .initial_read(false)
+            .monitored(false)
+            .log_files(must_server::logfiles::LogFiles::off())
+            .discovery(must_server::Discovery::off())
+            .module(
+                Module::new("m", "a module")
+                    .interface_classes(["Readable"])
+                    .handler_arc(Arc::clone(&keeper) as Arc<dyn must_server::ModuleHandler>)
+                    .parameter(Parameter::new("value", kelvin(), "value"))
+                    .unwrap()
+                    .parameter(
+                        Parameter::new("status", common::status_info(), "status")
+                            .initial_value(status(100, "ok")),
+                    )
+                    .unwrap()
+                    .no_polling(),
+            )
+            .unwrap(),
+    );
+    let mut c = Client::connect(n.local_addr()).await;
+    assert!(c.request("read m:value").await.starts_with("reply m:value"));
+    let publisher = keeper.publisher.get().expect("kept on the read").clone();
+
+    activate(&mut c).await;
+    publisher.update("value", Value::Double(42.0)).unwrap();
+    let line = c.line().await;
+    assert!(line.starts_with("update m:value [42"), "{line}");
+
+    n.stop().await;
+    drop(n);
+    let gone = tokio::time::timeout(Duration::from_secs(5), async {
+        while publisher.update("value", Value::Double(1.0)).is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        gone.is_ok(),
+        "the node was freed although the handler keeps a publisher"
+    );
+}

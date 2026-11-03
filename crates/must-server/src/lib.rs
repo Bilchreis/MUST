@@ -151,7 +151,7 @@ pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
 pub use launcher::show_status_tui;
 
-pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
+pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading};
 pub use model::{
     BuildError, Command, ModelError, ModelErrorKind, ModelWarning, Module, Node, NodeBuilder,
     Parameter,

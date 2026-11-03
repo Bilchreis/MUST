@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use must_types::{ErrorClass, SecopError, Value};
 use serde_json::Value as Json;
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::runtime::{Hub, ModuleShared};
 
@@ -58,6 +58,10 @@ pub type HandlerResult = Result<Reading, SecopError>;
 
 /// Context passed to handler calls. Updates sent through it reach activated clients
 /// before the reply to the request being handled.
+///
+/// A `Ctx` keeps its node alive. Do not store one in the handler (or in a task the handler
+/// owns): the node owns its handlers, so the node would never be freed. To publish values
+/// from a background task, store a [`Publisher`] from [`Ctx::publisher`] instead.
 #[derive(Clone)]
 pub struct Ctx {
     pub(crate) hub: Arc<Hub>,
@@ -99,6 +103,52 @@ impl Ctx {
     /// [`Module::concurrent_requests`](crate::Module::concurrent_requests).
     pub fn concurrent_requests(&self) -> bool {
         self.shared.concurrent()
+    }
+
+    /// A handle for publishing values of this module from outside handler calls, e.g. from
+    /// a background task, that does not keep the node alive.
+    pub fn publisher(&self) -> Publisher {
+        Publisher {
+            hub: Arc::downgrade(&self.hub),
+            module: self.module.clone(),
+        }
+    }
+}
+
+/// Publishes values of one module from anywhere, e.g. a background task reading the
+/// hardware. Unlike [`Ctx`], it does not keep the node alive, so a handler may store it;
+/// once the node is gone, publishing fails.
+#[derive(Clone, Debug)]
+pub struct Publisher {
+    hub: Weak<Hub>,
+    module: String,
+}
+
+impl Publisher {
+    /// Name of the module.
+    pub fn module(&self) -> &str {
+        &self.module
+    }
+
+    /// Publishes a new value of a parameter of the module, see [`Ctx::update`]. Also fails
+    /// if the node is gone.
+    pub fn update(&self, parameter: &str, reading: impl Into<Reading>) -> Result<(), SecopError> {
+        self.hub()?
+            .publish_value(&self.module, parameter, reading.into())
+            .map(|_| ())
+    }
+
+    /// Publishes that a parameter of the module could not be obtained, see
+    /// [`Ctx::update_error`]. Fails if the node is gone.
+    pub fn update_error(&self, parameter: &str, error: SecopError) -> Result<(), SecopError> {
+        self.hub()?.publish_error(&self.module, parameter, error);
+        Ok(())
+    }
+
+    fn hub(&self) -> Result<Arc<Hub>, SecopError> {
+        self.hub
+            .upgrade()
+            .ok_or_else(|| SecopError::new(ErrorClass::InternalError, "the node is gone"))
     }
 }
 
