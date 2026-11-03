@@ -664,6 +664,10 @@ int ctest_server_polling(unsigned short port)
     OK(SECoP_S_addWritableParameter("target", NULL, NULL, "poll"));
     OK(SECoP_S_addPropertyString("description", "target", "poll"));
     OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "poll"));
+    OK(SECoP_S_addReadableParameter("limit", NULL, "poll"));
+    OK(SECoP_S_addPropertyString("description", "limit", "poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "poll"));
+    OK(SECoP_S_addPropertyJSON("constant", "10.0", "poll"));
     OK(SECoP_S_addCommand("go", NULL, "poll"));
     OK(SECoP_S_addPropertyString("description", "go", "poll"));
     OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"command\",\"argument\":{\"type\":\"int\",\"min\":0,\"max\":10}}", "poll"));
@@ -786,6 +790,11 @@ int ctest_server_poll_step(int step)
         CHECK(SECoP_S_updateParameter2("other:mod1:value", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NODE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:value", "\"text\"", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_VALUE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:go", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        /* SHALL's codes for a constant and for names missing a part */
+        CHECK(SECoP_S_updateParameter2("pnode:mod1:limit", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        CHECK(SECoP_S_updateParameter2("", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NAME);
+        CHECK(SECoP_S_updateParameter2("pnode", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NODE);
+        CHECK(SECoP_S_updateParameter2("pnode:mod1", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_MODULE);
         /* as in SHALL, the text ends at the first NUL: a size counting the NUL or a whole
            buffer works */
         OK(SECoP_S_updateParameter2("pnode:mod1:value", "5.5", 4, NULL, 0, NAN));

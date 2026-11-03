@@ -717,11 +717,12 @@ pub unsafe extern "C" fn SECoP_S_updateParameter2(
 }
 
 fn update(name: &str, value: Json, sigma: Option<Json>, t: f64) -> Result<c_int, c_int> {
-    let mut parts = name.splitn(3, ':');
-    let (Some(node), Some(module), Some(parameter)) = (parts.next(), parts.next(), parts.next())
-    else {
-        return Err(err::INVALID_PARAMETER);
-    };
+    // SHALL's codes: an empty name, then the first missing part
+    if name.is_empty() {
+        return Err(err::INVALID_NAME);
+    }
+    let (node, rest) = name.split_once(':').ok_or(err::INVALID_NODE)?;
+    let (module, parameter) = rest.split_once(':').ok_or(err::INVALID_MODULE)?;
     let mut state = initialized()?;
     let index = state.node_index(node).ok_or(err::INVALID_NODE)?;
     let entry = &mut state.nodes[index];
@@ -735,6 +736,10 @@ fn update(name: &str, value: Json, sigma: Option<Json>, t: f64) -> Result<c_int,
         .ok_or(err::INVALID_PARAMETER)?;
     let module = draft.name.clone();
     let acc = &mut draft.accessibles[a];
+    // as in SHALL, a constant can't be updated
+    if acc.props.contains_key("constant") {
+        return Err(err::INVALID_PARAMETER);
+    }
     let AccessibleKind::Parameter { initial, .. } = &mut acc.kind else {
         return Err(err::INVALID_PARAMETER);
     };
