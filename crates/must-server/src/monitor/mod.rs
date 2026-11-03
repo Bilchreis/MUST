@@ -316,6 +316,9 @@ fn remove(id: NodeId) {
                 if let Some(follower) = entry.follower {
                     follower.abort();
                 }
+                for peer in &inner.peers {
+                    peer.forget(id);
+                }
                 inner.event(Event::NodeRemoved { node: id });
             }
             inner.nodes.is_empty()
