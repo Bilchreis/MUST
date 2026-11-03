@@ -10,13 +10,13 @@ use std::ptr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use must_server::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
+use must_server::{CallResult, CheckResult, Ctx, HandlerResult, ModuleHandler, Reading};
 use must_types::datainfo::CommandInfo;
 use must_types::{DataInfo, ErrorClass, Mode, SecopError, Value};
 use serde_json::Value as Json;
 use tokio::sync::{Mutex, oneshot};
 
-use super::build::{CallFunction, GetSet};
+use super::build::{CallFunction, CheckFunction, GetSet};
 use super::codes::{action, to_secop};
 use super::state;
 use crate::variant::{self, clone_handle, destroy_handle, new_handle};
@@ -31,6 +31,7 @@ pub(crate) enum Accessible {
         proto: variant::Node,
         getter: Option<GetSet>,
         setter: Option<GetSet>,
+        check: Option<CheckFunction>,
     },
     Command {
         full_name: CString,
@@ -38,6 +39,7 @@ pub(crate) enum Accessible {
         argument: Option<variant::Node>,
         result: Option<variant::Node>,
         function: Option<CallFunction>,
+        check: Option<CheckFunction>,
     },
 }
 
@@ -171,6 +173,37 @@ fn call_function(
     collect(code, handle, data, ptr::null_mut(), t)
 }
 
+/// Calls a check function with a handle holding `value` (NULL for a command without
+/// argument); only its code counts.
+fn call_check(function: CheckFunction, name: &CString, value: Option<variant::Node>) -> Answer {
+    let handle = value.map_or(ptr::null_mut(), new_handle);
+    let mut code: c_int = 0;
+    // SAFETY: an application function with the `SECoP_S_checkFunction` signature; the
+    // name, the value and the out pointer are valid for the duration of the call
+    unsafe { function(name.as_ptr(), handle, &raw mut code) };
+    destroy_handle(handle);
+    Answer {
+        code,
+        value: None,
+        sigma: None,
+        t: f64::NAN,
+    }
+}
+
+/// A value for the application: `json` imported into a copy of the type `proto`.
+fn to_variant(
+    proto: &variant::Node,
+    json: &Json,
+    accessible: &str,
+) -> Result<variant::Node, SecopError> {
+    let mut node = proto.clone();
+    if node.import(json, false) {
+        Ok(node)
+    } else {
+        Err(internal(format!("{accessible}: cannot pass {json} on")))
+    }
+}
+
 /// Reads the results of a call and frees the handles: the one passed in, and the ones the
 /// application may have put in its place (the library owns them, as in SHALL).
 fn collect(
@@ -286,10 +319,7 @@ impl ModuleHandler for ShallModule {
             return Err(SecopError::new(ErrorClass::NoSuchParameter, parameter));
         };
         let json = info.encode(&value).map_err(|e| internal(e.to_string()))?;
-        let mut node = proto.clone();
-        if !node.import(&json, false) {
-            return Err(internal(format!("{parameter}: cannot pass {json} on")));
-        }
+        let node = to_variant(proto, &json, parameter)?;
         let answer = if self.callbacks {
             let setter = setter.ok_or_else(|| missing("setter", parameter))?;
             let name = full_name.clone();
@@ -311,23 +341,12 @@ impl ModuleHandler for ShallModule {
             argument: argument_type,
             result: result_type,
             function,
+            ..
         }) = self.accessibles.get(command)
         else {
             return Err(SecopError::new(ErrorClass::NoSuchCommand, command));
         };
-        let argument = match (argument_type, &argument) {
-            (Some(proto), Some(value)) => {
-                let json = info
-                    .encode_argument(Some(value))
-                    .map_err(|e| internal(e.to_string()))?;
-                let mut node = proto.clone();
-                if !node.import(&json, false) {
-                    return Err(internal(format!("{command}: cannot pass {json} on")));
-                }
-                Some(node)
-            }
-            _ => None,
-        };
+        let argument = argument_variant(info, argument_type.as_ref(), argument.as_ref(), command)?;
         let answer = if self.callbacks {
             let function = function.ok_or_else(|| missing("command", command))?;
             let name = full_name.clone();
@@ -346,5 +365,65 @@ impl ModuleHandler for ShallModule {
             ))
         })?;
         Ok(result.map(|value| answer.into_reading(value)))
+    }
+
+    async fn check(&self, _ctx: &Ctx, accessible: &str, value: Option<Value>) -> CheckResult {
+        let (full_name, node, function) = match self.accessibles.get(accessible) {
+            Some(Accessible::Parameter {
+                full_name,
+                info,
+                proto,
+                check,
+                ..
+            }) => {
+                let value = value.ok_or_else(|| internal(format!("{accessible}: no value")))?;
+                let json = info.encode(&value).map_err(|e| internal(e.to_string()))?;
+                (
+                    full_name,
+                    Some(to_variant(proto, &json, accessible)?),
+                    check,
+                )
+            }
+            Some(Accessible::Command {
+                full_name,
+                info,
+                argument: argument_type,
+                check,
+                ..
+            }) => {
+                let node =
+                    argument_variant(info, argument_type.as_ref(), value.as_ref(), accessible)?;
+                (full_name, node, check)
+            }
+            None => return Err(SecopError::new(ErrorClass::NoSuchParameter, accessible)),
+        };
+        // the answer's value, if any, is ignored: `checked` sends the checked value back
+        let answer = if self.callbacks {
+            let function = function.ok_or_else(|| missing("check", accessible))?;
+            let name = full_name.clone();
+            self.blocking(move || call_check(function, &name, node))
+                .await?
+        } else {
+            self.request(action::CHECK, accessible, node).await?
+        };
+        answer.check(&self.context, accessible)
+    }
+}
+
+/// The argument of a command for the application: `None` for a command without argument.
+fn argument_variant(
+    info: &CommandInfo,
+    proto: Option<&variant::Node>,
+    value: Option<&Value>,
+    command: &str,
+) -> Result<Option<variant::Node>, SecopError> {
+    match (proto, value) {
+        (Some(proto), Some(value)) => {
+            let json = info
+                .encode_argument(Some(value))
+                .map_err(|e| internal(e.to_string()))?;
+            to_variant(proto, &json, command).map(Some)
+        }
+        _ => Ok(None),
     }
 }

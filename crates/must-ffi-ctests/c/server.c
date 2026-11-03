@@ -1179,6 +1179,175 @@ int ctest_filter_answer(const char* value)
     return 0;
 }
 
+/* --- checks (must addition): the Rust side sends the requests */
+
+static char g_check_name[64];
+static double g_check_value = 0.0;
+static int g_check_calls = 0, g_check_had_value = 0, g_check_setter_calls = 0;
+static enum SECoP_S_error g_check_code = SECoP_S_SUCCESS, g_check_impossible = SECoP_S_SUCCESS;
+
+static void check_accessible(const char* name, const CSECoPbaseType* pValue, enum SECoP_S_error* piError)
+{
+    ++g_check_calls;
+    strncpy(g_check_name, name, sizeof(g_check_name) - 1);
+    g_check_name[sizeof(g_check_name) - 1] = '\0';
+    g_check_had_value = pValue != NULL;
+    g_check_value = 0.0;
+    if (pValue != NULL && !SECoP_V_getDouble(pValue, 0, 0, &g_check_value)) {
+        *piError = SECoP_S_ERROR_INTERNAL;
+        return;
+    }
+    *piError = g_check_code;
+}
+
+static void get_check(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                      CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppSigma;
+    (void)timestamp;
+    SECoP_V_modifyDouble(*ppData, 0, 0, 1.0);
+    *piError = SECoP_S_SUCCESS;
+}
+
+static void set_check(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                      CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppData;
+    (void)ppSigma;
+    (void)timestamp;
+    ++g_check_setter_calls;
+    *piError = SECoP_S_SUCCESS;
+}
+
+static void call_check(const char* name, const CSECoPbaseType* pArgument, enum SECoP_S_error* piError,
+                       CSECoPbaseType** ppReturn, double* timestamp)
+{
+    (void)name;
+    (void)pArgument;
+    (void)ppReturn;
+    (void)timestamp;
+    *piError = SECoP_S_SUCCESS;
+}
+
+/* callback mode: node "cknode" (context "chk_cb") with mod1:target (checkable, max 1000),
+   mod1:go (checkable, double argument), mod1:stop (checkable, no argument) and
+   mod1:other (not checkable); "Impossible" is registered */
+int ctest_check_cb_build(unsigned short port)
+{
+    g_check_calls = 0;
+    g_check_setter_calls = 0;
+    g_check_code = SECoP_S_SUCCESS;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "chk_cb"));
+    OK(SECoP_S_createNode2("cknode", "checks, callbacks", "127.0.0.1", port, "chk_cb"));
+    OK(SECoP_S_addModule("mod1", "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "module", "chk_cb"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "chk_cb"));
+    /* the focus is a module: refused, and nothing changes */
+    CHECK(SECoP_S_setCheckFunction(check_accessible, "chk_cb") == SECoP_S_ERROR_INVALID_PARAMETER);
+    OK(SECoP_S_addWritableParameter("target", get_check, set_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "target", "chk_cb"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\",\"max\":1000}", "chk_cb"));
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_addCommand("go", call_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "go", "chk_cb"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"command\",\"argument\":{\"type\":\"double\"}}", "chk_cb"));
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_addCommand("stop", call_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "stop", "chk_cb"));
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_addWritableParameter("other", get_check, set_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "other", "chk_cb"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_cb"));
+    /* set and cleared again: not checkable */
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_setCheckFunction(NULL, "chk_cb"));
+    CHECK(complete("chk_cb") >= 0);
+    g_check_impossible = SECoP_S_registerUserError("Impossible", "not in this configuration", "chk_cb");
+    CHECK(g_check_impossible <= -1000);
+    return 0;
+}
+
+/* what the check function answers next: 0 success, 1 out of range, 2 "Impossible" */
+int ctest_check_cb_answer(int which)
+{
+    g_check_code = which == 0 ? SECoP_S_SUCCESS : which == 1 ? SECoP_S_ERROR_OUT_OF_RANGE : g_check_impossible;
+    return 0;
+}
+
+/* the last call of the check function: its name and value (NaN: no value), and how many
+   calls there were of it and of the setter */
+int ctest_check_cb_last(const char* name, double value, int calls, int setter_calls)
+{
+    CHECK(g_check_calls == calls);
+    CHECK(g_check_setter_calls == setter_calls);
+    if (calls > 0) {
+        CHECK(strcmp(g_check_name, name) == 0);
+        if (value != value) {
+            CHECK(!g_check_had_value);
+        } else {
+            CHECK(g_check_had_value && g_check_value == value);
+        }
+    }
+    return 0;
+}
+
+/* callback mode: "checkable" without a check function stops nodeComplete */
+int ctest_check_cb_missing(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "chk_bad"));
+    OK(SECoP_S_createNode2("cbad", "checkable without function", "127.0.0.1", port, "chk_bad"));
+    OK(SECoP_S_addModule("mod1", "chk_bad"));
+    OK(SECoP_S_addPropertyString("description", "module", "chk_bad"));
+    OK(SECoP_S_addWritableParameter("target", get_check, set_check, "chk_bad"));
+    OK(SECoP_S_addPropertyString("description", "target", "chk_bad"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_bad"));
+    OK(SECoP_S_addPropertyBoolean("checkable", 1, "chk_bad"));
+    CHECK(SECoP_S_nodeComplete("chk_bad") == SECoP_S_ERROR_MISSING_MANDATORY);
+    /* names cbad:mod1:target */
+    SECoP_S_showErrors();
+    SECoP_S_doneLibrary(0, "chk_bad");
+    return 0;
+}
+
+/* polling mode: node "cpnode" (context "chk_poll", node timeout 1 s) with mod1:target
+   (checkable through the property) and mod1:other (not checkable) */
+int ctest_check_poll_build(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "chk_poll"));
+    OK(SECoP_S_createNode2("cpnode", "checks, polling", "127.0.0.1", port, "chk_poll"));
+    OK(SECoP_S_addPropertyDouble("timeout", 1.0, "chk_poll"));
+    OK(SECoP_S_addModule("mod1", "chk_poll"));
+    OK(SECoP_S_addPropertyString("description", "module", "chk_poll"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "chk_poll"));
+    OK(SECoP_S_addWritableParameter("target", NULL, NULL, "chk_poll"));
+    OK(SECoP_S_addPropertyString("description", "target", "chk_poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_poll"));
+    OK(SECoP_S_addPropertyBoolean("checkable", 1, "chk_poll"));
+    OK(SECoP_S_addWritableParameter("other", NULL, NULL, "chk_poll"));
+    OK(SECoP_S_addPropertyString("description", "other", "chk_poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_poll"));
+    CHECK(complete("chk_poll") >= 0);
+    return 0;
+}
+
+/* takes the next request with SECoP_S_getStoredCommand2: a check of cpnode:mod1:target
+   with the value given, answered with SECoP_S_SUCCESS and a value that is ignored */
+int ctest_check_poll_answer(double expected)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+    OK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "chk_poll"));
+    CHECK(action == SECoP_S_ACTION_CHECK);
+    CHECK(strcmp(name, "cpnode:mod1:target") == 0);
+    CHECK(strtod(value, NULL) == expected);
+    OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "12345", -1, NULL, 0, 0.0));
+    return 0;
+}
+
 /* --- stress */
 
 int ctest_server_stress_build(unsigned short port)

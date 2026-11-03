@@ -136,6 +136,11 @@ enum SECoP_S_action
 
     /** SECoP do command */
     SECoP_S_ACTION_DO     = 3,
+
+    /** must addition, not in SHALL: SECoP check command, the dry run of a change or do
+     *  of an accessible with "checkable": true; answer it with SECoP_S_SUCCESS or an
+     *  error, any value is ignored */
+    SECoP_S_ACTION_CHECK  = 4,
 };
 
 /**
@@ -159,5 +164,20 @@ typedef void (*SECoP_S_getsetFunction)(const char* name, enum SECoP_S_error* piE
  * \param[out]    timestamp   SECoP time stamp (fractional unix seconds)
  */
 typedef void (*SECoP_S_callFunction)(const char* name, const CSECoPbaseType* pArgument, enum SECoP_S_error* piError, CSECoPbaseType** ppReturn, double* timestamp);
+
+/**
+ * \brief must addition, not in SHALL: prototype of check functions, which decide whether a
+ *        SECoP check (the dry run of a change or do) would be accepted, see
+ *        \ref SECoP_S_setCheckFunction. A check function must not change anything and
+ *        should not depend on the module's status.
+ * \ingroup exptype
+ * \param[in]     name        name of the accessible (parameter or command) with full name (node:module:accessible)
+ * \param[in]     pValue      value to check, already validated against the datainfo;
+ *                            NULL for a command without argument
+ * \param[out]    piError     SECoP_S_SUCCESS if the value would be accepted, else a
+ *                            SECoP_S_error (e.g. SECoP_S_ERROR_OUT_OF_RANGE or a code of
+ *                            \ref SECoP_S_registerUserError)
+ */
+typedef void (*SECoP_S_checkFunction)(const char* name, const CSECoPbaseType* pValue, enum SECoP_S_error* piError);
 
 #endif /*__SECOP_ERROR_H__3BB08092_2314_4A0B_B6CE_4D243DB4223080__*/

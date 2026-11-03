@@ -94,7 +94,9 @@ pub(crate) enum Request<'a> {
     Change(Option<&'a str>, Option<&'a str>),
     /// `do <module>:<command> [<argument>]`
     Do(Option<&'a str>, Option<&'a str>),
-    /// An action must does not implement (`check`, `logging`) or does not know.
+    /// `check <module>:<accessible> [<value>]`
+    Check(Option<&'a str>, Option<&'a str>),
+    /// An action must does not implement (`logging`) or does not know.
     Unsupported {
         action: &'a str,
         specifier: Option<&'a str>,
@@ -119,6 +121,7 @@ pub(crate) fn parse_request(line: &str) -> Request<'_> {
         "read" => Request::Read(specifier),
         "change" => Request::Change(specifier, data),
         "do" => Request::Do(specifier, data),
+        "check" => Request::Check(specifier, data),
         _ => Request::Unsupported { action, specifier },
     }
 }
@@ -277,10 +280,11 @@ mod tests {
         );
         assert_eq!(
             parse_request("check t1:target 5"),
-            Request::Unsupported {
-                action: "check",
-                specifier: Some("t1:target")
-            }
+            Request::Check(Some("t1:target"), Some("5"))
+        );
+        assert_eq!(
+            parse_request("check t1:stop"),
+            Request::Check(Some("t1:stop"), None)
         );
         assert_eq!(
             parse_request(r#"logging  "debug""#),

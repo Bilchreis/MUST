@@ -59,6 +59,8 @@ pub(crate) mod action {
     pub const READ: c_int = 1;
     pub const CHANGE: c_int = 2;
     pub const DO: c_int = 3;
+    /// A must addition, not in SHALL: the dry run of a `change` or `do`.
+    pub const CHECK: c_int = 4;
 }
 
 /// SHALL's description of a code, or `<name>: <text>` of a registered user error, as
