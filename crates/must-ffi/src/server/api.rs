@@ -704,7 +704,9 @@ fn complete(context: &str) -> Result<c_int, c_int> {
     if warnings.is_empty() {
         Ok(err::SUCCESS)
     } else {
-        state.warnings.extend(warnings);
+        for warning in warnings {
+            state.warnings.push(warning);
+        }
         Ok(err::WARNING_MISS_PROPERTIES)
     }
 }
@@ -713,15 +715,18 @@ fn complete(context: &str) -> Result<c_int, c_int> {
 #[unsafe(no_mangle)]
 pub extern "C" fn SECoP_S_showErrors() {
     guard((), || {
-        let (errors, warnings) = {
+        let ((dropped_errors, errors), (dropped_warnings, warnings)) = {
             let mut state = state::lock();
-            (
-                std::mem::take(&mut state.errors),
-                std::mem::take(&mut state.warnings),
-            )
+            (state.errors.take(), state.warnings.take())
         };
+        if dropped_errors > 0 {
+            eprintln!("SECoP error: {dropped_errors} earlier errors were dropped");
+        }
         for e in errors {
             eprintln!("SECoP error: {e}");
+        }
+        if dropped_warnings > 0 {
+            eprintln!("SECoP warning: {dropped_warnings} earlier warnings were dropped");
         }
         for w in warnings {
             eprintln!("SECoP warning: {w}");
@@ -871,12 +876,14 @@ unsafe fn hand_out(
     name_size: *mut c_int,
     value: *mut *mut CSECoPbaseType,
 ) -> c_int {
-    let handle = request.value.map_or(std::ptr::null_mut(), new_handle);
     // SAFETY: forwarded caller contract
     let fits = unsafe {
         put(id, request.id);
         put(action, request.action);
-        put(value, handle);
+        // only made for a caller that takes it: nobody could destroy it otherwise
+        if !value.is_null() {
+            value.write(request.value.map_or(std::ptr::null_mut(), new_handle));
+        }
         write_text(request.name.as_bytes(), name, name_size)
     };
     if fits {

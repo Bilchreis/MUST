@@ -87,8 +87,39 @@ pub(crate) struct State {
     pub handed_out: HashMap<u64, Pending>,
     pub next_id: u64,
     /// Errors and warnings while building nodes, for `SECoP_S_showErrors`.
-    pub errors: Vec<String>,
-    pub warnings: Vec<String>,
+    pub errors: Messages,
+    pub warnings: Messages,
+}
+
+/// How many errors (and as many warnings) are kept for `SECoP_S_showErrors`.
+const MAX_MESSAGES: usize = 1000;
+
+/// The latest errors or warnings, for a host that may never call `SECoP_S_showErrors`:
+/// beyond [`MAX_MESSAGES`], the oldest are dropped and counted.
+#[derive(Default)]
+pub(crate) struct Messages {
+    list: VecDeque<String>,
+    dropped: usize,
+}
+
+impl Messages {
+    pub(crate) fn push(&mut self, message: String) {
+        if self.list.len() >= MAX_MESSAGES {
+            self.list.pop_front();
+            self.dropped += 1;
+        }
+        self.list.push_back(message);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Takes the messages: how many were dropped, and the rest, oldest first.
+    pub(crate) fn take(&mut self) -> (usize, VecDeque<String>) {
+        let taken = std::mem::take(self);
+        (taken.dropped, taken.list)
+    }
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Mutex::default);
@@ -370,5 +401,18 @@ mod tests {
         }
         state.contexts.remove(A);
         state.contexts.remove(B);
+    }
+
+    #[test]
+    fn messages_keep_the_latest() {
+        let mut messages = Messages::default();
+        for i in 0..MAX_MESSAGES + 5 {
+            messages.push(i.to_string());
+        }
+        let (dropped, list) = messages.take();
+        assert_eq!(dropped, 5);
+        assert_eq!(list.len(), MAX_MESSAGES);
+        assert_eq!(list.front().map(String::as_str), Some("5"));
+        assert_eq!(messages.take(), (0, VecDeque::new()), "taken");
     }
 }
