@@ -119,6 +119,53 @@ async fn startup_reads_fill_the_cache() {
 }
 
 #[tokio::test]
+async fn startup_reads_of_a_module_with_more_parameters_than_jobs() {
+    // more than twice the jobs a module holds, so the startup reads cannot all be queued
+    // at once
+    const EXTRA: usize = 200;
+    let sim = Arc::new(Sim::default());
+    let mut module = Module::new("m", "x")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("status", common::status_info(), "s"))
+        .unwrap()
+        .no_polling()
+        .handler_arc(Arc::clone(&sim) as Arc<dyn must_server::ModuleHandler>);
+    for i in 0..EXTRA {
+        module = module
+            .parameter(Parameter::new(&format!("p{i}"), kelvin(), "x"))
+            .unwrap();
+    }
+    let n = start(
+        NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .module(module)
+            .unwrap(),
+    );
+    let all = EXTRA + 2;
+    let read = tokio::time::timeout(Duration::from_secs(5), async {
+        while sim.reads.load(Ordering::SeqCst) < all {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        read.is_ok(),
+        "{} of {all} parameters read",
+        sim.reads.load(Ordering::SeqCst)
+    );
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send("activate").await;
+    let mut updates = 0;
+    while c.line().await != "active" {
+        updates += 1;
+    }
+    assert_eq!(updates, all, "an initial update for every parameter");
+}
+
+#[tokio::test]
 async fn hanging_handler_times_out() {
     let n = start(node(Arc::new(Sim::default())).timeout(0.5));
     let mut c = Client::connect(n.local_addr()).await;
