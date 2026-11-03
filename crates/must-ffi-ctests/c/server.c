@@ -1217,3 +1217,53 @@ int ctest_status_window(void)
     SECoP_S_doneLibrary(1, "gui");
     return 0;
 }
+
+/* --- application log messages (must addition): node "my_node", module mod1 in callback
+   mode, whose getter logs for its own module while the node answers the read */
+
+static volatile int g_log_getter_rc = 1;
+
+static void get_logging(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                        CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppSigma;
+    (void)timestamp;
+    g_log_getter_rc = SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "read requested");
+    SECoP_V_modifyDouble(*ppData, 0, 0, 1.0);
+    *piError = SECoP_S_SUCCESS;
+}
+
+int ctest_log_build(unsigned short port)
+{
+    g_log_getter_rc = 1;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "log"));
+    OK(SECoP_S_createNode2("my_node", "logs", "127.0.0.1", port, "log"));
+    OK(SECoP_S_addModule("mod1", "log"));
+    OK(SECoP_S_addPropertyString("description", "logging module", "log"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "log"));
+    OK(SECoP_S_addReadableParameter("value", get_logging, "log"));
+    OK(SECoP_S_addPropertyString("description", "value", "log"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "log"));
+    /* not complete yet */
+    CHECK(SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "x") == SECoP_S_ERROR_INVALID_NODE);
+    CHECK(complete("log") >= 0);
+    CHECK(SECoP_S_logMessage("my_node:nope", SECoP_S_LOG_INFO, "x") == SECoP_S_ERROR_INVALID_MODULE);
+    CHECK(SECoP_S_logMessage("other:mod1", SECoP_S_LOG_INFO, "x") == SECoP_S_ERROR_INVALID_NODE);
+    CHECK(SECoP_S_logMessage("my_node:mod1", (enum SECoP_S_logLevel)0, "x") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(SECoP_S_logMessage("my_node:mod1", (enum SECoP_S_logLevel)5, "x") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, NULL) == SECoP_S_ERROR_INVALID_VALUE);
+    return 0;
+}
+
+/* SECoP_S_logMessage for my_node:mod1 */
+int ctest_log_message(int level, const char* text)
+{
+    return SECoP_S_logMessage("my_node:mod1", (enum SECoP_S_logLevel)level, text);
+}
+
+/* what SECoP_S_logMessage returned in the getter, 1 before it ran */
+int ctest_log_getter_rc(void)
+{
+    return g_log_getter_rc;
+}

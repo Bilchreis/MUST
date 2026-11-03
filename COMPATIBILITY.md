@@ -74,8 +74,22 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `"expert"`.
 - **Custom properties** without a leading underscore are published under the given
   name, as in SHALL, and return `SECoP_S_WARNING_CUSTOM_PROPERTY`.
-- The optional messages `check` and `logging` are answered with `ProtocolError`; the
-  data type `matrix` is not supported.
+- **Remote logging** (`logging`) is supported; SHALL answered it with an error. A client
+  sends `logging <module> <level>`, or `logging  <level>` for the whole node, with
+  `"debug"`, `"info"`, `"error"` or `"off"` (`false` counts as `"off"`), and then receives
+  that module's log messages as `log <module>:<level> "<message>"` events. The reply
+  echoes the request; a `module:parameter` specifier stands for its module and the reply
+  names only the module. Every module starts at `"off"` for every connection.
+  - **What is sent.** What the node logs about a module (failed polls and reads, values
+    that do not fit their datainfo) and what the application logs with
+    `SECoP_S_logMessage` (see below). must's error and warning records are sent as
+    `error`, info as `info`, debug as `debug`. Records not tied to a module (a failed
+    accept, a panicking handler) are not sent: a `log` event must name a module.
+  - **Slow clients.** Log events are best effort: while a client's unread updates and log
+    events exceed the slow-client limit, its log events are dropped instead of closing
+    the connection.
+- The optional message `check` is answered with `ProtocolError`; the data type `matrix`
+  is not supported.
 
 ## Library behavior
 
@@ -189,12 +203,15 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 
 ## Additions to SHALL
 
-must exports four functions that SHALL lacks. SHALL-LabVIEW's VIs refer to them, but no
-SHALL library ever exported them. A program that uses them does not run with SHALL.
-`SECoP-exports.h` declares them, marked as must additions. All four take the arguments
-the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass no context
-ID yet: each of them must be updated to pass `Context_ID` as one more argument at the
-end before it works with must.
+must exports five functions that SHALL lacks. A program that uses them does not run
+with SHALL. `SECoP-exports.h` declares them, marked as must additions.
+
+SHALL-LabVIEW's VIs refer to four of them, but no SHALL library ever exported them:
+`SECoP_S_filterStoredCommand[2]` and `SECoP_S_registerUserError` /
+`SECoP_S_unregisterUserError`. They take the arguments the VIs pass, in the VIs' order,
+plus `szContextID` at the end. The VIs pass no context ID yet: each of them must be
+updated to pass `Context_ID` as one more argument at the end before it works with must.
+The fifth, `SECoP_S_logMessage`, is must's own.
 
 - **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
   out only the oldest stored request of the context that matches a filter. The other
@@ -247,6 +264,31 @@ end before it works with must.
   registered. A removed code is never handed out again; a request answered with it gets
   an `InternalError` report. Returns `SECoP_S_ERROR_INVALID_VALUE` for a code the context
   has not registered, including SHALL's own codes.
+- **`SECoP_S_logMessage(szModule, iLevel, szMessage)`** logs a message for a module of a
+  running node, for SECoP's remote logging (see above):
+  ```c
+  enum SECoP_S_error SECoP_S_logMessage(const char* szModule, enum SECoP_S_logLevel iLevel,
+      const char* szMessage);
+  ```
+  - **Module.** `szModule` is `node:module`, like the names of
+    `SECoP_S_updateParameter`; case is ignored. Like that function it takes no
+    `szContextID`.
+  - **Levels.** `enum SECoP_S_logLevel` (in `SECoP-types.h`): `SECoP_S_LOG_ERROR` (1) and
+    `SECoP_S_LOG_WARNING` (2) are sent as `error`, `SECoP_S_LOG_INFO` (3) as `info`,
+    `SECoP_S_LOG_DEBUG` (4) as `debug`, to the clients whose level for the module admits
+    them.
+  - **Where messages go.** Error, warning and info messages also appear in the status
+    TUI and the node's log files, like the node's own records. Debug messages only reach
+    remote clients (and Rust `tracing`), so that a chatty host does not fill the log
+    files.
+  - **Threads.** It can be called from any thread, also from a getter, setter or command
+    function while the node waits for it; it never waits for the node.
+  - **Slow clients.** Log events count toward a client's unread updates: logging much at
+    debug level to a client that does not read can make a later update disconnect it.
+  - **Results.** `SECoP_S_SUCCESS`; `SECoP_S_ERROR_INVALID_NODE` for an unknown node or
+    one before `SECoP_S_nodeComplete`; `SECoP_S_ERROR_INVALID_MODULE` for an unknown
+    module; `SECoP_S_ERROR_INVALID_VALUE` for a level other than 1 to 4 or a NULL
+    `szMessage`. Invalid UTF-8 in the text is replaced.
 
 ## Not provided
 

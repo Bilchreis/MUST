@@ -18,7 +18,9 @@
 //! with the kinds `>` (received from a client), `<` (sent to a client), `U` (a published
 //! `update` or `error_update`, logged once however many clients receive it), `*`
 //! (connections, start and stop, dropped lines) and `INFO`/`WARN`/`ERROR` (what the node
-//! logs about itself, with the module when known).
+//! logs about itself, with the module when known, and what the application logs with
+//! [`Ctx::log`](crate::Ctx::log) and the like). Debug records of the application and the
+//! `log` events sent to clients are not written.
 //!
 //! Files whose day ended more than [`LogFiles::days`] days ago (default 2) are deleted
 //! when a node starts and every hour, in the folders of the nodes this process runs.

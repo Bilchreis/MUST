@@ -51,11 +51,15 @@ Each line starts with the local time (milliseconds, UTC offset), then the kind:
 | `<` | a message sent to a client (complete, including `describing` replies) |
 | `U` | a parameter value or error the node published (`update` / `error_update`) |
 | `*` | node started or stopped, client connected or disconnected (with the reason), lines dropped |
-| `INFO`, `WARN`, `ERROR` | what the node logs about itself, with the module when known (`WARN t1: ...`) |
+| `INFO`, `WARN`, `ERROR` | what the node logs about itself, with the module when known (`WARN t1: ...`), and what the application logs for a module (`Ctx::log`, `Publisher::log`, `RunningNode::log`, `SECoP_S_logMessage`) |
 
 Updates are logged **once**, when the node publishes them, however many clients are
 activated, and also while no client is activated; the copies sent to the individual
-clients (including the initial updates after `activate`) are not logged again. Messages are
+clients (including the initial updates after `activate`) are not logged again. Likewise, the
+`log` events sent to clients that asked for them with SECoP's `logging` request are not
+logged as `<` lines: their records are already in the file once, as `INFO`, `WARN` or
+`ERROR`. Debug records of the application are not written at all; they only reach remote
+clients at level `"debug"` and `tracing`, so that a chatty host does not fill the disk. Messages are
 written unchanged, so the files can be read with `less`, searched with `grep` and opened in
 any editor.
 

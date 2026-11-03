@@ -44,6 +44,9 @@ pub enum NodeEvent {
     },
     /// A line was sent to a client (without line ending). Updates are sent as
     /// `MessageSent` to each activated client, besides one [`Updated`](Self::Updated).
+    /// Remote logging's `log` events are not: their records are [`Log`](Self::Log)
+    /// events, except debug records of the application, which stay out of monitoring and
+    /// the log files.
     MessageSent {
         /// The connection.
         id: ConnectionId,

@@ -44,6 +44,10 @@ int run_header_example(int allowed_to_loop)
         SECoP_S_filterStoredCommand2("my_node:mod1:value", SECoP_S_ACTION_READ, &id, &action, accessible,
                                      &accessible_size, value, &value_size, "example");
         SECoP_S_unregisterUserError(code, "example");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "from the header check");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_ERROR, "e");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_WARNING, "w");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_DEBUG, "d");
     }
 
     {

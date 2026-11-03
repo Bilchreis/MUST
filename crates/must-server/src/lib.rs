@@ -17,8 +17,7 @@
 //! `change` and `do`, validates incoming values against their datainfo (including
 //! dynamic limits from `_min`/`_max`/`_limits` parameters), sends updates to activated
 //! clients, and keeps SECoP's ordering rules: updates caused by a request reach clients
-//! before its reply. The optional `check` and `logging` messages are answered with
-//! `ProtocolError`.
+//! before its reply. The optional `check` message is answered with `ProtocolError`.
 //!
 //! # Example
 //!
@@ -128,6 +127,25 @@
 //! [`SecopError::custom`](must_types::SecopError::custom), e.g. `_Overheated`; SECoP asks
 //! clients to treat classes they do not know as generic errors.
 //!
+//! # Remote logging
+//!
+//! A client sends `logging <module> <level>` (`logging  <level>` for the whole node) with
+//! `"debug"`, `"info"`, `"error"` or `"off"` to receive that module's log records as
+//! `log <module>:<level> "<message>"` events over its connection. Every module starts at
+//! `"off"`; a node-wide request replaces all module levels, a module request overrides
+//! the node-wide level for that module, and a parameter specifier stands for its module.
+//!
+//! The records sent are those the node logs about a module (failed polls and reads,
+//! values that do not fit their datainfo) and what the application logs with
+//! [`Ctx::log`], [`Publisher::log`] or [`RunningNode::log`]. must's error and warning
+//! records are sent as `error`, info records as `info`, the application's debug records
+//! as `debug`. Records not tied to a module are not sent, as a `log` event names one.
+//!
+//! Log events are best effort: while a client's unread updates and log events exceed
+//! [`NodeBuilder::max_outgoing_bytes`], its log events are dropped, so logging never
+//! closes a connection. They do count toward that limit, so heavy logging can make a
+//! later update close a client that does not read.
+//!
 //! # Discovery
 //!
 //! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP
@@ -151,7 +169,7 @@ pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
 pub use launcher::show_status_tui;
 
-pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading};
+pub use handler::{AppLogLevel, CallResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading};
 pub use model::{
     BuildError, Command, ModelError, ModelErrorKind, ModelWarning, Module, Node, NodeBuilder,
     Parameter,

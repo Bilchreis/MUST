@@ -100,6 +100,9 @@ pub mod server {
         pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
         pub fn ctest_monitor_building() -> c_int;
         pub fn ctest_status_window() -> c_int;
+        pub fn ctest_log_build(port: c_ushort) -> c_int;
+        pub fn ctest_log_message(level: c_int, text: *const c_char) -> c_int;
+        pub fn ctest_log_getter_rc() -> c_int;
     }
 }
 

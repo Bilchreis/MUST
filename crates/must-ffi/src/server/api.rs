@@ -4,7 +4,8 @@
 //!
 //! Context IDs are strings; NULL is the same context as `""`. Functions without a
 //! context argument find their node by name (`SECoP_S_deleteNode`, `SECoP_S_setAddFocus`,
-//! `SECoP_S_updateParameter*`) or their request by id (`SECoP_S_putCommandAnswer*`).
+//! `SECoP_S_updateParameter*`, `SECoP_S_logMessage`) or their request by id
+//! (`SECoP_S_putCommandAnswer*`).
 
 #![allow(non_snake_case)]
 
@@ -12,8 +13,8 @@ use std::collections::VecDeque;
 use std::ffi::{c_char, c_int, c_longlong, c_ulonglong, c_ushort, c_void};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use must_server::Reading;
 use must_server::monitor::ExternalNode;
+use must_server::{AppLogLevel, Reading};
 use must_types::Mode;
 use serde_json::Value as Json;
 
@@ -840,6 +841,55 @@ fn update(name: &str, value: Json, sigma: Option<Json>, t: f64) -> Result<c_int,
         .map_err(|_| err::INVALID_VALUE)
 }
 
+/// must addition, not in SHALL: logs `szMessage` for the module `szModule`
+/// (`node:module`) of a running node at `SECoP_S_LOG_ERROR` (1), `SECoP_S_LOG_WARNING`
+/// (2), `SECoP_S_LOG_INFO` (3) or `SECoP_S_LOG_DEBUG` (4). Clients that asked for the
+/// module's log messages with SECoP's `logging` receive it as a `log` event; error,
+/// warning and info records also reach the status display and the log files. Invalid
+/// UTF-8 in the text is replaced. Safe to call from any thread, also from a callback.
+///
+/// # Safety
+/// `szModule` and `szMessage` must be NULL or NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SECoP_S_logMessage(
+    szModule: *const c_char,
+    iLevel: c_int,
+    szMessage: *const c_char,
+) -> c_int {
+    guard(err::INTERNAL, || {
+        // SAFETY: forwarded caller contract
+        let (name, message) = unsafe { (text(szModule), text(szMessage)) };
+        code(log_message(&name.unwrap_or_default(), iLevel, message))
+    })
+}
+
+fn log_message(name: &str, level: c_int, message: Option<String>) -> Result<c_int, c_int> {
+    // the codes of `SECoP_S_updateParameter`: an empty name, then the first missing part
+    if name.is_empty() {
+        return Err(err::INVALID_NAME);
+    }
+    let (node, module) = name.split_once(':').ok_or(err::INVALID_NODE)?;
+    let state = initialized()?;
+    let entry = &state.nodes[state.node_index(node).ok_or(err::INVALID_NODE)?];
+    let running = entry.running.as_ref().ok_or(err::INVALID_NODE)?;
+    let m = entry
+        .draft
+        .module_index(module)
+        .ok_or(err::INVALID_MODULE)?;
+    let level = match level {
+        1 => AppLogLevel::Error,
+        2 => AppLogLevel::Warning,
+        3 => AppLogLevel::Info,
+        4 => AppLogLevel::Debug,
+        _ => return Err(err::INVALID_VALUE),
+    };
+    let message = message.ok_or(err::INVALID_VALUE)?;
+    running
+        .log(&entry.draft.modules[m].name, level, message)
+        .map(|()| err::SUCCESS)
+        .map_err(|_| err::INVALID_MODULE)
+}
+
 /// What `SECoP_S_getStoredCommand[2]` hands out.
 struct Request {
     id: u64,
@@ -1189,4 +1239,69 @@ fn answer(
         .send(answer)
         .map(|()| err::SUCCESS)
         .map_err(|_| err::INVALID_NAME)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A context of its own: the library state is global and shared with other tests.
+    const CONTEXT: &core::ffi::CStr = c"api-tests-log";
+
+    fn log(name: &core::ffi::CStr, level: c_int, message: Option<&core::ffi::CStr>) -> c_int {
+        let message = message.map_or(std::ptr::null(), core::ffi::CStr::as_ptr);
+        // SAFETY: NUL-terminated strings or NULL
+        unsafe { SECoP_S_logMessage(name.as_ptr(), level, message) }
+    }
+
+    #[test]
+    fn log_message_errors() {
+        let ctx = CONTEXT.as_ptr();
+        // SAFETY: NUL-terminated strings; a node in polling mode on a free port
+        unsafe {
+            assert_eq!(
+                SECoP_S_initLibrary(std::ptr::null_mut(), 0, 0, ctx),
+                err::SUCCESS
+            );
+            let iface = c"127.0.0.1".as_ptr();
+            let rc = SECoP_S_createNode2(c"lognode".as_ptr(), c"logs".as_ptr(), iface, 0, ctx);
+            assert_eq!(rc, err::SUCCESS);
+            assert_eq!(SECoP_S_addModule(c"mod1".as_ptr(), ctx), err::SUCCESS);
+            let description = c"description".as_ptr();
+            let rc = SECoP_S_addPropertyString(description, c"a module".as_ptr(), ctx);
+            assert_eq!(rc, err::SUCCESS);
+        }
+        let message = Some(c"x");
+
+        // not complete yet
+        assert_eq!(log(c"lognode:mod1", 3, message), err::INVALID_NODE);
+        // SAFETY: a NUL-terminated string
+        assert!(unsafe { SECoP_S_nodeComplete(ctx) } >= 0);
+
+        assert_eq!(log(c"lognode:mod1", 3, message), err::SUCCESS);
+        assert_eq!(
+            log(c"LOGNODE:MOD1", 4, message),
+            err::SUCCESS,
+            "case is ignored"
+        );
+        assert_eq!(log(c"lognode:nope", 3, message), err::INVALID_MODULE);
+        assert_eq!(log(c"lognode:mod1:value", 3, message), err::INVALID_MODULE);
+        assert_eq!(log(c"other:mod1", 3, message), err::INVALID_NODE);
+        assert_eq!(log(c"lognode", 3, message), err::INVALID_NODE);
+        assert_eq!(log(c"", 3, message), err::INVALID_NAME);
+        for level in [0, 5, -1] {
+            assert_eq!(log(c"lognode:mod1", level, message), err::INVALID_VALUE);
+        }
+        assert_eq!(log(c"lognode:mod1", 1, None), err::INVALID_VALUE);
+        assert_eq!(
+            log(c"lognode:mod1", 2, Some(c"\xff not UTF-8")),
+            err::SUCCESS,
+            "invalid bytes are replaced"
+        );
+
+        // SAFETY: a NUL-terminated string
+        unsafe { SECoP_S_doneLibrary(0, ctx) };
+        // the node is gone (and with the last context the library is uninitialized)
+        assert!(log(c"lognode:mod1", 3, message) < 0);
+    }
 }

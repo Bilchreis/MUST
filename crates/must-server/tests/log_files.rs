@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use common::{Client, Sim, kelvin, node, sensor, status_info};
 use must_server::logfiles::{LogFiles, pause_writer};
-use must_server::{Module, NodeBuilder, Parameter, RunningNode};
+use must_server::{AppLogLevel, Module, NodeBuilder, Parameter, RunningNode};
 use must_types::Value;
 use tokio::runtime::Handle;
 
@@ -488,5 +488,34 @@ fn directory_and_days_from_the_environment() {
     assert!(lines.iter().any(|l| l.ends_with("] ping x")), "{lines:#?}");
     assert!(folder.join(day(7)).exists(), "kept for 7 days");
     assert!(!folder.join(day(8)).exists(), "deleted after 7 days");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// "Handler logs" and "Debug record" of specs/sec-node-remote-logging: application
+/// records reach the log file, except debug records.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn application_records() {
+    let _serial = serial();
+    let dir = temp("application");
+    let n = start(logged(&dir));
+    let mut c = Client::connect(n.local_addr()).await;
+    c.request(r#"logging t1 "debug""#).await;
+    n.log("t1", AppLogLevel::Debug, "relay coil at 12 V")
+        .unwrap();
+    n.log("t1", AppLogLevel::Info, "heater relay switched")
+        .unwrap();
+    assert_eq!(c.line().await, r#"log t1:debug "relay coil at 12 V""#);
+    assert_eq!(c.line().await, r#"log t1:info "heater relay switched""#);
+    n.stop().await;
+
+    let lines = node_log(&dir);
+    assert!(
+        lines.contains(&"INFO t1: heater relay switched".to_owned()),
+        "{lines:#?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("relay coil")),
+        "{lines:#?}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

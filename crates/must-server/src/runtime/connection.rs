@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use super::actor::{ActorHandle, Job, JobResult};
-use super::{CacheEntry, Hub, Outgoing, QueueStats};
+use super::{CacheEntry, Hub, Outgoing, QueueStats, RemoteLevel};
 use crate::events::{ConnectionId, NodeEvent};
 use crate::model::{AccessibleModel, ModuleModel};
 use crate::protocol::{self, Frame, LineSplitter, Request, now, parse_request, split_specifier};
@@ -66,7 +66,7 @@ pub(crate) async fn serve(
                 }
                 let line = out.line.trim_end_matches('\n');
                 debug!(id, "> {line}");
-                if hub.observed() {
+                if !out.is_log && hub.observed() {
                     hub.emit(NodeEvent::MessageSent {
                         id,
                         line: line.into(),
@@ -242,8 +242,9 @@ impl Connection {
             Request::Read(spec) => self.read(spec, incoming).await,
             Request::Change(spec, data) => self.change(spec, data).await,
             Request::Do(spec, data) => self.call(spec, data).await,
+            Request::Logging(spec, data) => self.logging(spec, data),
             Request::Unsupported { action, specifier } => {
-                let message = if matches!(action, "check" | "logging") {
+                let message = if action == "check" {
                     format!("`{action}` is not supported by this node")
                 } else {
                     format!("unknown action `{action}`")
@@ -365,6 +366,35 @@ impl Connection {
         // on failure the sender is dropped, which the receiver reports as shutting down
         let _ = actor.jobs.send(job).await;
         result
+    }
+
+    /// `logging [<module>[:<parameter>]] <level>`. A parameter specifier stands for its
+    /// module, which the reply names.
+    fn logging(&self, spec: Option<&str>, data: Option<&str>) {
+        let module = spec.map(|s| s.split_once(':').map_or(s, |(m, _)| m));
+        if let Some(m) = module
+            && !self.hub.model.modules.contains_key(m)
+        {
+            return self.error("logging", spec, no_such_module(m));
+        }
+        let Some(data) = data else {
+            let error = SecopError::new(ErrorClass::ProtocolError, "missing level");
+            return self.error("logging", spec, error);
+        };
+        let json = match parse_json(data) {
+            Ok(json) => json,
+            Err(e) => return self.error("logging", spec, e),
+        };
+        let Some(level) = RemoteLevel::from_json(&json) else {
+            let error = SecopError::new(
+                ErrorClass::WrongType,
+                format!(
+                    "the level must be \"debug\", \"info\", \"error\", \"off\" or false, not {json}"
+                ),
+            );
+            return self.error("logging", spec, error);
+        };
+        self.hub.set_logging(self.id, module, level, &json);
     }
 
     async fn change(&self, spec: Option<&str>, data: Option<&str>) {

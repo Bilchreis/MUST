@@ -8,8 +8,9 @@ the Sample Environment Communication Protocol.
 Differences to SHALL:
 
 - written in Rust, without Qt (no Qt build step, library or runtime dependency)
-- speaks SECoP 2.0 (draft) instead of SECoP V2019-09-16; the `matrix` data type and the
-  optional `check`/`logging` messages are not supported yet
+- speaks SECoP 2.0 (draft) instead of SECoP V2019-09-16, including remote logging
+  (`logging`); the `matrix` data type and the optional `check` message are not supported
+  yet
 - a terminal UI (`must-tui`) replaces SHALL's Qt status window
 
 ## Status
