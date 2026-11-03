@@ -63,9 +63,10 @@ pub(crate) struct Answer {
 }
 
 impl Answer {
-    fn check(&self, accessible: &str) -> Result<(), SecopError> {
+    /// The error of a negative code from the application of `context`.
+    fn check(&self, context: &str, accessible: &str) -> Result<(), SecopError> {
         if self.code < 0 {
-            Err(to_secop(self.code, accessible))
+            Err(to_secop(self.code, context, accessible))
         } else {
             Ok(())
         }
@@ -75,8 +76,8 @@ impl Answer {
         (self.t.is_finite() && self.t > 0.0).then_some(self.t)
     }
 
-    fn reading(self, info: &DataInfo, accessible: &str) -> HandlerResult {
-        self.check(accessible)?;
+    fn reading(self, info: &DataInfo, context: &str, accessible: &str) -> HandlerResult {
+        self.check(context, accessible)?;
         let json = self
             .value
             .as_ref()
@@ -270,7 +271,7 @@ impl ModuleHandler for ShallModule {
         } else {
             self.request(action::READ, parameter, None).await?
         };
-        answer.reading(info, parameter)
+        answer.reading(info, &self.context, parameter)
     }
 
     async fn change(&self, _ctx: &Ctx, parameter: &str, value: Value) -> HandlerResult {
@@ -300,7 +301,7 @@ impl ModuleHandler for ShallModule {
             answer.value.get_or_insert(json);
             answer
         };
-        answer.reading(info, parameter)
+        answer.reading(info, &self.context, parameter)
     }
 
     async fn call(&self, _ctx: &Ctx, command: &str, argument: Option<Value>) -> CallResult {
@@ -337,7 +338,7 @@ impl ModuleHandler for ShallModule {
         } else {
             self.request(action::DO, command, argument).await?
         };
-        answer.check(command)?;
+        answer.check(&self.context, command)?;
         let json = answer.value.clone().unwrap_or(Json::Null);
         let result = info.decode_result(&json).map_err(|e| {
             internal(format!(

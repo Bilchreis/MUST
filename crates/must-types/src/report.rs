@@ -51,7 +51,7 @@ pub fn error_report(error: &SecopError, t: Option<f64>) -> Json {
     if let Some(t) = t.and_then(serde_json::Number::from_f64) {
         extra.insert("t".into(), Json::Number(t));
     }
-    json!([error.class.as_str(), error.message, extra])
+    json!([error.class_name(), error.message, extra])
 }
 
 #[cfg(test)]
@@ -90,6 +90,26 @@ mod tests {
         assert_eq!(
             error_report(&e, None),
             json!(["HardwareError", "heater is broken", {"stack": []}])
+        );
+    }
+
+    #[test]
+    fn custom_error_class() {
+        let e = SecopError::custom("_Overheated", "coil too hot");
+        assert_eq!(e.class, ErrorClass::InternalError);
+        assert_eq!(e.to_string(), "_Overheated: coil too hot");
+        assert_eq!(
+            error_report(&e, Some(3.0)),
+            json!(["_Overheated", "coil too hot", {"t": 3.0}])
+        );
+        let e = SecopError::custom("HardwareError", "sensor disconnected");
+        assert_eq!(
+            e,
+            SecopError::new(ErrorClass::HardwareError, "sensor disconnected")
+        );
+        assert_eq!(
+            error_report(&e, None),
+            json!(["HardwareError", "sensor disconnected", {}])
         );
     }
 

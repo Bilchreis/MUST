@@ -738,3 +738,235 @@ fn repeated_read_from_one_client_in_callback_mode() {
     assert_eq!(cb_calls(c"a"), 1);
     done(c"cbc");
 }
+
+// --- user error codes (must addition)
+
+/// Sends `request` and lets the C host answer it with a user error; returns the error
+/// report.
+fn user_error_reply(client: &mut Client, request: &str, which: c_int) -> serde_json::Value {
+    client.send(request);
+    // SAFETY: a C test with a number
+    check("user_error_answer", unsafe {
+        c::ctest_user_error_answer(which)
+    });
+    let reply = client.recv();
+    assert!(reply.starts_with("error_change mod1:target "), "{reply}");
+    data(&reply)
+}
+
+#[test]
+fn user_error_codes() {
+    let _serial = serial();
+    let (poll_port, cb_port) = (free_port(), free_port());
+    // SAFETY: a C test with two ports
+    check("user_error_build", unsafe {
+        c::ctest_user_error_build(poll_port, cb_port)
+    });
+
+    // register and answer, in polling mode
+    let mut client = Client::connect(poll_port);
+    let report = user_error_reply(&mut client, "change mod1:target 5", 0);
+    assert_eq!(report[0], "_Overheated");
+    assert_eq!(report[1], "target: coil too hot");
+    assert!(report[2]["t"].is_f64());
+
+    // a SECoP class with a text of its own
+    let report = user_error_reply(&mut client, "change mod1:target 6", 1);
+    assert_eq!(report[0], "HardwareError");
+    assert_eq!(report[1], "target: sensor disconnected");
+
+    // from a callback
+    let reply = Client::connect(cb_port).request("read mod1:value");
+    assert!(reply.starts_with("error_read mod1:value "), "{reply}");
+    assert_eq!(data(&reply)[0], "_CbFault");
+    assert_eq!(data(&reply)[1], "value: from a callback");
+
+    // a code another context registered, of the same name: unknown here
+    let report = user_error_reply(&mut client, "change mod1:target 8", 2);
+    assert_eq!(report[0], "InternalError");
+
+    // unregistered: an unknown code again
+    // SAFETY: a C test without arguments
+    check("user_error_unregister", unsafe {
+        c::ctest_user_error_unregister()
+    });
+    let report = user_error_reply(&mut client, "change mod1:target 7", 0);
+    assert_eq!(report[0], "InternalError");
+
+    // SAFETY: a C test without arguments
+    check("user_error_done", unsafe { c::ctest_user_error_done() });
+    assert!(closed(poll_port) && closed(cb_port));
+}
+
+// --- filtered requests (must addition)
+
+/// `SECoP_S_ERROR_*` codes.
+const INVALID_NAME: c_int = -2;
+const NO_DATA: c_int = -10;
+const INVALID_VALUE: c_int = -13;
+const INVALID_CONTEXT_ID: c_int = -30;
+
+/// The result of one `SECoP_S_filterStoredCommand2` call.
+fn filter_rc(filter: &CStr, action: c_int, context: &CStr) -> c_int {
+    // SAFETY: a C test taking NUL-terminated strings
+    unsafe { c::ctest_filter_rc(filter.as_ptr(), action, context.as_ptr()) }
+}
+
+/// What a filter call should hand out.
+struct Expected<'a> {
+    name: &'a CStr,
+    action: c_int,
+    /// The value of a `change`.
+    value: Option<&'a CStr>,
+}
+
+/// Takes a request with the filter; `variant` 1 or 2 (`SECoP_S_filterStoredCommand[2]`),
+/// with a name buffer of `name_cap` bytes.
+fn filter_take(
+    filter: &CStr,
+    action: c_int,
+    context: &CStr,
+    expected: &Expected<'_>,
+    name_cap: c_int,
+    variant: c_int,
+) {
+    let value = expected.value.map_or(std::ptr::null(), CStr::as_ptr);
+    // SAFETY: a C test taking NUL-terminated strings or NULL
+    check("filter_take", unsafe {
+        c::ctest_filter_take(
+            filter.as_ptr(),
+            action,
+            context.as_ptr(),
+            expected.name.as_ptr(),
+            expected.action,
+            value,
+            name_cap,
+            variant,
+        )
+    });
+}
+
+fn filter_answer(value: &CStr) {
+    // SAFETY: a C test taking a NUL-terminated string
+    check("filter_answer", unsafe {
+        c::ctest_filter_answer(value.as_ptr())
+    });
+}
+
+/// The two polling-mode nodes of `ctest_filter_build` and their ports.
+fn filter_nodes() -> (u16, u16) {
+    let (port, port2) = (free_port(), free_port());
+    // SAFETY: a C test with two ports
+    check("filter_build", unsafe {
+        c::ctest_filter_build(port, port2)
+    });
+    (port, port2)
+}
+
+#[test]
+fn filtered_requests() {
+    let _serial = serial();
+    let (port, _) = filter_nodes();
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+
+    // only the selected accessible; the other request stays queued
+    a.send("read mod1:a");
+    b.send("change mod1:b 5");
+    settle();
+    let change = Expected {
+        name: c"fn:mod1:b",
+        action: ACTION_CHANGE,
+        value: Some(c"5"),
+    };
+    filter_take(c"fn:mod1:b", 0, c"filt", &change, 64, 2);
+    filter_answer(c"5");
+    assert!(b.recv().starts_with("changed mod1:b "));
+
+    // nothing matches; refused filters, actions and contexts hand nothing out
+    assert_eq!(filter_rc(c"fn:mod1:b", 0, c"filt"), NO_DATA);
+    assert_eq!(filter_rc(c"fn:mod1:a:x", 0, c"filt"), INVALID_NAME);
+    assert_eq!(filter_rc(c"fn:mod-1", 0, c"filt"), INVALID_NAME);
+    assert_eq!(filter_rc(c"fn:mod1:a", 4, c"filt"), INVALID_VALUE);
+    assert_eq!(filter_rc(c"fn:mod1:a", -1, c"filt"), INVALID_VALUE);
+    assert_eq!(filter_rc(c"", 0, c"nocontext"), INVALID_CONTEXT_ID);
+    let read_a = Expected {
+        name: c"fn:mod1:a",
+        action: ACTION_READ,
+        value: None,
+    };
+    filter_take(c"", ACTION_READ, c"filt", &read_a, 64, 2);
+    filter_answer(c"1.5");
+    assert_eq!(data(&a.recv())[0], 1.5);
+    done(c"filt");
+    done(c"filt2");
+}
+
+#[test]
+fn filtered_by_action() {
+    let _serial = serial();
+    let (port, _) = filter_nodes();
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+    a.send("read mod1:b");
+    settle();
+    b.send("change mod1:b 6");
+    settle();
+    // the change, with the handle variant, though the read is older
+    let change = Expected {
+        name: c"fn:mod1:b",
+        action: ACTION_CHANGE,
+        value: Some(c"6"),
+    };
+    filter_take(c"fn:mod1:b", ACTION_CHANGE, c"filt", &change, 64, 1);
+    filter_answer(c"6");
+    assert!(b.recv().starts_with("changed mod1:b "));
+    // a module entry in a tab-separated list with a line end, in another case
+    let read = Expected {
+        name: c"fn:mod1:b",
+        action: ACTION_READ,
+        value: None,
+    };
+    filter_take(
+        c"FN:MOD1\tfn:mod2:b\r\n",
+        ACTION_READ,
+        c"filt",
+        &read,
+        64,
+        2,
+    );
+    filter_answer(c"6");
+    assert!(a.recv().starts_with("reply mod1:b "));
+    done(c"filt");
+    done(c"filt2");
+}
+
+#[test]
+fn filtered_within_one_context() {
+    let _serial = serial();
+    let (port, port2) = filter_nodes();
+    let mut other = Client::connect(port2);
+    other.send("read mod1:a");
+    let mut client = Client::connect(port);
+    client.send("read mod2:b");
+    settle();
+    // an empty filter takes this context's request only; a small name buffer
+    let read = Expected {
+        name: c"fn:mod2:b",
+        action: ACTION_READ,
+        value: None,
+    };
+    filter_take(c"", 0, c"filt", &read, 5, 2);
+    filter_answer(c"2.5");
+    assert_eq!(data(&client.recv())[0], 2.5);
+    assert_eq!(filter_rc(c"", 0, c"filt"), NO_DATA);
+    // the other context's request is still queued
+    let other_read = Expected {
+        name: c"fn2:mod1:a",
+        action: ACTION_READ,
+        value: None,
+    };
+    filter_take(c"fn2", 0, c"filt2", &other_read, 64, 1);
+    filter_answer(c"3.5");
+    assert_eq!(data(&other.recv())[0], 3.5);
+    done(c"filt");
+    done(c"filt2");
+}

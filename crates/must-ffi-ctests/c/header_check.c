@@ -32,6 +32,20 @@ int run_header_example(int allowed_to_loop)
     }
     SECoP_S_doneLibrary(0, "example");
 
+    /* must additions */
+    {
+        unsigned long long id;
+        enum SECoP_S_action action;
+        char accessible[50], value[1000];
+        int accessible_size = 50, value_size = 1000;
+        CSECoPbaseType* p = 0;
+        enum SECoP_S_error code = SECoP_S_registerUserError("_HeaderCheck", "from the header check", "example");
+        SECoP_S_filterStoredCommand("my_node:mod1", 0, &id, &action, accessible, &accessible_size, &p, "example");
+        SECoP_S_filterStoredCommand2("my_node:mod1:value", SECoP_S_ACTION_READ, &id, &action, accessible,
+                                     &accessible_size, value, &value_size, "example");
+        SECoP_S_unregisterUserError(code, "example");
+    }
+
     {
         CSECoPbaseType* p = SECoP_V_createSimpleDouble(1.5);
         double d = 0.0;

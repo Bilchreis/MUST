@@ -159,7 +159,9 @@ cargo xtask check                                # exports, dependencies, cross-
 Then put `SHALLserver` and `SHALLvariant` in place of SHALL's files (both in one folder)
 and remove SHALL's Qt libraries. C programs and LabVIEW VIs that use SHALL's C functions
 run unchanged; see [COMPATIBILITY.md](COMPATIBILITY.md) for the details and the
-differences to SHALL.
+differences to SHALL. must also exports four functions that SHALL lacks
+(`SECoP_S_filterStoredCommand[2]`, `SECoP_S_registerUserError`,
+`SECoP_S_unregisterUserError`), described there under "Additions to SHALL".
 
 The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.
 How releases are made is described in [docs/releasing.md](docs/releasing.md).

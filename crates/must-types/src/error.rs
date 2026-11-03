@@ -103,10 +103,14 @@ pub struct UnknownErrorClass(pub String);
 /// An error to report to a SECoP client: class, human readable message and optional
 /// implementation specific details.
 #[derive(Debug, Clone, PartialEq, Error)]
-#[error("{class}: {message}")]
+#[error("{}: {message}", self.class_name())]
 pub struct SecopError {
-    /// The SECoP error class.
+    /// The SECoP error class; `InternalError` for an error with a
+    /// [`custom_class`](Self::custom_class).
     pub class: ErrorClass,
+    /// A class outside SECoP 2.0's list, sent instead of `class`; see
+    /// [`SecopError::custom`]. (A boxed `str` keeps `SecopError` small.)
+    pub custom_class: Option<Box<str>>,
     /// A short human readable description.
     pub message: String,
     /// Extra information for the third element of the error report (the timestamp `t`
@@ -119,9 +123,36 @@ impl SecopError {
     pub fn new(class: ErrorClass, message: impl Into<String>) -> Self {
         Self {
             class,
+            custom_class: None,
             message: message.into(),
             extra: Map::new(),
         }
+    }
+
+    /// An error of the class named `name`, which may be outside SECoP 2.0's list;
+    /// SECoP asks clients to treat unknown classes as generic errors. A custom name
+    /// should start with an underscore, e.g. `_Overheated`, and must be a SECoP
+    /// identifier. The name of a SECoP 2.0 class (exact spelling) gives that class.
+    pub fn custom(name: impl Into<String>, message: impl Into<String>) -> Self {
+        let name = name.into();
+        debug_assert!(
+            crate::validate_identifier(&name).is_ok(),
+            "error class `{name}` is not a SECoP identifier"
+        );
+        match name.parse::<ErrorClass>() {
+            Ok(class) => Self::new(class, message),
+            Err(_) => Self {
+                custom_class: Some(name.into_boxed_str()),
+                ..Self::new(ErrorClass::InternalError, message)
+            },
+        }
+    }
+
+    /// The class name sent in the error report.
+    pub fn class_name(&self) -> &str {
+        self.custom_class
+            .as_deref()
+            .unwrap_or_else(|| self.class.as_str())
     }
 
     /// Adds an entry to the extra information.

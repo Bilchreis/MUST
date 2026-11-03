@@ -288,6 +288,11 @@ async fn error_report_format() {
     assert_eq!(data[0], "HardwareError");
     assert_eq!(data[1], "sensor disconnected");
     assert!(data[2]["t"].is_f64());
+
+    let (_, _, data) = parse(&c.request("read t1:overheated").await);
+    assert_eq!(data[0], "_Overheated");
+    assert_eq!(data[1], "coil too hot");
+    assert!(data[2]["t"].is_f64());
 }
 
 #[tokio::test]

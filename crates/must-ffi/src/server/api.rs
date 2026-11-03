@@ -18,7 +18,10 @@ use must_types::Mode;
 use serde_json::Value as Json;
 
 use super::build::{AccessibleKind, CallFunction, DraftNode, GetSet, valid_name};
-use super::codes::{description, err};
+use super::codes::{
+    description, err, register_user_error, remove_context_user_errors, unregister_user_error,
+};
+use super::filter::Filter;
 use super::handler::Answer;
 use super::state::{self, Context, NodeEntry, Pending, State};
 use super::status;
@@ -140,7 +143,8 @@ fn new_context(callbacks: bool) -> Context {
 }
 
 /// Stops the nodes of a context and forgets the context (its queued requests are
-/// dropped). Unless `bNodeOnly`, the library's threads end when no context remains.
+/// dropped). Unless `bNodeOnly`, the context's user error codes are removed and the
+/// library's threads end when no context remains.
 ///
 /// # Safety
 /// `szContextID` must be NULL or a NUL-terminated string.
@@ -167,6 +171,9 @@ pub unsafe extern "C" fn SECoP_S_doneLibrary(bNodeOnly: c_int, szContextID: *con
             }
             (std::mem::take(&mut running), handle, runtime)
         };
+        if bNodeOnly == 0 {
+            remove_context_user_errors(&context);
+        }
         state::stop(std::mem::take(&mut running), handle);
         if let Some(runtime) = runtime {
             state::shut_down(runtime);
@@ -178,10 +185,67 @@ pub unsafe extern "C" fn SECoP_S_doneLibrary(bNodeOnly: c_int, szContextID: *con
 #[unsafe(no_mangle)]
 pub extern "C" fn SECoP_S_setManyThreads(_bManyThreads: c_int) {}
 
-/// Converts a `SECoP_S_error` code to a static description.
+/// Converts a `SECoP_S_error` code to a static description; `<name>: <text>` for a code
+/// of [`SECoP_S_registerUserError`], valid until the process ends.
 #[unsafe(no_mangle)]
 pub extern "C" fn SECoP_S_getErrorString(iError: c_int) -> *const c_char {
-    description(iError).as_ptr()
+    guard(c"".as_ptr(), || description(iError).as_ptr())
+}
+
+/// must addition: registers a SECoP error class (a SECoP identifier, e.g. `_Overheated`
+/// or `HardwareError`) with a text for a context and returns a new code of -1000 or
+/// below, which the application can return from a callback or pass to
+/// `SECoP_S_putCommandAnswer[2]` for requests of that context; the client then gets an
+/// error report with that class and text. Registering a name again for the context
+/// returns its code and replaces the text. Fails with `SECoP_S_ERROR_INVALID_CONTEXT_ID`,
+/// `SECoP_S_ERROR_INVALID_NAME` or `SECoP_S_ERROR_NAME_ALREADY_USED` (a name differing
+/// only in case).
+///
+/// # Safety
+/// The strings must be NULL or NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SECoP_S_registerUserError(
+    szSECoPerror: *const c_char,
+    szMessageText: *const c_char,
+    szContextID: *const c_char,
+) -> c_int {
+    guard(err::INTERNAL, || {
+        // SAFETY: forwarded caller contract
+        let (name, message, context) = unsafe {
+            (
+                text(szSECoPerror),
+                text(szMessageText),
+                context_id(szContextID),
+            )
+        };
+        // the state lock is released before the registry is locked
+        if !state::lock().contexts.contains_key(&context) {
+            return err::INVALID_CONTEXT_ID;
+        }
+        register_user_error(
+            &context,
+            name.as_deref(),
+            message.as_deref().unwrap_or_default(),
+        )
+    })
+}
+
+/// must addition: unregisters a code that the context registered with
+/// [`SECoP_S_registerUserError`]; it is never reused. `SECoP_S_ERROR_INVALID_VALUE` for
+/// any other code.
+///
+/// # Safety
+/// `szContextID` must be NULL or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SECoP_S_unregisterUserError(
+    iError: c_int,
+    szContextID: *const c_char,
+) -> c_int {
+    guard(err::INTERNAL, || {
+        // SAFETY: forwarded caller contract
+        let context = unsafe { context_id(szContextID) };
+        unregister_user_error(&context, iError)
+    })
 }
 
 /// Shows or hides the status display.
@@ -780,22 +844,80 @@ struct Request {
     value: Option<crate::variant::Node>,
 }
 
-/// Takes the next polled request of a context; from now on it waits for its answer.
-fn next_request(context: &str) -> Result<Request, c_int> {
+/// Takes the next polled request of a context that `filter` selects (any without
+/// filter); from now on it waits for its answer.
+fn next_request(context: &str, filter: Option<&Filter>) -> Result<Request, c_int> {
     let mut state = initialized()?;
-    let ctx = state
-        .contexts
-        .get_mut(context)
-        .ok_or(err::INVALID_CONTEXT_ID)?;
-    let (id, pending) = ctx.queue.pop_front().ok_or(err::NO_DATA)?;
-    let request = Request {
+    let id = state.take_matching(context, filter)?;
+    let pending = &state.handed_out[&id];
+    Ok(Request {
         id,
         action: pending.action,
         name: format!("{}:{}:{}", pending.node, pending.module, pending.accessible),
         value: pending.value.clone(),
+    })
+}
+
+/// Hands out a request through the caller's buffers, as `SECoP_S_getStoredCommand`
+/// does: id, action, name, and the value as a new handle.
+///
+/// # Safety
+/// Pointers must be NULL or valid; `name` for `*name_size` bytes.
+unsafe fn hand_out(
+    request: Request,
+    id: *mut c_ulonglong,
+    action: *mut c_int,
+    name: *mut c_char,
+    name_size: *mut c_int,
+    value: *mut *mut CSECoPbaseType,
+) -> c_int {
+    let handle = request.value.map_or(std::ptr::null_mut(), new_handle);
+    // SAFETY: forwarded caller contract
+    let fits = unsafe {
+        put(id, request.id);
+        put(action, request.action);
+        put(value, handle);
+        write_text(request.name.as_bytes(), name, name_size)
     };
-    state.handed_out.insert(id, pending);
-    Ok(request)
+    if fits {
+        err::SUCCESS
+    } else {
+        err::WARNING_BUFFER_TOO_SMALL
+    }
+}
+
+/// Hands out a request through the caller's buffers, as `SECoP_S_getStoredCommand2`
+/// does: id, action, name, and the value as JSON text.
+///
+/// # Safety
+/// Pointers must be NULL or valid; the buffers for their given sizes.
+unsafe fn hand_out_text(
+    request: &Request,
+    id: *mut c_ulonglong,
+    action: *mut c_int,
+    name: *mut c_char,
+    name_size: *mut c_int,
+    value: *mut c_char,
+    value_size: *mut c_int,
+) -> c_int {
+    let text = request
+        .value
+        .as_ref()
+        .map(|v| serde_json::to_vec(&v.export_value()).unwrap_or_default())
+        .unwrap_or_default();
+    // SAFETY: forwarded caller contract
+    let fits = unsafe {
+        put(id, request.id);
+        put(action, request.action);
+        let name = write_text(request.name.as_bytes(), name, name_size);
+        let value = write_text(&text, value, value_size);
+        name && value
+    };
+    if fits {
+        err::SUCCESS
+    } else {
+        err::WARNING_BUFFER_TOO_SMALL
+    }
 }
 
 /// Writes `data` to a caller's buffer of `*size` bytes, NUL-terminated and cut if
@@ -837,22 +959,19 @@ pub unsafe extern "C" fn SECoP_S_getStoredCommand(
     guard(err::INTERNAL, || {
         // SAFETY: forwarded caller contract
         let context = unsafe { context_id(szContextID) };
-        let request = match next_request(&context) {
-            Ok(r) => r,
-            Err(e) => return e,
-        };
-        let value = request.value.map_or(std::ptr::null_mut(), new_handle);
-        // SAFETY: forwarded caller contract
-        let fits = unsafe {
-            put(pllId, request.id);
-            put(piAction, request.action);
-            put(ppValue, value);
-            write_text(request.name.as_bytes(), szParameter, piParameterSize)
-        };
-        if fits {
-            err::SUCCESS
-        } else {
-            err::WARNING_BUFFER_TOO_SMALL
+        match next_request(&context, None) {
+            // SAFETY: forwarded caller contract
+            Ok(request) => unsafe {
+                hand_out(
+                    request,
+                    pllId,
+                    piAction,
+                    szParameter,
+                    piParameterSize,
+                    ppValue,
+                )
+            },
+            Err(e) => e,
         }
     })
 }
@@ -876,27 +995,117 @@ pub unsafe extern "C" fn SECoP_S_getStoredCommand2(
     guard(err::INTERNAL, || {
         // SAFETY: forwarded caller contract
         let context = unsafe { context_id(szContextID) };
-        let request = match next_request(&context) {
-            Ok(r) => r,
-            Err(e) => return e,
-        };
-        let text = request
-            .value
-            .as_ref()
-            .map(|v| serde_json::to_vec(&v.export_value()).unwrap_or_default())
-            .unwrap_or_default();
+        match next_request(&context, None) {
+            // SAFETY: forwarded caller contract
+            Ok(request) => unsafe {
+                hand_out_text(
+                    &request,
+                    pllId,
+                    piAction,
+                    szParameter,
+                    piParameterSize,
+                    szValue,
+                    piValueSize,
+                )
+            },
+            Err(e) => e,
+        }
+    })
+}
+
+/// The filter of `SECoP_S_filterStoredCommand[2]`.
+///
+/// # Safety
+/// `accessibles` must be NULL or a NUL-terminated string.
+unsafe fn filter(accessibles: *const c_char, action: c_int) -> Result<Filter, c_int> {
+    // SAFETY: forwarded caller contract
+    let accessibles = unsafe { text(accessibles) };
+    Filter::parse(accessibles.as_deref(), action)
+}
+
+/// must addition: hands out the oldest polled request of a context that the filter
+/// selects, like [`SECoP_S_getStoredCommand`]. The filter comes first, as SHALL-LabVIEW's
+/// `SECoP-filterStoredCommand.vi` passes it, and the context ID last.
+///
+/// # Safety
+/// Pointers must be NULL or valid; strings NUL-terminated; `szAccessible` for
+/// `*piAccessibleSize` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SECoP_S_filterStoredCommand(
+    szFilterAccessibles: *const c_char,
+    iFilterAction: c_int,
+    pllId: *mut c_ulonglong,
+    piAction: *mut c_int,
+    szAccessible: *mut c_char,
+    piAccessibleSize: *mut c_int,
+    ppValue: *mut *mut CSECoPbaseType,
+    szContextID: *const c_char,
+) -> c_int {
+    guard(err::INTERNAL, || {
         // SAFETY: forwarded caller contract
-        let fits = unsafe {
-            put(pllId, request.id);
-            put(piAction, request.action);
-            let name = write_text(request.name.as_bytes(), szParameter, piParameterSize);
-            let value = write_text(&text, szValue, piValueSize);
-            name && value
+        let (context, filter) = unsafe {
+            (
+                context_id(szContextID),
+                filter(szFilterAccessibles, iFilterAction),
+            )
         };
-        if fits {
-            err::SUCCESS
-        } else {
-            err::WARNING_BUFFER_TOO_SMALL
+        match filter.and_then(|f| next_request(&context, Some(&f))) {
+            // SAFETY: forwarded caller contract
+            Ok(request) => unsafe {
+                hand_out(
+                    request,
+                    pllId,
+                    piAction,
+                    szAccessible,
+                    piAccessibleSize,
+                    ppValue,
+                )
+            },
+            Err(e) => e,
+        }
+    })
+}
+
+/// must addition: hands out the oldest polled request of a context that the filter
+/// selects, like [`SECoP_S_getStoredCommand2`]; see [`SECoP_S_filterStoredCommand`].
+///
+/// # Safety
+/// Pointers must be NULL or valid; strings NUL-terminated; the buffers for their given
+/// sizes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SECoP_S_filterStoredCommand2(
+    szFilterAccessibles: *const c_char,
+    iFilterAction: c_int,
+    pllId: *mut c_ulonglong,
+    piAction: *mut c_int,
+    szAccessible: *mut c_char,
+    piAccessibleSize: *mut c_int,
+    szValue: *mut c_char,
+    piValueSize: *mut c_int,
+    szContextID: *const c_char,
+) -> c_int {
+    guard(err::INTERNAL, || {
+        // SAFETY: forwarded caller contract
+        let (context, filter) = unsafe {
+            (
+                context_id(szContextID),
+                filter(szFilterAccessibles, iFilterAction),
+            )
+        };
+        match filter.and_then(|f| next_request(&context, Some(&f))) {
+            // SAFETY: forwarded caller contract
+            Ok(request) => unsafe {
+                hand_out_text(
+                    &request,
+                    pllId,
+                    piAction,
+                    szAccessible,
+                    piAccessibleSize,
+                    szValue,
+                    piValueSize,
+                )
+            },
+            Err(e) => e,
         }
     })
 }
