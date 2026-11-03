@@ -265,6 +265,31 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_updateParameter2(const char* szParameter
                                                            const char* szSigma, int iSigmaSize, double dblTimestamp);
 
 /**
+ * \brief must addition, not in SHALL: like \ref SECoP_S_updateParameter2, for a
+ *        parameter of type matrix, with the matrix as plain arguments instead of a
+ *        variant or JSON: the length of each dimension and the raw element bytes (first
+ *        dimension varying fastest, in the byte order of the "elementtype"). The bytes
+ *        are base64-encoded once, for the clients. A LabVIEW Call Library node can pass
+ *        a U32 and a U8 array as "Array Data Pointer". The library copies puLen and pData
+ *        before it returns and does not keep them. There is no sigma; use
+ *        \ref SECoP_S_updateParameter2 if one is needed.
+ * \ingroup expfunc
+ * \param[in] szParameterName name of the parameter (<node>:<module>:<parameter>)
+ * \param[in] puLen           length of each dimension, as many as the datainfo has names
+ * \param[in] iDims           number of entries in puLen
+ * \param[in] pData           raw element bytes; may be NULL if iDataSize is 0
+ * \param[in] iDataSize       number of bytes in pData: the product of puLen times the
+ *                            size of one element
+ * \param[in] dblTimestamp    SECoP timestamp of the value or NaN
+ * \return on success SECoP_S_SUCCESS; the codes of \ref SECoP_S_updateParameter2 for an
+ *         unknown name; SECoP_S_ERROR_INVALID_VALUE if the parameter is not a matrix or
+ *         the lengths and bytes do not fit its datainfo (then nothing is sent)
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_updateParameterMatrix(const char* szParameterName, const unsigned int* puLen,
+                                                                int iDims, const void* pData, int iDataSize,
+                                                                double dblTimestamp);
+
+/**
  * \brief When polling is enabled (\ref SECoP_S_createNode) call SECoP_S_getStoredCommand
  *        regulary to check, if there is something to do. If yes, it will return
  *        successfully with an id, what to do, a parameter/command name and new set
@@ -336,6 +361,31 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswer(unsigned long long llId
  */
 enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswer2(unsigned long long llId, enum SECoP_S_error iErrorCode,
                 const char* szValue, int iValueSize, const char* szSigma, int iSigmaSize, double dblTimestamp);
+
+/**
+ * \brief must addition, not in SHALL: like \ref SECoP_S_putCommandAnswer2, answers a
+ *        request handed out by \ref SECoP_S_getStoredCommand or
+ *        \ref SECoP_S_getStoredCommand2 with a matrix as plain arguments: the read
+ *        value, the value after a change or the command result. See
+ *        \ref SECoP_S_updateParameterMatrix for the arguments; puLen and pData are
+ *        copied before the function returns and not kept. There is no sigma.
+ * \ingroup expfunc
+ * \param[in] llId         id of the request
+ * \param[in] iErrorCode   SECoP_S_SUCCESS or SECoP_S_error for this action; with an
+ *                         error the matrix arguments are not read and may be NULL
+ * \param[in] puLen        length of each dimension
+ * \param[in] iDims        number of entries in puLen
+ * \param[in] pData        raw element bytes; may be NULL if iDataSize is 0
+ * \param[in] iDataSize    number of bytes in pData
+ * \param[in] dblTimestamp SECoP timestamp of the value or NaN
+ * \return on success SECoP_S_SUCCESS; SECoP_S_ERROR_INVALID_NAME for an unknown id;
+ *         SECoP_S_ERROR_INVALID_VALUE if the request's value is not a matrix or the
+ *         lengths and bytes do not fit its datainfo, and the request stays handed out,
+ *         so it can still be answered
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswerMatrix(unsigned long long llId, enum SECoP_S_error iErrorCode,
+                                                                 const unsigned int* puLen, int iDims, const void* pData,
+                                                                 int iDataSize, double dblTimestamp);
 
 /**
  * \brief must addition, not in SHALL: like \ref SECoP_S_getStoredCommand, but hands out

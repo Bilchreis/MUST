@@ -17,8 +17,8 @@ use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
 use crate::datainfo::{
-    ArrayInfo, BlobInfo, CommandInfo, DataInfo, DoubleInfo, EnumInfo, IntInfo, ScaledInfo,
-    StringInfo, StructInfo, TupleInfo, json_to_i64,
+    ArrayInfo, BlobInfo, CommandInfo, DataInfo, DoubleInfo, ElementKind, EnumInfo, IntInfo,
+    MatrixInfo, ScaledInfo, StringInfo, StructInfo, TupleInfo, json_to_i64,
 };
 use crate::error::ErrorClass;
 use crate::path::{Path, PathSegment};
@@ -48,6 +48,15 @@ pub enum Value {
     /// Members of a `struct`, in datainfo order. Optional members omitted in a request
     /// are absent.
     Struct(IndexMap<String, Value>),
+    /// Value of a `matrix`: the length of each dimension and the raw element bytes, in
+    /// transport order (first dimension varying fastest) and the byte order of the
+    /// `elementtype`. See [`MatrixInfo`] for typed access to the elements.
+    Matrix {
+        /// Length of each dimension, in the order of [`MatrixInfo::names`].
+        len: Vec<u32>,
+        /// The elements as bytes, exactly `product(len) × element size` of them.
+        data: Vec<u8>,
+    },
 }
 
 impl Value {
@@ -82,6 +91,14 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The lengths and element bytes of a `matrix`.
+    pub fn as_matrix(&self) -> Option<(&[u32], &[u8])> {
+        match self {
+            Self::Matrix { len, data } => Some((len, data)),
             _ => None,
         }
     }
@@ -287,6 +304,7 @@ impl DataInfo {
             Self::Array(i) => i.decode(json, mode),
             Self::Tuple(i) => i.decode(json, mode),
             Self::Struct(i) => i.decode(json, mode),
+            Self::Matrix(i) => i.decode(json, mode),
             Self::Command(_) => Err(ValueError::wrong_type(
                 "a command has no value; decode its argument or result",
             )),
@@ -456,6 +474,285 @@ impl StructInfo {
     }
 }
 
+const MATRIX_MEMBERS: [&str; 2] = ["len", "blob"];
+
+fn negative_len(index: usize, len: &dyn fmt::Display) -> ValueError {
+    ValueError::wrong_type(format!("expected a non-negative integer, got {len}"))
+        .within(PathSegment::Index(index))
+        .within(PathSegment::Member("len".into()))
+}
+
+impl MatrixInfo {
+    fn decode(&self, json: &Json, mode: Mode) -> Result<Value> {
+        let Json::Object(items) = json else {
+            return Err(expected("an object with `len` and `blob`", json));
+        };
+        if let Some(unknown) = items.keys().find(|k| !MATRIX_MEMBERS.contains(&k.as_str())) {
+            return Err(ValueError::wrong_type(format!(
+                "unknown matrix member `{unknown}`"
+            )));
+        }
+        let member = |name: &str| {
+            items
+                .get(name)
+                .ok_or_else(|| ValueError::wrong_type(format!("missing matrix member `{name}`")))
+        };
+        let in_len = |e: ValueError| e.within(PathSegment::Member("len".into()));
+        let in_blob = |e: ValueError| e.within(PathSegment::Member("blob".into()));
+
+        let json_len = member("len")?;
+        let Json::Array(json_len) = json_len else {
+            return Err(in_len(expected("an array of lengths", json_len)));
+        };
+        let len = json_len
+            .iter()
+            .enumerate()
+            .map(|(i, l)| l.as_u64().ok_or_else(|| negative_len(i, l)))
+            .collect::<Result<Vec<u64>>>()?;
+        let len = self.lengths(&len, mode)?;
+
+        let json_blob = member("blob")?;
+        let Json::String(blob) = json_blob else {
+            return Err(in_blob(expected("a base64 string", json_blob)));
+        };
+        let data = BASE64
+            .decode(blob)
+            .map_err(|e| in_blob(ValueError::wrong_type(format!("invalid base64: {e}"))))?;
+        self.check_bytes(&len, data.len())?;
+        Ok(Value::Matrix { len, data })
+    }
+
+    /// Lengths as `u32`, checked as decoding checks the `len` member: one per dimension
+    /// (`WrongType`), in [`Mode::Request`] none above its `maxlen` (`RangeError`), and
+    /// each within `u32` (`WrongType`).
+    pub fn lengths(&self, len: &[u64], mode: Mode) -> Result<Vec<u32>> {
+        let in_len = |e: ValueError| e.within(PathSegment::Member("len".into()));
+        self.check_dims(len.len()).map_err(in_len)?;
+        if mode == Mode::Request {
+            self.check_maxlen(len).map_err(in_len)?;
+        }
+        len.iter()
+            .enumerate()
+            .map(|(i, &l)| {
+                u32::try_from(l).map_err(|_| {
+                    in_len(
+                        ValueError::wrong_type(format!("{l} is too long for a dimension"))
+                            .within(PathSegment::Index(i)),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// Lengths given as signed integers, as a C host holds them: a negative one is the
+    /// same `WrongType` error as in JSON, the rest as [`lengths`](Self::lengths).
+    pub fn signed_lengths(&self, len: &[i64], mode: Mode) -> Result<Vec<u32>> {
+        let len = len
+            .iter()
+            .enumerate()
+            .map(|(i, &l)| u64::try_from(l).map_err(|_| negative_len(i, &l)))
+            .collect::<Result<Vec<u64>>>()?;
+        self.lengths(&len, mode)
+    }
+
+    /// A matrix value from lengths and element bytes, checked as by
+    /// [`check`](Self::check).
+    pub fn value(&self, len: Vec<u32>, data: Vec<u8>, mode: Mode) -> Result<Value> {
+        self.check(&len, data.len(), mode)?;
+        Ok(Value::Matrix { len, data })
+    }
+
+    /// Checks lengths and the number of element bytes against the datainfo, as decoding
+    /// does: one length per dimension and exactly `product(len) × element size` bytes
+    /// (`WrongType`), and in [`Mode::Request`] no length above its `maxlen`
+    /// (`RangeError`). Error paths point at `len` or `blob`, as for decoded JSON.
+    pub fn check(&self, len: &[u32], bytes: usize, mode: Mode) -> Result<()> {
+        let in_len = |e: ValueError| e.within(PathSegment::Member("len".into()));
+        self.check_dims(len.len()).map_err(in_len)?;
+        if mode == Mode::Request {
+            let wide: Vec<u64> = len.iter().map(|&l| u64::from(l)).collect();
+            self.check_maxlen(&wide).map_err(in_len)?;
+        }
+        self.check_bytes(len, bytes)
+    }
+
+    fn check_dims(&self, dims: usize) -> Result<()> {
+        if dims == self.dims() {
+            Ok(())
+        } else {
+            Err(ValueError::wrong_type(format!(
+                "expected {} dimensions, got {dims}",
+                self.dims()
+            )))
+        }
+    }
+
+    fn check_maxlen(&self, len: &[u64]) -> Result<()> {
+        for (i, (&l, &max)) in len.iter().zip(self.maxlen()).enumerate() {
+            if l > max {
+                return Err(ValueError::range(format!(
+                    "{l} elements along `{}`, at most {max} allowed",
+                    self.names()[i]
+                ))
+                .within(PathSegment::Index(i)));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_bytes(&self, len: &[u32], bytes: usize) -> Result<()> {
+        let Some(required) = self.byte_count(len) else {
+            return Err(ValueError::wrong_type(format!(
+                "the lengths {len:?} give more bytes than this platform can hold"
+            ))
+            .within(PathSegment::Member("len".into())));
+        };
+        if bytes == required {
+            Ok(())
+        } else {
+            Err(ValueError::wrong_type(format!(
+                "the lengths {len:?} require {required} bytes, got {bytes}"
+            ))
+            .within(PathSegment::Member("blob".into())))
+        }
+    }
+
+    // --- typed access
+
+    /// Number of elements of a matrix with lengths `len`, `None` if it overflows `usize`.
+    pub fn element_count(len: &[u32]) -> Option<usize> {
+        len.iter().try_fold(1usize, |count, &l| {
+            count.checked_mul(usize::try_from(l).ok()?)
+        })
+    }
+
+    /// Number of bytes of a matrix with lengths `len`, `None` if it overflows `usize`.
+    pub fn byte_count(&self, len: &[u32]) -> Option<usize> {
+        Self::element_count(len)?.checked_mul(self.elementtype().size())
+    }
+
+    /// Element `index` of `data` (in transport order) as `f64`. `None` if `index` is out
+    /// of range or the elements are half floats (`f2`), which pass through as bytes only.
+    /// 64-bit integers beyond ±2⁵³ lose precision.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn element_f64(&self, data: &[u8], index: usize) -> Option<f64> {
+        let t = self.elementtype();
+        let size = t.size();
+        let start = index.checked_mul(size)?;
+        let bytes = data.get(start..start.checked_add(size)?)?;
+        let mut buf = [0u8; 8];
+        // place the element's bytes so that from_le/from_be of an 8-byte array works
+        if t.big_endian() {
+            buf[8 - size..].copy_from_slice(bytes);
+        } else {
+            buf[..size].copy_from_slice(bytes);
+        }
+        let raw = if t.big_endian() {
+            u64::from_be_bytes(buf)
+        } else {
+            u64::from_le_bytes(buf)
+        };
+        let bits = u32::try_from(size * 8).ok()?;
+        Some(match t.kind() {
+            ElementKind::UInt => raw as f64,
+            ElementKind::Int => {
+                // sign-extend from the element width
+                let shift = 64 - bits;
+                (((raw << shift).cast_signed()) >> shift) as f64
+            }
+            ElementKind::Float => match size {
+                4 => f64::from(f32::from_bits(u32::try_from(raw).ok()?)),
+                8 => f64::from_bits(raw),
+                _ => return None,
+            },
+        })
+    }
+
+    /// All elements of `data` as `f64`s, in transport order; `None` for half floats or a
+    /// byte count that is not a multiple of the element size. See
+    /// [`element_f64`](Self::element_f64).
+    pub fn to_f64s(&self, data: &[u8]) -> Option<Vec<f64>> {
+        let size = self.elementtype().size();
+        if !data.len().is_multiple_of(size) {
+            return None;
+        }
+        (0..data.len() / size)
+            .map(|i| self.element_f64(data, i))
+            .collect()
+    }
+
+    /// A matrix value with lengths `len` from elements given as `f64`s in transport order.
+    ///
+    /// Integer elements must be integral and within the range of the element type, float
+    /// elements of `f4` must be within the `f32` range (NaN and infinities are kept);
+    /// otherwise a `RangeError` points at the element's index. Half floats (`f2`) are not
+    /// supported (`WrongType`); build their bytes directly. A count of values other than
+    /// `product(len)`, or a wrong number of lengths, is a `WrongType` error.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    pub fn from_f64s(&self, len: &[u32], values: &[f64]) -> Result<Value> {
+        let t = self.elementtype();
+        let size = t.size();
+        self.check_dims(len.len())
+            .map_err(|e| e.within(PathSegment::Member("len".into())))?;
+        if Self::element_count(len) != Some(values.len()) {
+            return Err(ValueError::wrong_type(format!(
+                "the lengths {len:?} do not fit {} values",
+                values.len()
+            )));
+        }
+        if t.kind() == ElementKind::Float && size == 2 {
+            return Err(ValueError::wrong_type(
+                "half float (`f2`) elements cannot be built from f64 values",
+            ));
+        }
+        let bits = size * 8;
+        let mut data = Vec::with_capacity(values.len() * size);
+        for (i, &v) in values.iter().enumerate() {
+            let out_of_range = || {
+                ValueError::range(format!("{v} does not fit `{t}`")).within(PathSegment::Index(i))
+            };
+            let raw: u64 = match t.kind() {
+                ElementKind::Float if size == 4 => {
+                    let f = v as f32;
+                    if v.is_finite() && f.is_infinite() {
+                        return Err(out_of_range());
+                    }
+                    u64::from(f.to_bits())
+                }
+                ElementKind::Float => v.to_bits(),
+                ElementKind::UInt => {
+                    // 2^bits as f64 is exact; the upper limit is exclusive
+                    let limit = 2f64.powi(i32::try_from(bits).unwrap_or(64));
+                    if v.fract() != 0.0 || !(0.0..limit).contains(&v) {
+                        return Err(out_of_range());
+                    }
+                    v as u64
+                }
+                ElementKind::Int => {
+                    let limit = 2f64.powi(i32::try_from(bits - 1).unwrap_or(63));
+                    if v.fract() != 0.0 || !(-limit..limit).contains(&v) {
+                        return Err(out_of_range());
+                    }
+                    (v as i64).cast_unsigned()
+                }
+            };
+            if t.big_endian() {
+                data.extend_from_slice(&raw.to_be_bytes()[8 - size..]);
+            } else {
+                data.extend_from_slice(&raw.to_le_bytes()[..size]);
+            }
+        }
+        Ok(Value::Matrix {
+            len: len.to_vec(),
+            data,
+        })
+    }
+}
+
 impl CommandInfo {
     /// Decodes the argument of a `do` request; `json` is `None` when the message has no
     /// data part. Returns `None` for a command without argument.
@@ -578,6 +875,13 @@ impl DataInfo {
                 }
                 Ok(Json::Object(out))
             }
+            (Self::Matrix(info), Value::Matrix { len, data }) => {
+                info.check(len, data.len(), Mode::Report)?;
+                let mut out = Map::new();
+                out.insert("len".into(), len.clone().into());
+                out.insert("blob".into(), BASE64.encode(data).into());
+                Ok(Json::Object(out))
+            }
             (Self::Command(_), _) => Err(ValueError::wrong_type(
                 "a command has no value; encode its argument or result",
             )),
@@ -602,6 +906,7 @@ fn value_kind(value: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Tuple(_) => "tuple",
         Value::Struct(_) => "struct",
+        Value::Matrix { .. } => "matrix",
     }
 }
 
@@ -981,5 +1286,307 @@ mod tests {
             .unwrap();
         let second = s.decode(&s.encode(&first).unwrap(), Mode::Report).unwrap();
         assert_eq!(first, second);
+    }
+
+    // --- matrix
+
+    const SPEC_BLOB: &str = "AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA";
+
+    fn image() -> DataInfo {
+        info(
+            json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [100, 100]}),
+        )
+    }
+
+    fn matrix_info(info: &DataInfo) -> &MatrixInfo {
+        let DataInfo::Matrix(m) = info else {
+            panic!("not a matrix")
+        };
+        m
+    }
+
+    #[test]
+    fn matrix_spec_example() {
+        let m = image();
+        let value = m
+            .decode(&json!({"len": [2, 3], "blob": SPEC_BLOB}), Mode::Request)
+            .unwrap();
+        let (len, data) = value.as_matrix().unwrap();
+        assert_eq!(len, [2, 3]);
+        assert_eq!(data.len(), 24);
+        assert_eq!(
+            matrix_info(&m).to_f64s(data).unwrap(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
+
+    #[test]
+    fn matrix_blob_size_does_not_fit() {
+        let e = image()
+            .decode(&json!({"len": [2, 3], "blob": "AACAPw=="}), Mode::Report)
+            .unwrap_err();
+        assert_eq!(e.class, ErrorClass::WrongType);
+        assert_eq!(e.path.to_string(), "blob");
+        assert!(e.to_string().contains("blob"), "{e}");
+    }
+
+    #[test]
+    fn matrix_wrong_number_of_dimensions() {
+        let e = image()
+            .decode(&json!({"len": [6], "blob": SPEC_BLOB}), Mode::Report)
+            .unwrap_err();
+        assert_eq!(e.class, ErrorClass::WrongType);
+        assert_eq!(e.path.to_string(), "len");
+    }
+
+    #[test]
+    fn matrix_dimension_beyond_maxlen() {
+        let blob = BASE64.encode(vec![0u8; 404]);
+        let json = json!({"len": [101, 1], "blob": blob});
+        let e = image().decode(&json, Mode::Request).unwrap_err();
+        assert_eq!(e.class, ErrorClass::RangeError);
+        assert_eq!(
+            e.path.segments(),
+            [PathSegment::Member("len".into()), PathSegment::Index(0)]
+        );
+        assert_eq!(e.path.to_string(), "len[0]");
+        // reports are only checked for their shape
+        assert!(image().decode(&json, Mode::Report).is_ok());
+    }
+
+    #[test]
+    fn matrix_empty() {
+        let value = image()
+            .decode(&json!({"len": [0, 0], "blob": ""}), Mode::Request)
+            .unwrap();
+        assert_eq!(value.as_matrix(), Some((&[0, 0][..], &[][..])));
+        assert_eq!(
+            image().encode(&value),
+            Ok(json!({"len": [0, 0], "blob": ""}))
+        );
+        // one empty dimension makes the whole matrix empty
+        assert!(
+            image()
+                .decode(&json!({"len": [5, 0], "blob": ""}), Mode::Request)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn matrix_unknown_member() {
+        let e = image()
+            .decode(
+                &json!({"len": [1, 1], "blob": "AACAPw==", "t": 0}),
+                Mode::Report,
+            )
+            .unwrap_err();
+        assert_eq!(e.class, ErrorClass::WrongType);
+        assert!(e.message.contains("`t`"), "{e}");
+    }
+
+    #[test]
+    fn matrix_shapes() {
+        let m = image();
+        for json in [
+            json!([[1.0]]),
+            json!({"len": [1, 1]}),
+            json!({"blob": "AACAPw=="}),
+            json!({"len": "1", "blob": "AACAPw=="}),
+            json!({"len": [1, -1], "blob": "AACAPw=="}),
+            json!({"len": [1, 1.5], "blob": "AACAPw=="}),
+            json!({"len": [1, 1], "blob": [0, 0, 128, 63]}),
+            json!({"len": [1, 1], "blob": "AACAPw"}),
+            json!({"len": [1, 1], "blob": "AACA\nPw=="}),
+            json!({"len": [4_294_967_296_u64, 1], "blob": ""}),
+            json!({"len": [4_294_967_295_u32, 4_294_967_295_u32], "blob": ""}),
+        ] {
+            assert_eq!(
+                class_of(m.decode(&json, Mode::Report)),
+                ErrorClass::WrongType,
+                "{json}"
+            );
+        }
+        // the product of the lengths overflows on every platform
+        let wide = info(json!({"type": "matrix", "elementtype": "<f8",
+            "names": ["a", "b", "c"], "maxlen": [4_294_967_295_u32, 4_294_967_295_u32, 4_294_967_295_u32]}));
+        let e = wide
+            .decode(
+                &json!({"len": [4_294_967_295_u32, 4_294_967_295_u32, 4_294_967_295_u32], "blob": ""}),
+                Mode::Request,
+            )
+            .unwrap_err();
+        assert_eq!(
+            (e.class, e.path.to_string()),
+            (ErrorClass::WrongType, "len".into())
+        );
+    }
+
+    #[test]
+    fn matrix_round_trip() {
+        let m = image();
+        let json = json!({"len": [2, 3], "blob": SPEC_BLOB});
+        let first = m.decode(&json, Mode::Report).unwrap();
+        let encoded = m.encode(&first).unwrap();
+        assert_eq!(encoded, json);
+        assert_eq!(encoded["blob"], SPEC_BLOB);
+        assert_eq!(m.decode(&encoded, Mode::Report).unwrap(), first);
+    }
+
+    #[test]
+    fn matrix_encode_checks_shape() {
+        let m = image();
+        let short = Value::Matrix {
+            len: vec![2, 3],
+            data: vec![0; 4],
+        };
+        let e = m.encode(&short).unwrap_err();
+        assert_eq!(
+            (e.class, e.path.to_string()),
+            (ErrorClass::WrongType, "blob".into())
+        );
+        let flat = Value::Matrix {
+            len: vec![6],
+            data: vec![0; 24],
+        };
+        assert_eq!(m.encode(&flat).unwrap_err().path.to_string(), "len");
+        assert!(m.encode(&Value::Blob(vec![])).is_err());
+        // limits are not checked when encoding
+        let big = Value::Matrix {
+            len: vec![101, 1],
+            data: vec![0; 404],
+        };
+        assert!(m.encode(&big).is_ok());
+        assert_eq!(
+            matrix_info(&m)
+                .check(&[101, 1], 404, Mode::Request)
+                .unwrap_err()
+                .class,
+            ErrorClass::RangeError
+        );
+        assert!(matrix_info(&m).check(&[101, 1], 404, Mode::Report).is_ok());
+    }
+
+    // --- matrix helpers
+
+    fn matrix_of(elementtype: &str) -> DataInfo {
+        info(json!({"type": "matrix", "elementtype": elementtype, "names": ["x"], "maxlen": [16]}))
+    }
+
+    #[test]
+    fn matrix_helpers_both_endiannesses() {
+        let values = [1.0, -2.5, 3.25];
+        for t in ["<f4", ">f4", "<f8", ">f8"] {
+            let info = matrix_of(t);
+            let m = matrix_info(&info);
+            let value = m.from_f64s(&[3], &values).unwrap();
+            let (_, data) = value.as_matrix().unwrap();
+            assert_eq!(data.len(), 3 * m.elementtype().size(), "{t}");
+            assert_eq!(m.to_f64s(data).unwrap(), values, "{t}");
+            assert_eq!(m.element_f64(data, 1), Some(-2.5), "{t}");
+            assert_eq!(m.element_f64(data, 3), None, "{t}");
+        }
+        let le = matrix_of("<u2");
+        let be = matrix_of(">u2");
+        let Value::Matrix { data: le_data, .. } =
+            matrix_info(&le).from_f64s(&[1], &[258.0]).unwrap()
+        else {
+            panic!()
+        };
+        let Value::Matrix { data: be_data, .. } =
+            matrix_info(&be).from_f64s(&[1], &[258.0]).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!((le_data, be_data), (vec![2, 1], vec![1, 2]));
+        assert_eq!(
+            matrix_info(&be).element_f64(&[0xff, 0xfe], 0),
+            Some(65534.0)
+        );
+        assert_eq!(
+            matrix_info(&matrix_of(">i2")).element_f64(&[0xff, 0xfe], 0),
+            Some(-2.0)
+        );
+        assert_eq!(
+            matrix_info(&matrix_of("<i2")).element_f64(&[0xfe, 0xff], 0),
+            Some(-2.0)
+        );
+    }
+
+    #[test]
+    fn matrix_helpers_extremes() {
+        let u8_info = matrix_of("<u1");
+        let u8m = matrix_info(&u8_info);
+        let v = u8m.from_f64s(&[2], &[0.0, 255.0]).unwrap();
+        assert_eq!(v.as_matrix().unwrap().1, [0, 255]);
+        assert_eq!(u8m.to_f64s(&[0, 255]).unwrap(), [0.0, 255.0]);
+        for bad in [256.0, -1.0, 0.5, f64::NAN, f64::INFINITY] {
+            let e = u8m.from_f64s(&[2], &[0.0, bad]).unwrap_err();
+            assert_eq!(e.class, ErrorClass::RangeError, "{bad}");
+            assert_eq!(e.path.segments(), [PathSegment::Index(1)]);
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let (min, max) = (i64::MIN as f64, i64::MAX as f64);
+        for t in ["<i8", ">i8"] {
+            let info = matrix_of(t);
+            let m = matrix_info(&info);
+            // i64::MAX as f64 is 2^63, one beyond the range
+            assert!(m.from_f64s(&[1], &[max]).is_err(), "{t}");
+            let v = m.from_f64s(&[2], &[min, -1.0]).unwrap();
+            let (_, data) = v.as_matrix().unwrap();
+            assert_eq!(m.to_f64s(data).unwrap(), [min, -1.0]);
+            let mut extreme = i64::MIN.to_le_bytes();
+            if t.starts_with('>') {
+                extreme = i64::MIN.to_be_bytes();
+            }
+            assert_eq!(m.element_f64(&extreme, 0), Some(min));
+        }
+        let i1_info = matrix_of("<i1");
+        let i1 = matrix_info(&i1_info);
+        assert_eq!(i1.to_f64s(&[0x80, 0x7f]).unwrap(), [-128.0, 127.0]);
+        assert!(i1.from_f64s(&[1], &[128.0]).is_err());
+        assert!(i1.from_f64s(&[1], &[-128.0]).is_ok());
+
+        let f4_info = matrix_of("<f4");
+        let f4 = matrix_info(&f4_info);
+        assert_eq!(
+            f4.from_f64s(&[1], &[1e300]).unwrap_err().class,
+            ErrorClass::RangeError
+        );
+        let v = f4.from_f64s(&[2], &[f64::NAN, f64::NEG_INFINITY]).unwrap();
+        let back = f4.to_f64s(v.as_matrix().unwrap().1).unwrap();
+        assert!(back[0].is_nan() && back[1] == f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn matrix_helpers_refusals() {
+        let f2_info = matrix_of("<f2");
+        let f2 = matrix_info(&f2_info);
+        assert_eq!(f2.element_f64(&[0, 0x3c], 0), None);
+        assert_eq!(f2.to_f64s(&[0, 0x3c]), None);
+        assert_eq!(
+            f2.from_f64s(&[1], &[1.0]).unwrap_err().class,
+            ErrorClass::WrongType
+        );
+        // f2 data still passes through as bytes
+        let value = f2_info
+            .decode(&json!({"len": [1], "blob": "ADw="}), Mode::Request)
+            .unwrap();
+        assert_eq!(value.as_matrix().unwrap().1, [0, 0x3c]);
+
+        let f4_info = matrix_of("<f4");
+        let f4 = matrix_info(&f4_info);
+        assert_eq!(
+            f4.from_f64s(&[3], &[1.0]).unwrap_err().class,
+            ErrorClass::WrongType
+        );
+        assert_eq!(
+            f4.from_f64s(&[1, 1], &[1.0]).unwrap_err().class,
+            ErrorClass::WrongType
+        );
+        assert_eq!(f4.to_f64s(&[0, 0, 0]), None);
+        assert_eq!(MatrixInfo::element_count(&[2, 3, 4]), Some(24));
+        assert_eq!(MatrixInfo::element_count(&[]), Some(1));
+        assert_eq!(f4.byte_count(&[2, 3]), Some(24));
     }
 }

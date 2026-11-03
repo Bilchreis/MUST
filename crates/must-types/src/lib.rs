@@ -39,8 +39,9 @@
 //! # Specification version
 //!
 //! must implements the SECoP 2.0 draft as of commit `a6e90eb` (2026-07-07) of
-//! <https://github.com/SampleEnvironment/SECoP>. The `matrix` data type is not supported
-//! yet and is rejected with [`DataInfoErrorKind::UnsupportedType`].
+//! <https://github.com/SampleEnvironment/SECoP>, including the `matrix` data type. Its
+//! optional `compression` property is rejected with
+//! [`DataInfoErrorKind::UnsupportedProperty`], as SECoP defines no compression yet.
 //!
 //! Where the specification contradicts itself, must follows the prose:
 //!

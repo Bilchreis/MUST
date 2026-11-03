@@ -2,7 +2,7 @@
 
 Latency and throughput measurements of must nodes, mainly through SHALL's C ABI used the way a C or LabVIEW program uses it. They are not part of CI.
 
-- `bench_host.c`: a program that builds one node `bench` (module `m`, readable doubles `p0`…`p9` and `value`, `status`, writable `w`) through `SECoP_S_*`, in callback mode, in polling mode with a LabVIEW-style loop, or pushing values in a tight loop. See the comment at its top.
+- `bench_host.c`: a program that builds one node `bench` (module `m`, readable doubles `p0`…`p9` and `value`, `status`, writable `w`, and for the matrix modes a 512×512 `<f4` matrix `image`) through `SECoP_S_*`, in callback mode, in polling mode with a LabVIEW-style loop, or pushing values in a tight loop. See the comment at its top.
 - `loadgen/`: a SECoP load client (its own Cargo project, not a workspace member).
 - `run.sh`: builds both against the current checkout and runs a suite.
 
@@ -14,6 +14,7 @@ Linux only (`bench_host.c` uses POSIX timing, `run.sh` links `libSHALLserver64.s
 bench/run.sh polling      # polling-mode latency, both loop styles (about 30 s)
 bench/run.sh stall        # client latency across a 60 s slow-tier poll tick (about 2.5 min)
 bench/run.sh throughput   # reads and pushes per second, log files and monitoring on and off
+bench/run.sh matrix       # time per push of a 1 MiB matrix through each C function (about 15 s)
 bench/run.sh all
 ```
 
@@ -62,3 +63,16 @@ After issue #16, on another machine (node pinned to 4 threads, load client to 4 
 Instructions counted with callgrind, log files and monitoring on: 66k → 41k per read reply of the Rust node, 12.9k → 8.5k per update call (including start-up and idle work, so approximate).
 
 The fixes also help a node with both off, so on stays at about 60% of off under full load. What is left is the work of logging itself: every request makes three events, which two tasks follow and a thread writes as three lines of text, and an update wakes those tasks.
+
+## Matrix pushes
+
+`matrix` pushes a 512×512 `<f4` matrix (1 MiB, about 1.4 MB as base64) to `m:image` in a loop, with log files and monitoring off. Measured with `add-matrix-datatype` (4 cores, release build):
+
+| Function | Time per update | base64 work per update |
+|---|---|---|
+| `SECoP_S_updateParameter`, handle | 2.88 ms | 1 encode (for the wire) |
+| `SECoP_V_toJSON` + `SECoP_S_updateParameter2` | 7.75 ms | 2 encodes, 1 decode |
+| `SECoP_S_updateParameter2`, JSON made once | 5.48 ms | 1 decode, 1 encode |
+| `SECoP_S_updateParameterMatrix` | 2.34 ms | 1 encode |
+
+The second row is the route a handle took before matrices bypassed JSON inside must: the handle was exported to JSON, which encodes the bytes, and decoded again against the datainfo. Taking the differences, encoding and serializing the JSON costs about 2.3 ms and parsing and decoding it about 3.1 ms, so a path that encoded twice could not stay below about 4 ms. A handle now costs one copy of its bytes more than `SECoP_S_updateParameterMatrix`, which copies the host's buffer once.

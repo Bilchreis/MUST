@@ -17,12 +17,13 @@ fn main() {
     }
     c.files(&sources).compile("must_ctests");
 
-    cc::Build::new()
-        .cpp(true)
-        .include(&include)
-        .warnings(true)
-        .file("c/header_check.cpp")
-        .compile("must_ctests_cpp");
+    let mut cpp = cc::Build::new();
+    cpp.cpp(true).include(&include).warnings(true);
+    if !cpp.get_compiler().is_like_msvc() {
+        // MSVC knows no C++ standard before C++14
+        cpp.std("c++11").flag("-pedantic");
+    }
+    cpp.file("c/header_check.cpp").compile("must_ctests_cpp");
 
     println!("cargo:rerun-if-changed=c");
     println!("cargo:rerun-if-changed=../../include");

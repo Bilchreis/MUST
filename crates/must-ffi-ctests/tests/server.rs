@@ -971,6 +971,134 @@ fn filtered_within_one_context() {
     done(c"filt2");
 }
 
+// --- matrix parameters
+
+/// The specification's matrix example: 2×3 `<f4` holding 1 to 6.
+const SPEC_MATRIX: &str = r#"{"len":[2,3],"blob":"AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA"}"#;
+
+fn spec_matrix() -> serde_json::Value {
+    serde_json::from_str(SPEC_MATRIX).unwrap()
+}
+
+#[test]
+fn matrix_in_callback_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port argument
+    check("matrix_callbacks", unsafe {
+        c::ctest_server_matrix_callbacks(port)
+    });
+    let description = Client::connect(port).describe();
+    assert_eq!(
+        description["modules"]["cam"]["accessibles"]["image"]["datainfo"],
+        serde_json::json!({"type": "matrix", "elementtype": "<f4",
+                           "names": ["x", "y"], "maxlen": [100, 100]})
+    );
+
+    let mut active = Client::connect(port);
+    active.send("activate cam");
+    active.recv_until("active");
+    let mut client = Client::connect(port);
+
+    // a getter that fills the struct a member at a time
+    let reply = client.request("read cam:image");
+    assert!(reply.starts_with("reply cam:image "), "{reply}");
+    assert_eq!(data(&reply)[0], spec_matrix());
+    assert_eq!(
+        data(&active.recv_until("update cam:image "))[0],
+        spec_matrix()
+    );
+
+    // a getter whose blob is too short for its lengths
+    let reply = client.request("read cam:bad");
+    assert!(reply.starts_with("error_read cam:bad "), "{reply}");
+    assert_eq!(data(&reply)[0], "InternalError");
+    // no update with a value reaches the activated client
+    active.send("ping matrix");
+    loop {
+        let line = active.recv();
+        assert!(!line.starts_with("update cam:bad "), "{line}");
+        if line.starts_with("pong matrix") {
+            break;
+        }
+    }
+    done(c"mcb");
+    assert!(closed(port));
+}
+
+fn matrix_step(port: u16, request: &'static str, step: c_int) -> String {
+    let client = std::thread::spawn(move || Client::connect(port).request(request));
+    // SAFETY: a C test with a step number
+    check(&format!("matrix step {step}"), unsafe {
+        c::ctest_server_matrix_step(step)
+    });
+    client.join().unwrap()
+}
+
+#[test]
+fn matrix_in_polling_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port argument
+    check("matrix_polling", unsafe {
+        c::ctest_server_matrix_polling(port)
+    });
+    let mut active = Client::connect(port);
+    active.send("activate cam");
+    active.recv_until("active");
+
+    // the value of a change, as a struct handle
+    let reply = matrix_step(
+        port,
+        r#"change cam:image {"len":[1,1],"blob":"AACAPw=="}"#,
+        1,
+    );
+    assert!(reply.starts_with("changed cam:image "), "{reply}");
+    assert_eq!(
+        data(&reply)[0],
+        serde_json::json!({"len": [1, 1], "blob": "AACAPw=="})
+    );
+
+    // answers with the matrix arguments
+    let reply = matrix_step(port, "read cam:image", 2);
+    assert!(reply.starts_with("reply cam:image "), "{reply}");
+    assert_eq!(data(&reply)[0], spec_matrix());
+    assert_eq!(data(&reply)[1]["t"], 1000.0);
+    let reply = matrix_step(port, "read cam:image", 3);
+    assert!(reply.starts_with("error_read cam:image "), "{reply}");
+    assert_eq!(data(&reply)[0], "CommunicationFailed");
+    let reply = matrix_step(port, "read cam:plain", 4);
+    assert!(reply.starts_with("reply cam:plain "), "{reply}");
+    assert_eq!(data(&reply)[0], 1.5);
+
+    // pushed matrices, after the updates of the change and the reads
+    active.send("ping drained");
+    active.recv_until("pong drained");
+    // SAFETY: a C test with a step number
+    check("matrix step 5", unsafe { c::ctest_server_matrix_step(5) });
+    let now = data(&active.recv_until("update cam:image "));
+    assert_eq!(now[0], spec_matrix());
+    assert!(now[1]["t"].as_f64().unwrap() > 1.0e9, "NaN means now");
+    // updateParameter (handle), updateParameter2 (JSON), updateParameterMatrix
+    let lines: Vec<String> = (0..3)
+        .map(|_| active.recv_until("update cam:image "))
+        .collect();
+    assert_eq!(
+        lines[0],
+        format!("update cam:image [{SPEC_MATRIX},{{\"t\":1000.0}}]")
+    );
+    assert_eq!(lines[1], lines[0], "updateParameter2 differs");
+    assert_eq!(lines[2], lines[0], "updateParameterMatrix differs");
+    // the failed pushes sent nothing; the empty matrix is next
+    let empty = active.recv_until("update ");
+    assert_eq!(
+        empty,
+        r#"update cam:image [{"len":[0,0],"blob":""},{"t":1000.0}]"#
+    );
+    done(c"mpoll");
+    assert!(closed(port));
+}
+
 // --- checks (must addition)
 
 /// `SECoP_S_ACTION_CHECK`.

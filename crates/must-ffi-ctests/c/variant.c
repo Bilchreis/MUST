@@ -375,3 +375,59 @@ int ctest_variant_compare_print(void)
     SECoP_V_destroy(&limited);
     return 0;
 }
+
+/* --- matrix values: a struct of len (int array) and blob (raw element bytes) */
+
+static const char* const IMAGE =
+    "{\"type\":\"matrix\",\"elementtype\":\"<f4\",\"names\":[\"x\",\"y\"],\"maxlen\":[100,100]}";
+/* the specification's example: 2x3 little-endian floats 1 to 6 */
+static const char* const SPEC_MATRIX = "{\"len\":[2,3],\"blob\":\"AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA\"}";
+
+int ctest_variant_matrix(void)
+{
+    CSECoPbaseType* hint = SECoP_V_create(IMAGE);
+    CSECoPbaseType* p;
+    enum SECoP_V_type t = SECoP_VT_NONE;
+    unsigned int count = 0, i;
+    const char* name = NULL;
+    char text[256];
+    unsigned char raw[25];
+    float floats[6];
+    const float one = 1.0f;
+    long long len = 0;
+
+    /* created from a matrix datainfo */
+    CHECK(hint != NULL);
+    CHECK(SECoP_V_getInfo(hint, 0, &t, &count, &name) && t == SECoP_VT_STRUCT && count == 2);
+    CHECK(SECoP_V_getInfo(hint, 1, &t, &count, &name) && t == SECoP_VT_ARRAY_INTEGER && count == 2);
+    CHECK(name != NULL && strcmp(name, "len") == 0);
+    CHECK(SECoP_V_getInfo(hint, 2, &t, &count, &name) && t == SECoP_VT_BLOB && count == 0);
+    CHECK(name != NULL && strcmp(name, "blob") == 0);
+    CHECK(!SECoP_V_getInfo(hint, 3, &t, &count, &name));
+    CHECK(json_is(hint, "{\"len\":[0,0],\"blob\":\"\"}"));
+    /* its type is still the matrix */
+    CHECK(SECoP_V_getType(hint, text, (int)sizeof(text)) > 0 && strcmp(text, IMAGE) == 0);
+    CHECK(SECoP_V_create("{\"type\":\"matrix\",\"elementtype\":\"<f1\",\"names\":[\"x\"],\"maxlen\":[1]}") == NULL);
+
+    /* parsed from the transport JSON with the hint */
+    p = SECoP_V_fromJSON(SPEC_MATRIX, hint);
+    CHECK(p != NULL);
+    CHECK(SECoP_V_getInteger(p, 1, 0, &len) && len == 2);
+    CHECK(SECoP_V_getInteger(p, 1, 1, &len) && len == 3);
+    CHECK(SECoP_V_getString(p, 2, (unsigned int)sizeof(raw), (char*)raw) == 25);
+    memcpy(floats, raw, sizeof(floats)); /* all targets are little-endian */
+    for (i = 0; i < 6; ++i)
+        CHECK(floats[i] == (float)(i + 1));
+    CHECK(json_is(p, SPEC_MATRIX));
+    CHECK(SECoP_V_getType(p, text, (int)sizeof(text)) > 0 && strcmp(text, IMAGE) == 0);
+    /* one length per dimension */
+    CHECK(SECoP_V_fromJSON("{\"len\":[6],\"blob\":\"AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA\"}", hint) == NULL);
+
+    /* edited a member at a time, as SHALL's structs are: lengths, then the blob */
+    CHECK(SECoP_V_modifyInteger(p, 1, 0, 1) && SECoP_V_modifyInteger(p, 1, 1, 1));
+    CHECK(SECoP_V_modifyString(p, 2, (const char*)&one, (int)sizeof(one)));
+    CHECK(json_is(p, "{\"len\":[1,1],\"blob\":\"AACAPw==\"}"));
+    SECoP_V_destroy(&p);
+    SECoP_V_destroy(&hint);
+    return 0;
+}

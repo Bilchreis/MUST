@@ -12,14 +12,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use must_server::{CallResult, CheckResult, Ctx, HandlerResult, ModuleHandler, Reading};
 use must_types::datainfo::CommandInfo;
-use must_types::{DataInfo, ErrorClass, Mode, SecopError, Value};
+use must_types::{DataInfo, ErrorClass, Mode, SecopError, Value, ValueError};
 use serde_json::Value as Json;
 use tokio::sync::{Mutex, oneshot};
 
 use super::build::{CallFunction, CheckFunction, GetSet};
 use super::codes::{action, to_secop};
 use super::state;
-use crate::variant::{self, clone_handle, destroy_handle, new_handle};
+use crate::variant::{self, clone_handle, destroy_handle, new_handle, shorten, take_handle};
 
 /// An accessible of the module with what is needed to call the application.
 pub(crate) enum Accessible {
@@ -55,11 +55,60 @@ pub(crate) struct ShallModule {
     pub gate: Arc<Mutex<()>>,
 }
 
+/// A value from the application: JSON text, a handle's node, or a value that is already
+/// checked (from `SECoP_S_putCommandAnswerMatrix` or a confirmed `change`).
+#[derive(Debug)]
+pub(crate) enum AnswerValue {
+    Json(Json),
+    Node(variant::Node),
+    Value(Value),
+}
+
+impl AnswerValue {
+    /// The value of `info`, checked in report mode. A matrix in a node moves its bytes,
+    /// and a checked value is not encoded; only JSON text is decoded from JSON.
+    pub(crate) fn into_value(self, info: &DataInfo) -> Result<Value, (String, ValueError)> {
+        match self {
+            Self::Json(json) => info
+                .decode(&json, Mode::Report)
+                .map_err(|e| (shorten(&json), e)),
+            // a matrix moves its bytes, so there is nothing left to show
+            Self::Node(node) if matches!(info, DataInfo::Matrix(_)) => node
+                .into_value_direct(info)
+                .map_err(|e| ("a matrix".to_owned(), e)),
+            Self::Node(node) => node
+                .to_value_direct(info)
+                .map_err(|e| (shorten(&node.export_value()), e)),
+            Self::Value(value) => {
+                // a matrix's shape is checked without encoding its bytes
+                let fits = match (info, &value) {
+                    (DataInfo::Matrix(m), Value::Matrix { len, data }) => {
+                        m.check(len, data.len(), Mode::Report)
+                    }
+                    _ => info.encode(&value).map(|_| ()),
+                };
+                fits.map(|()| value)
+                    .map_err(|e| ("the value".to_owned(), e))
+            }
+        }
+    }
+
+    /// The value as JSON, for an initial value or a `do` reply without result datainfo.
+    /// `None` for a checked value that does not fit `info` (or without `info`).
+    pub(crate) fn into_json(self, info: Option<&DataInfo>) -> Option<Json> {
+        match self {
+            Self::Json(json) => Some(json),
+            Self::Node(node) => Some(node.export_value()),
+            Self::Value(value) => info.and_then(|info| info.encode(&value).ok()),
+        }
+    }
+}
+
 /// The application's answer to a request, from a callback or `SECoP_S_putCommandAnswer`.
 #[derive(Debug)]
 pub(crate) struct Answer {
     pub code: c_int,
-    pub value: Option<Json>,
+    pub value: Option<AnswerValue>,
     pub sigma: Option<Json>,
     pub t: f64,
 }
@@ -78,18 +127,41 @@ impl Answer {
         (self.t.is_finite() && self.t > 0.0).then_some(self.t)
     }
 
-    fn reading(self, info: &DataInfo, context: &str, accessible: &str) -> HandlerResult {
+    fn reading(mut self, info: &DataInfo, context: &str, accessible: &str) -> HandlerResult {
         self.check(context, accessible)?;
-        let json = self
+        let value = self
             .value
-            .as_ref()
+            .take()
             .ok_or_else(|| internal(format!("{accessible}: the application returned no value")))?;
-        let value = info.decode(json, Mode::Report).map_err(|e| {
+        let value = value.into_value(info).map_err(|(shown, e)| {
             internal(format!(
-                "{accessible}: the application returned {json}, which does not fit: {e}"
+                "{accessible}: the application returned {shown}, which does not fit: {e}"
             ))
         })?;
         Ok(self.into_reading(value))
+    }
+
+    /// The result of a command, `None` for a command without result.
+    fn result(&mut self, info: &CommandInfo, command: &str) -> Result<Option<Value>, SecopError> {
+        let value = self.value.take();
+        let not_fitting = |shown: &str, e: &ValueError| {
+            internal(format!(
+                "{command}: the application returned {shown}, which does not fit: {e}"
+            ))
+        };
+        match (info.result(), value) {
+            (Some(result), Some(value)) => value
+                .into_value(result)
+                .map(Some)
+                .map_err(|(shown, e)| not_fitting(&shown, &e)),
+            (_, value) => {
+                let json = value
+                    .and_then(|v| v.into_json(info.result()))
+                    .unwrap_or(Json::Null);
+                info.decode_result(&json)
+                    .map_err(|e| not_fitting(&shorten(&json), &e))
+            }
+        }
     }
 
     fn into_reading(self, value: Value) -> Reading {
@@ -190,22 +262,22 @@ fn call_check(function: CheckFunction, name: &CString, value: Option<variant::No
     }
 }
 
-/// A value for the application: `json` imported into a copy of the type `proto`.
+/// A value for the application: `value` of `info` in a copy of the type `proto`. A
+/// matrix moves its bytes; other values go through JSON.
 fn to_variant(
     proto: &variant::Node,
-    json: &Json,
+    value: Value,
+    info: &DataInfo,
     accessible: &str,
 ) -> Result<variant::Node, SecopError> {
-    let mut node = proto.clone();
-    if node.import(json, false) {
-        Ok(node)
-    } else {
-        Err(internal(format!("{accessible}: cannot pass {json} on")))
-    }
+    proto
+        .with_value_direct(value, info)
+        .map_err(|e| internal(format!("{accessible}: {e}")))
 }
 
 /// Reads the results of a call and frees the handles: the one passed in, and the ones the
-/// application may have put in its place (the library owns them, as in SHALL).
+/// application may have put in its place (the library owns them, as in SHALL). The
+/// value's node is taken out of its handle, so a matrix's bytes are not copied.
 fn collect(
     code: c_int,
     passed: *mut variant::CSECoPbaseType,
@@ -213,15 +285,18 @@ fn collect(
     sigma: *mut variant::CSECoPbaseType,
     t: f64,
 ) -> Answer {
+    let sigma_json = if sigma == data {
+        clone_handle(sigma).map(|n| n.export_value())
+    } else {
+        take_handle(sigma).map(|n| n.export_value())
+    };
     let answer = Answer {
         code,
-        value: clone_handle(data).map(|n| n.export_value()),
-        sigma: clone_handle(sigma).map(|n| n.export_value()),
+        value: take_handle(data).map(AnswerValue::Node),
+        sigma: sigma_json,
         t,
     };
     destroy_handle(passed);
-    destroy_handle(data);
-    destroy_handle(sigma);
     answer
 }
 
@@ -318,8 +393,9 @@ impl ModuleHandler for ShallModule {
         else {
             return Err(SecopError::new(ErrorClass::NoSuchParameter, parameter));
         };
-        let json = info.encode(&value).map_err(|e| internal(e.to_string()))?;
-        let node = to_variant(proto, &json, parameter)?;
+        // the requested value, for an answer without value
+        let requested = (!self.callbacks).then(|| value.clone());
+        let node = to_variant(proto, value, info, parameter)?;
         let answer = if self.callbacks {
             let setter = setter.ok_or_else(|| missing("setter", parameter))?;
             let name = full_name.clone();
@@ -328,7 +404,9 @@ impl ModuleHandler for ShallModule {
         } else {
             let mut answer = self.request(action::CHANGE, parameter, Some(node)).await?;
             // an answer without value confirms the requested one
-            answer.value.get_or_insert(json);
+            if answer.value.is_none() {
+                answer.value = requested.map(AnswerValue::Value);
+            }
             answer
         };
         answer.reading(info, &self.context, parameter)
@@ -346,7 +424,7 @@ impl ModuleHandler for ShallModule {
         else {
             return Err(SecopError::new(ErrorClass::NoSuchCommand, command));
         };
-        let argument = argument_variant(info, argument_type.as_ref(), argument.as_ref(), command)?;
+        let argument = argument_variant(info, argument_type.as_ref(), argument, command)?;
         let answer = if self.callbacks {
             let function = function.ok_or_else(|| missing("command", command))?;
             let name = full_name.clone();
@@ -357,13 +435,9 @@ impl ModuleHandler for ShallModule {
         } else {
             self.request(action::DO, command, argument).await?
         };
+        let mut answer = answer;
         answer.check(&self.context, command)?;
-        let json = answer.value.clone().unwrap_or(Json::Null);
-        let result = info.decode_result(&json).map_err(|e| {
-            internal(format!(
-                "{command}: the application returned {json}, which does not fit: {e}"
-            ))
-        })?;
+        let result = answer.result(info, command)?;
         Ok(result.map(|value| answer.into_reading(value)))
     }
 
@@ -377,10 +451,9 @@ impl ModuleHandler for ShallModule {
                 ..
             }) => {
                 let value = value.ok_or_else(|| internal(format!("{accessible}: no value")))?;
-                let json = info.encode(&value).map_err(|e| internal(e.to_string()))?;
                 (
                     full_name,
-                    Some(to_variant(proto, &json, accessible)?),
+                    Some(to_variant(proto, value, info, accessible)?),
                     check,
                 )
             }
@@ -391,8 +464,7 @@ impl ModuleHandler for ShallModule {
                 check,
                 ..
             }) => {
-                let node =
-                    argument_variant(info, argument_type.as_ref(), value.as_ref(), accessible)?;
+                let node = argument_variant(info, argument_type.as_ref(), value, accessible)?;
                 (full_name, node, check)
             }
             None => return Err(SecopError::new(ErrorClass::NoSuchParameter, accessible)),
@@ -414,15 +486,12 @@ impl ModuleHandler for ShallModule {
 fn argument_variant(
     info: &CommandInfo,
     proto: Option<&variant::Node>,
-    value: Option<&Value>,
+    value: Option<Value>,
     command: &str,
 ) -> Result<Option<variant::Node>, SecopError> {
-    match (proto, value) {
-        (Some(proto), Some(value)) => {
-            let json = info
-                .encode_argument(Some(value))
-                .map_err(|e| internal(e.to_string()))?;
-            to_variant(proto, &json, command).map(Some)
+    match (proto, info.argument(), value) {
+        (Some(proto), Some(argument), Some(value)) => {
+            to_variant(proto, value, argument, &format!("{command}: argument")).map(Some)
         }
         _ => Ok(None),
     }
