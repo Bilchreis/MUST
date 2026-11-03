@@ -120,6 +120,14 @@
 //! at most 64, which share the read under these rules. The client gets one reply per
 //! request, in order.
 //!
+//! # Errors
+//!
+//! A handler fails a request with a [`SecopError`](must_types::SecopError), which the
+//! client receives as an error report. Its class is one of SECoP 2.0's
+//! ([`ErrorClass`](must_types::ErrorClass)), or a custom class from
+//! [`SecopError::custom`](must_types::SecopError::custom), e.g. `_Overheated`; SECoP asks
+//! clients to treat classes they do not know as generic errors.
+//!
 //! # Discovery
 //!
 //! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP

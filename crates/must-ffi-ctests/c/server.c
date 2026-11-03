@@ -927,6 +927,249 @@ int ctest_server_abandoned(int step, unsigned short port)
     return 0;
 }
 
+/* --- user error codes (must addition): the Rust side sends the requests */
+
+/* of context "uerr": _Overheated and HardwareError; of "uerr_cb": _CbFault and another
+   _Overheated */
+static enum SECoP_S_error g_user_over, g_user_hw, g_user_cb, g_user_other;
+
+static void get_user_error(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                           CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppData;
+    (void)ppSigma;
+    (void)timestamp;
+    *piError = g_user_cb;
+}
+
+/* a module mod1 with the double parameter "name", not polled */
+static enum SECoP_S_error add_user_module(const char* name, int writable, SECoP_S_getsetFunction get,
+                                          const char* context)
+{
+    enum SECoP_S_error rc = SECoP_S_addModule("mod1", context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", "module", context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyDouble("pollinterval", 0.0, context);
+    if (rc >= 0)
+        rc = writable ? SECoP_S_addWritableParameter(name, get, NULL, context)
+                      : SECoP_S_addReadableParameter(name, get, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", name, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", context);
+    return rc;
+}
+
+/* a polling-mode node "un" (context "uerr") with mod1:target, a callback node "ucb"
+   (context "uerr_cb") whose getter of mod1:value returns a user error, and the user
+   errors */
+int ctest_user_error_build(unsigned short poll_port, unsigned short cb_port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "uerr"));
+    OK(SECoP_S_createNode2("un", "user errors, polling", "127.0.0.1", poll_port, "uerr"));
+    OK(add_user_module("target", 1, NULL, "uerr"));
+    CHECK(complete("uerr") >= 0);
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "uerr_cb"));
+    OK(SECoP_S_createNode2("ucb", "user errors, callbacks", "127.0.0.1", cb_port, "uerr_cb"));
+    OK(add_user_module("value", 0, get_user_error, "uerr_cb"));
+    CHECK(complete("uerr_cb") >= 0);
+
+    CHECK(SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr_none") == SECoP_S_ERROR_INVALID_CONTEXT_ID);
+    g_user_over = SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr");
+    CHECK(g_user_over <= -1000);
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_over), "_Overheated: coil too hot") == 0);
+    g_user_hw = SECoP_S_registerUserError("HardwareError", "sensor disconnected", "uerr");
+    g_user_cb = SECoP_S_registerUserError("_CbFault", "from a callback", "uerr_cb");
+    CHECK(g_user_hw <= -1000 && g_user_cb <= -1000);
+    CHECK(g_user_hw != g_user_over && g_user_cb != g_user_hw && g_user_cb != g_user_over);
+    /* the same name in another context: a code and a text of its own */
+    g_user_other = SECoP_S_registerUserError("_Overheated", "coil B too hot", "uerr_cb");
+    CHECK(g_user_other <= -1000 && g_user_other != g_user_over);
+    CHECK(SECoP_S_registerUserError("_overheated", "x", "uerr") == SECoP_S_ERROR_NAME_ALREADY_USED);
+    CHECK(SECoP_S_registerUserError("hardwareerror", "x", "uerr") == SECoP_S_ERROR_NAME_ALREADY_USED);
+    CHECK(SECoP_S_registerUserError("over-heated", "x", "uerr") == SECoP_S_ERROR_INVALID_NAME);
+    CHECK(SECoP_S_registerUserError("1st", "x", "uerr") == SECoP_S_ERROR_INVALID_NAME);
+    CHECK(SECoP_S_registerUserError(NULL, "x", "uerr") == SECoP_S_ERROR_INVALID_NAME);
+    return 0;
+}
+
+/* answers the next request of context "uerr" with the user error of "which":
+   0 = _Overheated (with putCommandAnswer2), 1 = HardwareError (with putCommandAnswer),
+   2 = _Overheated of context "uerr_cb" */
+int ctest_user_error_answer(int which)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int i;
+    enum SECoP_S_error rc = SECoP_S_ERROR_NO_DATA;
+    for (i = 0; i < 500 && rc == SECoP_S_ERROR_NO_DATA; ++i) {
+        int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+        rc = SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "uerr");
+        if (rc == SECoP_S_ERROR_NO_DATA)
+            sleep_ms(10);
+    }
+    OK(rc);
+    if (which == 0)
+        OK(SECoP_S_putCommandAnswer2(id, g_user_over, NULL, 0, NULL, 0, 0.0));
+    else if (which == 1)
+        OK(SECoP_S_putCommandAnswer(id, g_user_hw, NULL, NULL, 0.0));
+    else
+        OK(SECoP_S_putCommandAnswer2(id, g_user_other, NULL, 0, NULL, 0, 0.0));
+    return 0;
+}
+
+/* registering again, unregistering and the lifetime of error strings */
+int ctest_user_error_unregister(void)
+{
+    const char* kept = SECoP_S_getErrorString(g_user_over);
+    enum SECoP_S_error again;
+    /* again for the same context: the same code */
+    CHECK(SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr") == g_user_over);
+    /* not by another context */
+    CHECK(SECoP_S_unregisterUserError(g_user_over, "uerr_cb") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_over), "_Overheated: coil too hot") == 0);
+    /* one unregister removes it */
+    OK(SECoP_S_unregisterUserError(g_user_over, "uerr"));
+    CHECK(SECoP_S_unregisterUserError(g_user_over, "uerr") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_over), "INVALID", 7) == 0);
+    /* a string handed out before stays valid */
+    CHECK(strcmp(kept, "_Overheated: coil too hot") == 0);
+    /* the other context's code of the same name stays */
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_other), "_Overheated: coil B too hot") == 0);
+    /* SHALL's codes are not registered */
+    CHECK(SECoP_S_unregisterUserError(SECoP_S_ERROR_IS_BUSY, "uerr") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(SECoP_S_unregisterUserError(SECoP_S_SUCCESS, "uerr") == SECoP_S_ERROR_INVALID_VALUE);
+    /* codes are never reused */
+    again = SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr");
+    CHECK(again <= -1000 && again != g_user_over && again != g_user_hw && again != g_user_cb &&
+          again != g_user_other);
+    OK(SECoP_S_unregisterUserError(again, "uerr"));
+    return 0;
+}
+
+/* the codes end with a full doneLibrary of their context */
+int ctest_user_error_done(void)
+{
+    /* nodes only: the codes stay, and the context gets them back when initialized again */
+    SECoP_S_doneLibrary(1, "uerr_cb");
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_cb), "_CbFault: from a callback") == 0);
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "uerr_cb"));
+    CHECK(SECoP_S_registerUserError("_CbFault", "from a callback", "uerr_cb") == g_user_cb);
+    SECoP_S_doneLibrary(0, "uerr_cb");
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_cb), "INVALID", 7) == 0);
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_other), "INVALID", 7) == 0);
+    /* the other context's codes were not touched */
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_hw), "HardwareError: sensor disconnected") == 0);
+    SECoP_S_doneLibrary(0, "uerr");
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_hw), "INVALID", 7) == 0);
+    return 0;
+}
+
+/* --- filtered requests (must addition): the Rust side sends the requests */
+
+static unsigned long long g_filter_id = 0;
+
+static enum SECoP_S_error add_filter_param(const char* name, int writable, const char* context)
+{
+    enum SECoP_S_error rc = writable ? SECoP_S_addWritableParameter(name, NULL, NULL, context)
+                                     : SECoP_S_addReadableParameter(name, NULL, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", name, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", context);
+    return rc;
+}
+
+static enum SECoP_S_error add_filter_module(const char* name, const char* context)
+{
+    enum SECoP_S_error rc = SECoP_S_addModule(name, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", "module", context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyDouble("pollinterval", 0.0, context);
+    return rc;
+}
+
+/* polling-mode nodes, not polled: "fn" (context "filt") with mod1:a, mod1:b (writable)
+   and mod2:b; "fn2" (context "filt2") with mod1:a */
+int ctest_filter_build(unsigned short port, unsigned short port2)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "filt"));
+    OK(SECoP_S_createNode2("fn", "filtered requests", "127.0.0.1", port, "filt"));
+    OK(add_filter_module("mod1", "filt"));
+    OK(add_filter_param("a", 1, "filt"));
+    OK(add_filter_param("b", 1, "filt"));
+    OK(add_filter_module("mod2", "filt"));
+    OK(add_filter_param("b", 0, "filt"));
+    CHECK(complete("filt") >= 0);
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "filt2"));
+    OK(SECoP_S_createNode2("fn2", "another context", "127.0.0.1", port2, "filt2"));
+    OK(add_filter_module("mod1", "filt2"));
+    OK(add_filter_param("a", 0, "filt2"));
+    CHECK(complete("filt2") >= 0);
+    return 0;
+}
+
+/* one call of SECoP_S_filterStoredCommand2 with large buffers; returns its result */
+int ctest_filter_rc(const char* filter, int action, const char* context)
+{
+    enum SECoP_S_action got = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+    return SECoP_S_filterStoredCommand2(filter, action, &g_filter_id, &got, name, &name_size, value, &value_size,
+                                        context);
+}
+
+/* takes a request with the filter and checks it: name, action and value (a double, or
+   NULL for none). variant 2: SECoP_S_filterStoredCommand2 with a name buffer of
+   name_cap bytes; variant 1: SECoP_S_filterStoredCommand */
+int ctest_filter_take(const char* filter, int action, const char* context, const char* expected,
+                      int expected_action, const char* expected_value, int name_cap, int variant)
+{
+    enum SECoP_S_action got = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = name_cap, value_size = (int)sizeof(value);
+    CSECoPbaseType* handle = NULL;
+    double number = 0.0;
+    enum SECoP_S_error rc;
+    CHECK(name_cap > 0 && name_cap <= (int)sizeof(name));
+    if (variant == 2)
+        rc = SECoP_S_filterStoredCommand2(filter, action, &g_filter_id, &got, name, &name_size, value, &value_size,
+                                          context);
+    else
+        rc = SECoP_S_filterStoredCommand(filter, action, &g_filter_id, &got, name, &name_size, &handle, context);
+    if (name_cap > (int)strlen(expected)) {
+        OK(rc);
+        CHECK(strcmp(name, expected) == 0);
+    } else {
+        /* too small: handed out anyway, cut and NUL-terminated, with the needed size */
+        CHECK(rc == SECoP_S_WARNING_BUFFER_TOO_SMALL);
+        CHECK(strncmp(name, expected, (size_t)name_cap - 1) == 0 && name[name_cap - 1] == '\0');
+    }
+    CHECK(name_size == (int)strlen(expected));
+    CHECK(g_filter_id != 0 && (int)got == expected_action);
+    if (variant == 2) {
+        CHECK(expected_value == NULL ? value[0] == '\0' : strtod(value, NULL) == strtod(expected_value, NULL));
+    } else {
+        CHECK((handle == NULL) == (expected_value == NULL));
+        if (handle != NULL) {
+            CHECK(SECoP_V_getDouble(handle, 0, 0, &number) && number == strtod(expected_value, NULL));
+            SECoP_V_destroy(&handle);
+        }
+    }
+    return 0;
+}
+
+/* answers the request taken last */
+int ctest_filter_answer(const char* value)
+{
+    OK(SECoP_S_putCommandAnswer2(g_filter_id, SECoP_S_SUCCESS, value, -1, NULL, 0, 0.0));
+    return 0;
+}
+
 /* --- stress */
 
 int ctest_server_stress_build(unsigned short port)

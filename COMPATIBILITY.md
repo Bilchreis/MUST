@@ -187,6 +187,67 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 - **Error strings** (`SECoP_S_getErrorString`) have SHALL's texts, but may differ in
   detail; do not compare them.
 
+## Additions to SHALL
+
+must exports four functions that SHALL lacks. SHALL-LabVIEW's VIs refer to them, but no
+SHALL library ever exported them. A program that uses them does not run with SHALL.
+`SECoP-exports.h` declares them, marked as must additions. All four take the arguments
+the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass no context
+ID yet: each of them must be updated to pass `Context_ID` as one more argument at the
+end before it works with must.
+
+- **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
+  out only the oldest stored request of the context that matches a filter. The other
+  requests stay stored, in order, for other host loops.
+  - **Argument order.** The filter comes first, as in SHALL-LabVIEW's
+    `SECoP-filterStoredCommand.vi`, and the context ID comes last:
+    ```c
+    SECoP_S_filterStoredCommand2(const char* szFilterAccessibles, int iFilterAction,
+        unsigned long long* pllId, enum SECoP_S_action* piAction,
+        char* szAccessible, int* piAccessibleSize, char* szValue, int* piValueSize,
+        const char* szContextID);
+    ```
+    `SECoP_S_filterStoredCommand` takes `CSECoPbaseType** ppValue` in place of the
+    value buffer and its size.
+  - **Accessibles.** Entries are `node`, `node:module` or `node:module:accessible`,
+    separated by commas, semicolons or whitespace (tabs and line ends too, as LabVIEW's
+    Array To Spreadsheet String writes them). Case is ignored. An entry selects every
+    accessible it names, so `cryo:tc` selects all of module `tc`. NULL or an empty
+    string selects every accessible of the context. The node name always comes first.
+  - **Action.** `0` is any action, otherwise a `SECoP_S_action` (1 read, 2 change, 3 do).
+  - **Results.** `SECoP_S_ERROR_NO_DATA` when no request matches;
+    `SECoP_S_ERROR_INVALID_NAME` for a malformed entry (more than three parts, or a part
+    that is no SECoP identifier); `SECoP_S_ERROR_INVALID_VALUE` for another action;
+    `SECoP_S_ERROR_INVALID_CONTEXT_ID` for an unknown context. Small buffers work as in
+    `SECoP_S_getStoredCommand[2]`. Answer the request with
+    `SECoP_S_putCommandAnswer[2]`.
+- **`SECoP_S_registerUserError(szSECoPerror, szMessageText, szContextID)`** registers
+  an error class of your own, with a text, for a context and returns a new code of -1000
+  or below. For requests of that context, return the code from a callback or pass it to
+  `SECoP_S_putCommandAnswer[2]`: the client gets an error report with that class and
+  text, e.g. `["_Overheated", "target: coil too hot", {...}]`.
+  - **Names.** The name must be a SECoP identifier. Custom names should start with an
+    underscore; SECoP asks clients to treat unknown classes as generic errors. A SECoP
+    2.0 class such as `HardwareError` is allowed too and gives that class with your own
+    text.
+  - **Registering again.** Registering a name again for the same context returns the
+    same code and replaces the text. A name that differs from one of the context's names
+    or from a SECoP class only in case returns `SECoP_S_ERROR_NAME_ALREADY_USED`; an
+    invalid name returns `SECoP_S_ERROR_INVALID_NAME`.
+  - **Contexts.** The context must exist (`SECoP_S_initLibrary` or
+    `SECoP_S_createNode[2]`), otherwise the call returns
+    `SECoP_S_ERROR_INVALID_CONTEXT_ID`. Each context has its own codes: two contexts
+    registering `_Overheated` get two codes with their own texts. A code used for a
+    request of another context counts as unknown and gives an `InternalError` report.
+    `SECoP_S_doneLibrary(0, ctx)` removes the context's codes; with `bNodeOnly` 1 they
+    stay.
+  - **Error strings.** `SECoP_S_getErrorString` returns `<class>: <text>` for a
+    registered code. The string stays valid until the process ends.
+- **`SECoP_S_unregisterUserError(iError, szContextID)`** removes a code the context
+  registered. A removed code is never handed out again; a request answered with it gets
+  an `InternalError` report. Returns `SECoP_S_ERROR_INVALID_VALUE` for a code the context
+  has not registered, including SHALL's own codes.
+
 ## Not provided
 
 - The C++ class interface of `CSECoPbaseType` and `SECoP_dataPtr`; `CSECoPbaseType` is

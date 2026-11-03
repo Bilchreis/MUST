@@ -76,6 +76,27 @@ pub mod server {
         pub fn ctest_cb_calls(parameter: *const c_char) -> c_int;
         pub fn ctest_cb_release();
         pub fn ctest_server_abandoned(step: c_int, port: c_ushort) -> c_int;
+        pub fn ctest_user_error_build(poll_port: c_ushort, cb_port: c_ushort) -> c_int;
+        pub fn ctest_user_error_answer(which: c_int) -> c_int;
+        pub fn ctest_user_error_unregister() -> c_int;
+        pub fn ctest_user_error_done() -> c_int;
+        pub fn ctest_filter_build(port: c_ushort, port2: c_ushort) -> c_int;
+        pub fn ctest_filter_rc(
+            filter: *const c_char,
+            action: c_int,
+            context: *const c_char,
+        ) -> c_int;
+        pub fn ctest_filter_take(
+            filter: *const c_char,
+            action: c_int,
+            context: *const c_char,
+            expected: *const c_char,
+            expected_action: c_int,
+            expected_value: *const c_char,
+            name_cap: c_int,
+            variant: c_int,
+        ) -> c_int;
+        pub fn ctest_filter_answer(value: *const c_char) -> c_int;
         pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
         pub fn ctest_monitor_building() -> c_int;
         pub fn ctest_status_window() -> c_int;

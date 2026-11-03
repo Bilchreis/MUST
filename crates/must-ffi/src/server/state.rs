@@ -17,6 +17,8 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::sync::oneshot;
 
 use super::build::DraftNode;
+use super::codes::err;
+use super::filter::Filter;
 use super::handler::Answer;
 use crate::variant;
 
@@ -149,6 +151,29 @@ impl State {
     pub(crate) fn handle(&self) -> Option<Handle> {
         self.runtime.as_ref().map(|r| r.handle().clone())
     }
+
+    /// Hands out the oldest queued request of `context` that `filter` selects (the
+    /// oldest of all without filter): moves it to `handed_out` and returns its id.
+    /// `SECoP_S_ERROR_INVALID_CONTEXT_ID` or `SECoP_S_ERROR_NO_DATA` otherwise.
+    pub(crate) fn take_matching(
+        &mut self,
+        context: &str,
+        filter: Option<&Filter>,
+    ) -> Result<u64, c_int> {
+        let queue = &mut self
+            .contexts
+            .get_mut(context)
+            .ok_or(err::INVALID_CONTEXT_ID)?
+            .queue;
+        // ids grow in queue order: the first match is the oldest
+        let index = match filter {
+            None => (!queue.is_empty()).then_some(0),
+            Some(filter) => queue.iter().position(|(_, p)| filter.matches(p)),
+        };
+        let (id, pending) = index.and_then(|i| queue.remove(i)).ok_or(err::NO_DATA)?;
+        self.handed_out.insert(id, pending);
+        Ok(id)
+    }
 }
 
 /// Queues a polled request of `context`; `None` if the context is gone.
@@ -275,5 +300,75 @@ mod tests {
         assert!(!lock().handed_out.contains_key(&id));
 
         lock().contexts.remove(CONTEXT);
+    }
+
+    #[test]
+    fn take_matching_takes_the_oldest_match_of_one_context() {
+        const A: &str = "state-tests-filter-a";
+        const B: &str = "state-tests-filter-b";
+        let queue = |context: &str, accessible: &str, action: c_int| {
+            let pending = Pending {
+                node: "n".into(),
+                module: "mod1".into(),
+                accessible: accessible.into(),
+                action,
+                value: None,
+                reply: oneshot::channel().0,
+            };
+            enqueue(context, pending).expect("context exists")
+        };
+        let ids = |context: &str| -> Vec<u64> {
+            lock().contexts[context]
+                .queue
+                .iter()
+                .map(|(i, _)| *i)
+                .collect()
+        };
+        for context in [A, B] {
+            lock().contexts.insert(
+                context.into(),
+                Context {
+                    callbacks: false,
+                    current: None,
+                    queue: VecDeque::new(),
+                },
+            );
+        }
+        let read_a = queue(A, "a", 1);
+        let change_b = queue(A, "b", 2);
+        let read_b = queue(A, "b", 1);
+        let other = queue(B, "b", 1);
+        let filter = |accessibles: &str, action: c_int| {
+            Filter::parse(Some(accessibles), action).expect("valid filter")
+        };
+
+        let mut state = lock();
+        assert_eq!(
+            state.take_matching(A, Some(&filter("n:mod1:b", 0))),
+            Ok(change_b)
+        );
+        assert!(state.handed_out.contains_key(&change_b));
+        assert_eq!(
+            state.take_matching(A, Some(&filter("n:mod1:x", 0))),
+            Err(err::NO_DATA)
+        );
+        assert_eq!(state.take_matching(A, Some(&filter("", 1))), Ok(read_a));
+        assert_eq!(
+            state.take_matching("state-tests-filter-none", None),
+            Err(err::INVALID_CONTEXT_ID)
+        );
+        drop(state);
+        // the others stay queued, in order; the other context is untouched
+        assert_eq!(ids(A), [read_b]);
+        assert_eq!(ids(B), [other]);
+        assert_eq!(lock().take_matching(A, None), Ok(read_b));
+        assert_eq!(lock().take_matching(A, None), Err(err::NO_DATA));
+
+        let mut state = lock();
+        for id in [change_b, read_a, read_b] {
+            state.handed_out.remove(&id);
+        }
+        state.contexts.remove(A);
+        state.contexts.remove(B);
     }
 }
