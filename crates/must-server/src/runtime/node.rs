@@ -185,19 +185,21 @@ fn start_polling(
 ) {
     for (mname, module) in &hub.model.modules {
         let actor = &actors[mname];
+        let mut startup = Vec::new();
         let mut polled = Vec::new();
         for (pname, param) in module.parameters() {
             if param.constant.is_some() || param.cached {
                 continue;
             }
             if hub.model.options.initial_read && param.initial.is_none() {
-                let _ = actor.jobs.try_send(Job::Refresh {
-                    parameter: pname.clone(),
-                });
+                startup.push(pname.clone());
             }
             if param.poll != PollSource::None {
                 polled.push((pname.clone(), param.poll));
             }
+        }
+        if !startup.is_empty() {
+            tracker.spawn(startup_reads(actor.clone(), startup, stop.clone()));
         }
         if polled.is_empty() {
             continue;
@@ -206,6 +208,21 @@ fn start_polling(
         let initial_fast = fast.as_ref().map_or(module.poll.fast, |rx| *rx.borrow());
         let schedule = Schedule::new(polled, initial_fast, module.poll.slow, Instant::now());
         tracker.spawn(poll_module(actor.clone(), schedule, fast, stop.clone()));
+    }
+}
+
+/// Sends the startup reads of a module, waiting for room when the module holds as many
+/// jobs as it can: a module may have more parameters than that.
+async fn startup_reads(actor: ActorHandle, parameters: Vec<String>, stop: CancellationToken) {
+    for parameter in parameters {
+        tokio::select! {
+            () = stop.cancelled() => break,
+            sent = actor.jobs.send(Job::Refresh { parameter }) => {
+                if sent.is_err() {
+                    break;
+                }
+            }
+        }
     }
 }
 
