@@ -207,6 +207,18 @@ mod tests {
         );
         assert!(e.to_string().contains("scalar numeric"), "{e}");
         assert_eq!(Postfix::Enable.check_parent(&string), Ok(()));
+
+        let matrix =
+            info(json!({"type": "matrix", "elementtype": "<f4", "names": ["x"], "maxlen": [10]}));
+        for postfix in [Postfix::Min, Postfix::Max, Postfix::Limits] {
+            assert_eq!(
+                postfix.check_parent(&matrix),
+                Err(PostfixError::NonNumericParent {
+                    postfix,
+                    parent_type: "matrix"
+                })
+            );
+        }
     }
 
     #[test]

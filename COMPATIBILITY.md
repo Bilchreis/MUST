@@ -74,8 +74,53 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `"expert"`.
 - **Custom properties** without a leading underscore are published under the given
   name, as in SHALL, and return `SECoP_S_WARNING_CUSTOM_PROPERTY`.
-- The optional messages `check` and `logging` are answered with `ProtocolError`; the
-  data type `matrix` is not supported.
+- The optional messages `check` and `logging` are answered with `ProtocolError`.
+- **Matrices.** must supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
+  [Matrix values](#matrix-values). Its optional `compression` property is rejected,
+  since SECoP defines no compression yet.
+
+### Matrix values
+
+A `matrix` datainfo describes homogeneous, multi-dimensional numbers, such as detector
+images or spectra, e.g. `{"type": "matrix", "elementtype": "<f4", "names": ["x", "y"],
+"maxlen": [100, 100]}`. The value travels as the lengths and the raw element bytes in
+base64, first dimension varying fastest: `{"len": [2, 3], "blob": "AACAPwAA..."}`. must
+passes the bytes through unchanged; it does not interpret the elements.
+
+- **As a variant.** No `SECoP_V_type` is added. A matrix value is a `SECoP_VT_STRUCT`
+  with two members, which is its transport form as JSON:
+
+  | Position | Type | Name | Content |
+  |---|---|---|---|
+  | 0 | `SECoP_VT_STRUCT` | | count 2 |
+  | 1 | `SECoP_VT_ARRAY_INTEGER` | `len` | one length per dimension |
+  | 2 | `SECoP_VT_BLOB` | `blob` | the raw element bytes |
+
+  `SECoP_V_create` with a matrix datainfo gives this shape with all lengths 0 and an
+  empty blob; `SECoP_V_fromJSON` with such a handle as hint parses the transport JSON.
+  `SECoP_V_getType` still returns the matrix datainfo, so the handle can serve as a
+  parameter's datainfo. `SECoP_V_getInfo` reports a struct, though: a host tells a matrix
+  from a struct with these members by its own datainfo.
+- **Reading and writing a matrix handle.** Read the bytes with
+  `SECoP_V_getString(p, 2, size, buffer)`: the buffer needs one byte more than the blob,
+  for the NUL it always writes. Write them with `SECoP_V_modifyString(p, 2, bytes,
+  iSize)`, with the byte count as `iSize`. Set the lengths with
+  `SECoP_V_modifyInteger(p, 1, dimension, length)`. Each call checks only the member it
+  changes; whether lengths and blob agree is checked when the value reaches the node.
+  A value from a getter, a command or `SECoP_S_putCommandAnswer` that does not fit gives
+  the client an `InternalError`; `SECoP_S_updateParameter` returns
+  `SECoP_S_ERROR_INVALID_VALUE` and sends nothing.
+- **Without JSON.** Inside must, a matrix handle moves between the host and the node
+  without JSON: a getter's result or a pushed handle is base64-encoded once, for the
+  clients. `SECoP_S_updateParameter2` and `SECoP_S_putCommandAnswer2` take the transport
+  JSON and decode its base64 once.
+- **Faster pushes and answers.** `SECoP_S_updateParameterMatrix` and
+  `SECoP_S_putCommandAnswerMatrix` (see [Additions to SHALL](#additions-to-shall)) take
+  the lengths and bytes as plain pointers, so no variant has to be built. Prefer them for
+  large or frequent matrices, and from LabVIEW.
+- **Size.** Base64 makes the bytes a third larger: a 100×100 `<f8` matrix is about
+  107 kB on the wire, and every update goes to every activated client. A `change` from
+  a client is bounded by the maximum length of an incoming line (1 MiB by default).
 
 ## Library behavior
 
@@ -189,12 +234,13 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 
 ## Additions to SHALL
 
-must exports four functions that SHALL lacks. SHALL-LabVIEW's VIs refer to them, but no
-SHALL library ever exported them. A program that uses them does not run with SHALL.
-`SECoP-exports.h` declares them, marked as must additions. All four take the arguments
-the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass no context
-ID yet: each of them must be updated to pass `Context_ID` as one more argument at the
-end before it works with must.
+must exports six functions that SHALL lacks. A program that uses them does not run with
+SHALL. `SECoP-exports.h` declares them, marked as must additions.
+
+SHALL-LabVIEW's VIs refer to the first four, but no SHALL library ever exported them.
+All four take the arguments the VIs pass, in the VIs' order, plus `szContextID` at the
+end. The VIs pass no context ID yet: each of them must be updated to pass `Context_ID`
+as one more argument at the end before it works with must.
 
 - **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
   out only the oldest stored request of the context that matches a filter. The other
@@ -247,6 +293,34 @@ end before it works with must.
   registered. A removed code is never handed out again; a request answered with it gets
   an `InternalError` report. Returns `SECoP_S_ERROR_INVALID_VALUE` for a code the context
   has not registered, including SHALL's own codes.
+
+The last two push and answer [matrix values](#matrix-values) without building a
+variant. They take the lengths and the raw element bytes as plain C arrays, which a
+LabVIEW Call Library node passes from a U32 and a U8 array as "Array Data Pointer". The
+library copies both before the call returns and does not keep the pointers. The bytes
+are base64-encoded once, for the clients. Neither function takes a sigma: SECoP's `e`
+of a matrix would be a matrix itself. Use `SECoP_S_updateParameter2` or
+`SECoP_S_putCommandAnswer2` if one is needed.
+
+- **`SECoP_S_updateParameterMatrix(szParameterName, puLen, iDims, pData, iDataSize,
+  dblTimestamp)`** pushes a new value of a matrix parameter, like
+  `SECoP_S_updateParameter2` and with the same timestamp rules:
+  ```c
+  const unsigned int len[2] = {2, 3};
+  const float data[6] = {1, 2, 3, 4, 5, 6};
+  SECoP_S_updateParameterMatrix("my_node:mod1:image", len, 2, data, sizeof data, NAN);
+  ```
+  An unknown name gives the codes of `SECoP_S_updateParameter2`. A parameter that is not
+  a matrix, `iDims` other than the number of dimensions, or `iDataSize` other than the
+  product of the lengths times the element size give `SECoP_S_ERROR_INVALID_VALUE`, and
+  nothing is sent. An empty matrix (a length 0) needs no data: `pData` may be NULL.
+- **`SECoP_S_putCommandAnswerMatrix(llId, iErrorCode, puLen, iDims, pData, iDataSize,
+  dblTimestamp)`** answers a request from `SECoP_S_getStoredCommand[2]`, like
+  `SECoP_S_putCommandAnswer2`, with a matrix as the read value, the value after a change
+  or the command result. With a negative `iErrorCode` the matrix arguments are not read
+  and may be NULL. If the request's value is not a matrix, or the lengths and bytes do
+  not fit, it returns `SECoP_S_ERROR_INVALID_VALUE` and the request stays handed out, so
+  that it can still be answered.
 
 ## Not provided
 

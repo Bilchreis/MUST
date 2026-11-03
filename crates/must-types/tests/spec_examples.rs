@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! The `datainfo` examples of the SECoP 2.0 specification (`protocol/specification/
-//! datainfo.rst`, SampleEnvironment/SECoP `a6e90eb`), except `matrix`, which must does
-//! not support yet.
+//! datainfo.rst`, SampleEnvironment/SECoP `a6e90eb`).
 
-use must_types::{DataInfo, DataInfoErrorKind, PathSegment};
+use must_types::{DataInfo, DataInfoErrorKind, Mode, PathSegment};
 use serde_json::{Value, json};
 
 fn examples() -> Vec<Value> {
@@ -26,6 +25,7 @@ fn examples() -> Vec<Value> {
         json!({"type": "struct",
                "members": {"x": {"type": "double"}, "y": {"type": "double"}, "t": {"type": "double"}},
                "optional": ["t"]}),
+        json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [100, 100]}),
         json!({"type": "command"}),
         // the spec's command examples with the mandatory int limits added, see below
         json!({"type": "command", "argument": {"type": "bool"},
@@ -53,6 +53,27 @@ fn spec_examples_parse_and_round_trip() {
             "{example} gained or lost properties"
         );
     }
+}
+
+/// The specification's matrix value example: a 2×3 matrix of `<f4` holding 1 to 6.
+#[test]
+fn spec_matrix_value_example() {
+    let info = DataInfo::from_json(
+        &json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [100, 100]}),
+    )
+    .unwrap();
+    let json = json!({"len": [2, 3], "blob": "AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA"});
+    let value = info.decode(&json, Mode::Request).unwrap();
+    let DataInfo::Matrix(matrix) = &info else {
+        panic!("not a matrix")
+    };
+    let (len, data) = value.as_matrix().unwrap();
+    assert_eq!(len, [2, 3]);
+    assert_eq!(
+        matrix.to_f64s(data).unwrap(),
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+    assert_eq!(info.encode(&value).unwrap(), json);
 }
 
 /// All object keys of a JSON value, recursively, sorted.

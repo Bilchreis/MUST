@@ -18,6 +18,7 @@ unsafe extern "C" {
     fn ctest_variant_enum_struct() -> c_int;
     fn ctest_variant_additional() -> c_int;
     fn ctest_variant_compare_print() -> c_int;
+    fn ctest_variant_matrix() -> c_int;
 }
 
 /// Runs a C test; returns 0 on success, else the line of the failed check.
@@ -37,6 +38,7 @@ pub fn run(test: &str) -> c_int {
             "variant_enum_struct" => ctest_variant_enum_struct(),
             "variant_additional" => ctest_variant_additional(),
             "variant_compare_print" => ctest_variant_compare_print(),
+            "variant_matrix" => ctest_variant_matrix(),
             other => panic!("unknown C test {other}"),
         }
     }
@@ -98,6 +100,9 @@ pub mod server {
         ) -> c_int;
         pub fn ctest_filter_answer(value: *const c_char) -> c_int;
         pub fn ctest_server_stress_build(port: c_ushort) -> c_int;
+        pub fn ctest_server_matrix_callbacks(port: c_ushort) -> c_int;
+        pub fn ctest_server_matrix_polling(port: c_ushort) -> c_int;
+        pub fn ctest_server_matrix_step(step: c_int) -> c_int;
         pub fn ctest_monitor_building() -> c_int;
         pub fn ctest_status_window() -> c_int;
     }

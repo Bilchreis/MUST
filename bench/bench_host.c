@@ -11,6 +11,14 @@
      push  PORT SECONDS             callback mode; calls SECoP_S_updateParameter2 on m:value
                                     in a tight loop for SECONDS and prints the rate
      pushv PORT SECONDS             the same with SECoP_S_updateParameter and a handle
+     pushm  PORT SECONDS            pushes a 512x512 <f4 matrix (1 MiB) to m:image with
+                                    SECoP_S_updateParameter and a handle
+     pushmt PORT SECONDS            the same through SECoP_V_toJSON and
+                                    SECoP_S_updateParameter2, the path a handle took
+                                    before matrices bypassed JSON inside must
+     pushmj PORT SECONDS            the same with SECoP_S_updateParameter2 and transport
+                                    JSON made once
+     pushmx PORT SECONDS            the same with SECoP_S_updateParameterMatrix
 
    BENCH_POLL=<seconds> sets the module property pollinterval (0: nothing polled). */
 
@@ -23,6 +31,12 @@
 #include <time.h>
 
 #define NPAR 10
+
+/* the matrix modes add a parameter m:image of this datainfo */
+#define MATRIX_SIDE 512
+#define MATRIX_DATAINFO \
+    "{\"type\":\"matrix\",\"elementtype\":\"<f4\",\"names\":[\"x\",\"y\"],\"maxlen\":[512,512]}"
+static int g_matrix = 0;
 
 static double now_s(void)
 {
@@ -89,6 +103,8 @@ static void build(int callbacks, unsigned short port)
     add_parameter("status", keep,
                   "{\"type\":\"tuple\",\"members\":[{\"type\":\"enum\",\"members\":{\"IDLE\":100,\"BUSY\":300}},{\"type\":\"string\"}]}");
     SECoP_S_updateParameter2("bench:m:status", "[100,\"\"]", -1, NULL, 0, 0.0);
+    if (g_matrix)
+        add_parameter("image", keep, MATRIX_DATAINFO);
     SECoP_S_addWritableParameter("w", get_double, keep, "bench");
     SECoP_S_addPropertyString("description", "writable", "bench");
     SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "bench");
@@ -168,11 +184,74 @@ static void push_loop(double seconds, int handle)
     SECoP_S_doneLibrary(0, "bench");
 }
 
+enum matrix_path { HANDLE, HANDLE_JSON, JSON, PLAIN };
+
+/* pushes a 512x512 <f4 matrix in a loop for `seconds` and prints the time per update */
+static void push_matrix_loop(double seconds, enum matrix_path path)
+{
+    static float data[MATRIX_SIDE * MATRIX_SIDE];
+    const unsigned int len[2] = {MATRIX_SIDE, MATRIX_SIDE};
+    const int size = (int)sizeof data;
+    CSECoPbaseType* hint = SECoP_V_create(MATRIX_DATAINFO);
+    CSECoPbaseType* value = NULL;
+    char* json = NULL;
+    int json_size = 0, i;
+    long n = 0;
+    double t0, t;
+
+    for (i = 0; i < MATRIX_SIDE * MATRIX_SIDE; i++)
+        data[i] = (float)i;
+    /* the handle, filled a member at a time */
+    SECoP_V_copy(&value, hint);
+    SECoP_V_modifyInteger(value, 1, 0, MATRIX_SIDE);
+    SECoP_V_modifyInteger(value, 1, 1, MATRIX_SIDE);
+    SECoP_V_modifyString(value, 2, (const char*)data, size);
+    json_size = SECoP_V_toJSON(value, NULL, 0);
+    json = malloc((size_t)json_size);
+    if (json == NULL || SECoP_V_toJSON(value, json, json_size) != json_size) {
+        fprintf(stderr, "SECoP_V_toJSON failed\n");
+        exit(1);
+    }
+    sleep_ms(1500); /* let the clients connect and activate */
+    t0 = now_s();
+    do {
+        enum SECoP_S_error rc = SECoP_S_SUCCESS;
+        switch (path) {
+        case HANDLE:
+            rc = SECoP_S_updateParameter("bench:m:image", value, NULL, 0.0);
+            break;
+        case HANDLE_JSON:
+            SECoP_V_toJSON(value, json, json_size);
+            rc = SECoP_S_updateParameter2("bench:m:image", json, -1, NULL, 0, 0.0);
+            break;
+        case JSON:
+            rc = SECoP_S_updateParameter2("bench:m:image", json, -1, NULL, 0, 0.0);
+            break;
+        case PLAIN:
+            rc = SECoP_S_updateParameterMatrix("bench:m:image", len, 2, data, size, 0.0);
+            break;
+        }
+        if (rc != SECoP_S_SUCCESS) {
+            fprintf(stderr, "update failed: %d\n", (int)rc);
+            exit(1);
+        }
+        n++;
+        t = now_s();
+    } while (t - t0 < seconds);
+    printf("updates: %ld in %.2f s = %.0f/s, %.2f ms/call\n", n, t - t0, (double)n / (t - t0),
+           (t - t0) / (double)n * 1e3);
+    fflush(stdout);
+    free(json);
+    SECoP_V_destroy(&value);
+    SECoP_V_destroy(&hint);
+    SECoP_S_doneLibrary(0, "bench");
+}
+
 int main(int argc, char** argv)
 {
     unsigned short port;
     if (argc < 3) {
-        fprintf(stderr, "usage: bench_host cb|poll|push|pushv PORT [ARG...]\n");
+        fprintf(stderr, "usage: bench_host cb|poll|push|pushv|pushm|pushmt|pushmj|pushmx PORT [ARG...]\n");
         return 2;
     }
     port = (unsigned short)atoi(argv[2]);
@@ -183,6 +262,19 @@ int main(int argc, char** argv)
     } else if (strcmp(argv[1], "poll") == 0) {
         build(0, port);
         poll_loop(argc > 3 ? atoi(argv[3]) : 50, !(argc > 4 && strcmp(argv[4], "one") == 0));
+    } else if (strncmp(argv[1], "pushm", 5) == 0) {
+        const char* m = argv[1] + 5;
+        enum matrix_path path = strcmp(m, "t") == 0   ? HANDLE_JSON
+                                : strcmp(m, "j") == 0 ? JSON
+                                : strcmp(m, "x") == 0 ? PLAIN
+                                                      : HANDLE;
+        if (*m != '\0' && strcmp(m, "t") != 0 && strcmp(m, "j") != 0 && strcmp(m, "x") != 0) {
+            fprintf(stderr, "unknown mode %s\n", argv[1]);
+            return 2;
+        }
+        g_matrix = 1;
+        build(1, port);
+        push_matrix_loop(argc > 3 ? atof(argv[3]) : 3.0, path);
     } else if (strcmp(argv[1], "push") == 0 || strcmp(argv[1], "pushv") == 0) {
         build(1, port);
         push_loop(argc > 3 ? atof(argv[3]) : 3.0, strcmp(argv[1], "pushv") == 0);

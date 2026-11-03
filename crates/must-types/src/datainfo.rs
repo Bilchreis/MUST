@@ -47,6 +47,8 @@ pub enum DataInfo {
     Tuple(TupleInfo),
     /// `struct`: named members.
     Struct(StructInfo),
+    /// `matrix`: multi-dimensional numeric data, transported as lengths and base64 bytes.
+    Matrix(MatrixInfo),
     /// `command`: argument and result of a command.
     Command(CommandInfo),
 }
@@ -139,6 +141,104 @@ pub struct StructInfo {
     extra: Map<String, Json>,
 }
 
+/// Properties of a `matrix` datainfo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatrixInfo {
+    elementtype: ElementType,
+    names: Vec<String>,
+    maxlen: Vec<u64>,
+    extra: Map<String, Json>,
+}
+
+/// The kind of number in a matrix element: the middle letter of `elementtype`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ElementKind {
+    /// `i`: signed integer.
+    Int,
+    /// `u`: unsigned integer.
+    UInt,
+    /// `f`: IEEE 754 floating point number.
+    Float,
+}
+
+/// The `elementtype` of a matrix, e.g. `<f4`: byte order, kind and size of one element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ElementType {
+    big_endian: bool,
+    kind: ElementKind,
+    bytes: u8,
+}
+
+impl ElementType {
+    /// An element type, or `None` if `bytes` is not 1, 2, 4 or 8, or a float has 1 byte.
+    pub fn new(big_endian: bool, kind: ElementKind, bytes: u8) -> Option<Self> {
+        let valid = matches!(bytes, 1 | 2 | 4 | 8) && !(kind == ElementKind::Float && bytes == 1);
+        valid.then_some(Self {
+            big_endian,
+            kind,
+            bytes,
+        })
+    }
+
+    /// Whether the elements are big-endian (`>`); little-endian (`<`) otherwise.
+    pub fn big_endian(self) -> bool {
+        self.big_endian
+    }
+
+    /// The kind of number.
+    pub fn kind(self) -> ElementKind {
+        self.kind
+    }
+
+    /// Size of one element in bytes: 1, 2, 4 or 8.
+    pub fn size(self) -> usize {
+        usize::from(self.bytes)
+    }
+}
+
+impl fmt::Display for ElementType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let order = if self.big_endian { '>' } else { '<' };
+        let kind = match self.kind {
+            ElementKind::Int => 'i',
+            ElementKind::UInt => 'u',
+            ElementKind::Float => 'f',
+        };
+        write!(f, "{order}{kind}{}", self.bytes)
+    }
+}
+
+/// A string is not a valid matrix `elementtype`.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid matrix element type `{0}`")]
+pub struct InvalidElementType(pub String);
+
+impl FromStr for ElementType {
+    type Err = InvalidElementType;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let invalid = || InvalidElementType(s.to_owned());
+        let &[order, kind, bytes] = s.as_bytes() else {
+            return Err(invalid());
+        };
+        let big_endian = match order {
+            b'<' => false,
+            b'>' => true,
+            _ => return Err(invalid()),
+        };
+        let kind = match kind {
+            b'i' => ElementKind::Int,
+            b'u' => ElementKind::UInt,
+            b'f' => ElementKind::Float,
+            _ => return Err(invalid()),
+        };
+        if !bytes.is_ascii_digit() {
+            return Err(invalid());
+        }
+        Self::new(big_endian, kind, bytes - b'0').ok_or_else(invalid)
+    }
+}
+
 /// Properties of a `command` datainfo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandInfo {
@@ -196,9 +296,10 @@ pub enum DataInfoErrorKind {
     /// The `type` is not a SECoP data type.
     #[error("unknown datainfo type `{0}`")]
     UnknownType(String),
-    /// The `type` is a SECoP data type that must does not support yet.
-    #[error("datainfo type `{0}` is not supported")]
-    UnsupportedType(String),
+    /// A property defined by SECoP that must does not support yet, such as the
+    /// `compression` of a matrix.
+    #[error("property `{0}` is not supported")]
+    UnsupportedProperty(&'static str),
     /// A mandatory property of the type is missing.
     #[error("missing mandatory property `{0}`")]
     MissingProperty(&'static str),
@@ -444,8 +545,8 @@ impl DataInfo {
             "array" => ArrayInfo::parse(obj).map(Self::Array),
             "tuple" => TupleInfo::parse(obj).map(Self::Tuple),
             "struct" => StructInfo::parse(obj).map(Self::Struct),
+            "matrix" => MatrixInfo::parse(obj).map(Self::Matrix),
             "command" => CommandInfo::parse(obj).map(Self::Command),
-            "matrix" => err(DataInfoErrorKind::UnsupportedType(ty.clone())),
             _ => err(DataInfoErrorKind::UnknownType(ty.clone())),
         }
     }
@@ -701,6 +802,65 @@ impl StructInfo {
     }
 }
 
+impl MatrixInfo {
+    const KNOWN: &[&str] = &["elementtype", "names", "maxlen", "compression"];
+
+    fn parse(obj: &Map<String, Json>) -> Result<Self> {
+        const NAMES: &str = "a non-empty list of distinct strings";
+        const MAXLEN: &str = "a list of one positive integer per name";
+        const ELEMENTTYPE: &str = "`<` or `>`, then `i`, `u` or `f`, then 1, 2, 4 or 8 (not `f1`)";
+        let p = Props {
+            obj,
+            known: Self::KNOWN,
+        };
+        if p.get("compression").is_some() {
+            return err(DataInfoErrorKind::UnsupportedProperty("compression"));
+        }
+
+        let Some(json_names) = p.get("names") else {
+            return err(DataInfoErrorKind::MissingProperty("names"));
+        };
+        let Json::Array(json_names) = json_names else {
+            return Err(wrong("names", NAMES));
+        };
+        let mut names: Vec<String> = Vec::with_capacity(json_names.len());
+        for name in json_names {
+            match name {
+                Json::String(name) if !names.contains(name) => names.push(name.clone()),
+                _ => return Err(wrong("names", NAMES)),
+            }
+        }
+        if names.is_empty() {
+            return Err(wrong("names", NAMES));
+        }
+
+        let Some(json_maxlen) = p.get("maxlen") else {
+            return err(DataInfoErrorKind::MissingProperty("maxlen"));
+        };
+        let Json::Array(json_maxlen) = json_maxlen else {
+            return Err(wrong("maxlen", MAXLEN));
+        };
+        let maxlen = json_maxlen
+            .iter()
+            .map(|m| json_to_u64(m).filter(|&m| m > 0))
+            .collect::<Option<Vec<_>>>()
+            .filter(|m| m.len() == names.len())
+            .ok_or_else(|| wrong("maxlen", MAXLEN))?;
+
+        let elementtype = p
+            .required("elementtype", Props::string)?
+            .parse()
+            .map_err(|_| wrong("elementtype", ELEMENTTYPE))?;
+
+        Ok(Self {
+            elementtype,
+            names,
+            maxlen,
+            extra: p.extra(),
+        })
+    }
+}
+
 impl CommandInfo {
     const KNOWN: &[&str] = &["argument", "result"];
 
@@ -824,6 +984,11 @@ impl DataInfo {
                     .opt("optional", i.optional.clone())
                     .finish(&i.extra)
             }
+            Self::Matrix(i) => ObjectWriter::new("matrix")
+                .set("elementtype", i.elementtype.to_string())
+                .set("names", i.names.clone())
+                .set("maxlen", i.maxlen.clone())
+                .finish(&i.extra),
             Self::Command(i) => ObjectWriter::new("command")
                 .opt("argument", i.argument.as_ref().map(|a| a.to_json()))
                 .opt("result", i.result.as_ref().map(|r| r.to_json()))
@@ -844,6 +1009,7 @@ impl DataInfo {
             Self::Array(_) => "array",
             Self::Tuple(_) => "tuple",
             Self::Struct(_) => "struct",
+            Self::Matrix(_) => "matrix",
             Self::Command(_) => "command",
         }
     }
@@ -861,6 +1027,7 @@ impl DataInfo {
             Self::Array(i) => &i.extra,
             Self::Tuple(i) => &i.extra,
             Self::Struct(i) => &i.extra,
+            Self::Matrix(i) => &i.extra,
             Self::Command(i) => &i.extra,
         }
     }
@@ -889,6 +1056,7 @@ impl DataInfo {
             Self::Enum(i) => i.extra.clear(),
             Self::String(i) => i.extra.clear(),
             Self::Blob(i) => i.extra.clear(),
+            Self::Matrix(i) => i.extra.clear(),
             Self::Array(i) => {
                 i.extra.clear();
                 i.members.clear_extra();
@@ -1120,6 +1288,25 @@ impl StructInfo {
     }
 }
 
+impl MatrixInfo {
+    /// Byte order, kind and size of the elements.
+    pub fn elementtype(&self) -> ElementType {
+        self.elementtype
+    }
+    /// Names of the dimensions, first (fastest varying) dimension first.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+    /// Maximum length of each dimension, in the order of [`names`](Self::names).
+    pub fn maxlen(&self) -> &[u64] {
+        &self.maxlen
+    }
+    /// Number of dimensions.
+    pub fn dims(&self) -> usize {
+        self.names.len()
+    }
+}
+
 impl CommandInfo {
     /// Datainfo of the argument, `None` if the command takes no argument.
     pub fn argument(&self) -> Option<&DataInfo> {
@@ -1252,6 +1439,21 @@ impl DataInfo {
             .collect();
         DataInfoBuilder::new("struct").prop("members", members)
     }
+    /// Starts a `matrix` datainfo with dimensions given as name and maximum length,
+    /// first (fastest varying) dimension first.
+    pub fn matrix<'a>(
+        elementtype: ElementType,
+        dims: impl IntoIterator<Item = (&'a str, u64)>,
+    ) -> DataInfoBuilder {
+        let (names, maxlen): (Vec<Json>, Vec<Json>) = dims
+            .into_iter()
+            .map(|(name, maxlen)| (Json::from(name), Json::from(maxlen)))
+            .unzip();
+        DataInfoBuilder::new("matrix")
+            .prop("elementtype", elementtype.to_string())
+            .prop("names", names)
+            .prop("maxlen", maxlen)
+    }
     /// Starts a `command` datainfo.
     pub fn command() -> DataInfoBuilder {
         DataInfoBuilder::new("command")
@@ -1297,12 +1499,21 @@ mod tests {
     }
 
     #[test]
-    fn matrix_not_supported() {
-        let e =
-            parse(json!({"type": "matrix", "elementtype": "<f4", "names": ["x"], "maxlen": [100]}))
-                .unwrap_err();
-        assert_eq!(e.kind, DataInfoErrorKind::UnsupportedType("matrix".into()));
-        assert!(e.to_string().contains("not supported"));
+    fn matrix() {
+        let DataInfo::Matrix(m) = parse(
+            json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [100, 100]}),
+        )
+        .unwrap() else {
+            panic!("not a matrix")
+        };
+        assert_eq!(m.names(), ["x", "y"]);
+        assert_eq!(m.maxlen(), [100, 100]);
+        assert_eq!(m.dims(), 2);
+        let t = m.elementtype();
+        assert_eq!(
+            (t.big_endian(), t.kind(), t.size()),
+            (false, ElementKind::Float, 4)
+        );
     }
 
     #[test]
@@ -1340,6 +1551,158 @@ mod tests {
         assert_eq!(
             kind(json!({"type": "array", "members": {"type": "bool"}})),
             DataInfoErrorKind::MissingProperty("maxlen")
+        );
+        assert_eq!(
+            kind(json!({"type": "matrix", "names": ["x"], "maxlen": [10]})),
+            DataInfoErrorKind::MissingProperty("elementtype")
+        );
+        assert_eq!(
+            kind(json!({"type": "matrix", "elementtype": "<f4", "maxlen": [10]})),
+            DataInfoErrorKind::MissingProperty("names")
+        );
+        assert_eq!(
+            kind(json!({"type": "matrix", "elementtype": "<f4", "names": ["x"]})),
+            DataInfoErrorKind::MissingProperty("maxlen")
+        );
+        let e = parse(json!({"type": "matrix", "names": ["x"], "maxlen": [10]})).unwrap_err();
+        assert!(e.to_string().contains("`elementtype`"), "{e}");
+    }
+
+    // --- matrix properties
+
+    fn wrong_property(json: Json) -> &'static str {
+        match kind(json) {
+            DataInfoErrorKind::WrongPropertyType { property, .. } => property,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matrix_big_endian_unsigned() {
+        let DataInfo::Matrix(m) = parse(
+            json!({"type": "matrix", "elementtype": ">u2", "names": ["ch"], "maxlen": [4096]}),
+        )
+        .unwrap() else {
+            panic!()
+        };
+        let t = m.elementtype();
+        assert_eq!(
+            (t.big_endian(), t.kind(), t.size()),
+            (true, ElementKind::UInt, 2)
+        );
+    }
+
+    #[test]
+    fn matrix_element_types() {
+        for t in [
+            "<i1", ">i2", "<i4", ">i8", "<u1", "<u8", "<f2", ">f4", "<f8",
+        ] {
+            let info =
+                parse(json!({"type": "matrix", "elementtype": t, "names": ["x"], "maxlen": [1]}));
+            assert!(info.is_ok(), "{t}");
+            assert_eq!(t.parse::<ElementType>().unwrap().to_string(), t);
+        }
+        for t in [
+            json!("<f1"),
+            json!("<x4"),
+            json!("f4"),
+            json!("<i3"),
+            json!("=i4"),
+            json!("<i16"),
+            json!("<i0"),
+            json!(4),
+        ] {
+            let e =
+                parse(json!({"type": "matrix", "elementtype": t, "names": ["x"], "maxlen": [1]}))
+                    .unwrap_err();
+            assert!(
+                matches!(
+                    e.kind,
+                    DataInfoErrorKind::WrongPropertyType {
+                        property: "elementtype",
+                        ..
+                    }
+                ),
+                "{t}: {e:?}"
+            );
+            assert!(e.to_string().contains("`elementtype`"), "{e}");
+        }
+    }
+
+    #[test]
+    fn matrix_length_count_differs_from_names() {
+        let json =
+            json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [100]});
+        assert_eq!(wrong_property(json.clone()), "maxlen");
+        assert!(parse(json).unwrap_err().to_string().contains("`maxlen`"));
+        for maxlen in [
+            json!([0]),
+            json!([-1]),
+            json!([1.5]),
+            json!(["1"]),
+            json!(10),
+        ] {
+            assert_eq!(
+                wrong_property(
+                    json!({"type": "matrix", "elementtype": "<f4", "names": ["x"], "maxlen": maxlen})
+                ),
+                "maxlen"
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_names() {
+        let names = |names: Json| {
+            wrong_property(
+                json!({"type": "matrix", "elementtype": "<f4", "names": names, "maxlen": [1, 1]}),
+            )
+        };
+        assert_eq!(names(json!(["x", "x"])), "names");
+        assert_eq!(names(json!([])), "names");
+        assert_eq!(names(json!(["x", 1])), "names");
+        assert_eq!(names(json!("x")), "names");
+        let e = parse(
+            json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "x"], "maxlen": [1, 1]}),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("`names`"), "{e}");
+    }
+
+    #[test]
+    fn matrix_compression() {
+        let e = parse(
+            json!({"type": "matrix", "elementtype": "<f4", "names": ["x"],
+                             "maxlen": [1], "compression": "zlib"}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            e.kind,
+            DataInfoErrorKind::UnsupportedProperty("compression")
+        );
+        assert_eq!(e.to_string(), "property `compression` is not supported");
+    }
+
+    #[test]
+    fn matrix_round_trip() {
+        let json = json!({"type": "matrix", "elementtype": ">i8", "names": ["x", "y", "z"],
+                          "maxlen": [2, 3, 4], "_note": "custom"});
+        let info = parse(json.clone()).unwrap();
+        assert_eq!(info.to_json(), json);
+        assert_eq!(info.to_string().parse::<DataInfo>().unwrap(), info);
+        assert_eq!(info.type_name(), "matrix");
+
+        let built = DataInfo::matrix(">i8".parse().unwrap(), [("x", 2), ("y", 3), ("z", 4)])
+            .prop("_note", "custom")
+            .build()
+            .unwrap();
+        assert_eq!(built, info);
+        assert!(
+            built.matches(
+                &parse(json!({"type": "matrix", "elementtype": ">i8",
+            "names": ["x", "y", "z"], "maxlen": [2, 3, 4]}))
+                .unwrap()
+            )
         );
     }
 

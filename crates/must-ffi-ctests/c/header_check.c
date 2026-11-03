@@ -46,6 +46,14 @@ int run_header_example(int allowed_to_loop)
         SECoP_S_unregisterUserError(code, "example");
     }
 
+    /* must additions for matrices */
+    {
+        const unsigned int len[2] = {1, 1};
+        const float data[1] = {1.0f};
+        SECoP_S_updateParameterMatrix("my_node:mod1:image", len, 2, data, (int)sizeof data, 0.0);
+        SECoP_S_putCommandAnswerMatrix(1, SECoP_S_SUCCESS, len, 2, data, (int)sizeof data, 0.0);
+    }
+
     {
         CSECoPbaseType* p = SECoP_V_createSimpleDouble(1.5);
         double d = 0.0;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LGPL-3.0-or-later
 # Builds the benchmark programs against the current must and runs a suite (Linux).
-# usage: bench/run.sh [polling|stall|throughput|all]   (default: polling)
+# usage: bench/run.sh [polling|stall|throughput|matrix|all]   (default: polling)
 set -euo pipefail
 
 suite=${1:-polling}
@@ -88,10 +88,23 @@ throughput() {
     done
 }
 
+matrix() {
+    echo "== pushing a 512x512 <f4 matrix (1 MiB), log files and monitoring off"
+    for mode in "pushm:SECoP_S_updateParameter, handle" \
+                "pushmt:SECoP_V_toJSON + updateParameter2" \
+                "pushmj:SECoP_S_updateParameter2, JSON" \
+                "pushmx:SECoP_S_updateParameterMatrix"; do
+        port=$((port + 1))
+        printf '%-40s' "${mode#*:}:"
+        MUST_LOG_FILES=0 MUST_MONITOR=0 "$host" "${mode%%:*}" "$port" 3 2>/dev/null
+    done
+}
+
 case "$suite" in
     polling) polling ;;
     stall) stall ;;
     throughput) throughput ;;
-    all) polling; stall; throughput ;;
-    *) echo "usage: $0 [polling|stall|throughput|all]" >&2; exit 2 ;;
+    matrix) matrix ;;
+    all) polling; stall; throughput; matrix ;;
+    *) echo "usage: $0 [polling|stall|throughput|matrix|all]" >&2; exit 2 ;;
 esac

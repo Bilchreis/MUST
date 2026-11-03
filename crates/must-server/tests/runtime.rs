@@ -569,3 +569,99 @@ async fn stored_publisher_does_not_keep_the_node_alive() {
         "the node was freed although the handler keeps a publisher"
     );
 }
+
+// --- matrix parameters
+
+/// A camera whose `image` is a `<f4` matrix of up to 4×4 elements.
+#[derive(Default)]
+struct Camera {
+    changes: std::sync::atomic::AtomicUsize,
+}
+
+fn image_info() -> must_types::DataInfo {
+    common::di(
+        json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [4, 4]}),
+    )
+}
+
+#[async_trait::async_trait]
+impl must_server::ModuleHandler for Camera {
+    async fn read(&self, _ctx: &must_server::Ctx, parameter: &str) -> must_server::HandlerResult {
+        let must_types::DataInfo::Matrix(info) = image_info() else {
+            unreachable!()
+        };
+        match parameter {
+            "image" => Ok(info
+                .from_f64s(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+                .unwrap()
+                .into()),
+            _ => Ok(status(100, "idle").into()),
+        }
+    }
+
+    async fn change(
+        &self,
+        _ctx: &must_server::Ctx,
+        _parameter: &str,
+        value: Value,
+    ) -> must_server::HandlerResult {
+        self.changes.fetch_add(1, Ordering::SeqCst);
+        Ok(value.into())
+    }
+}
+
+#[tokio::test]
+async fn matrix_parameter() {
+    let camera = Arc::new(Camera::default());
+    let module = Module::new("cam", "a camera")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "sensor temperature").cached())
+        .unwrap()
+        .parameter(Parameter::new("status", common::status_info(), "status"))
+        .unwrap()
+        .parameter(Parameter::new("image", image_info(), "the picture").writable())
+        .unwrap()
+        .no_polling()
+        .handler_arc(Arc::clone(&camera) as Arc<dyn must_server::ModuleHandler>);
+    let n = start(
+        NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
+            .discovery(must_server::Discovery::off())
+            .initial_read(false)
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .module(module)
+            .unwrap(),
+    );
+    let mut c = Client::connect(n.local_addr()).await;
+
+    let (_, _, describe) = parse(&c.request("describe").await);
+    assert_eq!(
+        describe["modules"]["cam"]["accessibles"]["image"]["datainfo"],
+        image_info().to_json()
+    );
+
+    let (action, spec, data) = parse(&c.request("read cam:image").await);
+    assert_eq!((action.as_str(), spec.as_str()), ("reply", "cam:image"));
+    assert_eq!(
+        data[0],
+        json!({"len": [2, 3], "blob": "AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA"})
+    );
+
+    // 5 elements along x, at most 4 allowed; the 20 bytes fit the lengths
+    let blob = format!("{}=", "A".repeat(27));
+    let line = c
+        .request(&format!(
+            "change cam:image {{\"len\": [5, 1], \"blob\": \"{blob}\"}}"
+        ))
+        .await;
+    assert_eq!(error_class(&line), "RangeError", "{line}");
+    assert_eq!(camera.changes.load(Ordering::SeqCst), 0);
+
+    let line = c
+        .request("change cam:image {\"len\": [1, 1], \"blob\": \"AACAPw==\"}")
+        .await;
+    let (action, _, data) = parse(&line);
+    assert_eq!(action, "changed", "{line}");
+    assert_eq!(data[0], json!({"len": [1, 1], "blob": "AACAPw=="}));
+    assert_eq!(camera.changes.load(Ordering::SeqCst), 1);
+}

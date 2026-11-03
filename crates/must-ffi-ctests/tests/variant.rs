@@ -46,3 +46,8 @@ fn additional_items() {
 fn compare_and_print() {
     check("variant_compare_print");
 }
+
+#[test]
+fn matrix() {
+    check("variant_matrix");
+}
