@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -41,6 +42,10 @@ pub enum StartError {
 
 /// A node serving clients. Dropping the handle does not stop the node; call
 /// [`stop`](Self::stop).
+///
+/// The handle keeps the node's state alive. A handler that stores it, or a
+/// [`Ctx`](crate::Ctx), keeps its own node from being freed; store a
+/// [`Publisher`](crate::Publisher) instead.
 #[derive(Clone)]
 pub struct RunningNode {
     hub: Arc<Hub>,
@@ -51,6 +56,10 @@ pub struct RunningNode {
     monitor_id: Option<u64>,
     /// The node's file logging, if on.
     log: Option<LogHandle>,
+    /// The runtime the node runs on.
+    runtime: Handle,
+    /// Set once the node has announced that it stopped; shared by all clones.
+    finished: Arc<AtomicBool>,
 }
 
 /// The runtime used by [`Node::start`], created on first use.
@@ -125,6 +134,8 @@ impl Node {
             tracker,
             monitor_id: None,
             log,
+            runtime: runtime.clone(),
+            finished: Arc::new(AtomicBool::new(false)),
         };
         if self.model.options.monitored {
             running.monitor_id = crate::monitor::register_running(&running);
@@ -354,15 +365,37 @@ impl RunningNode {
 
     /// Stops the node: closes the port and all connections and ends polling. Resolves
     /// once everything has finished.
+    ///
+    /// Dropping the future before then (e.g. through a timeout) still announces the stop:
+    /// the monitor forgets the node and its log file is closed, while the node's remaining
+    /// tasks end in the background.
     pub async fn stop(&self) {
+        /// Announces the stop when dropped: after the wait, or when it is cancelled.
+        struct Finish<'a>(&'a RunningNode);
+        impl Drop for Finish<'_> {
+            fn drop(&mut self) {
+                self.0.finish();
+            }
+        }
+
         self.stop.cancel();
         self.tracker.close();
+        let finish = Finish(self);
         self.tracker.wait().await;
-        info!(addr = %self.addr, "node stopped");
-        self.hub.emit(NodeEvent::Stopped);
+        drop(finish);
         if let Some(log) = &self.log {
             log.finished().await;
         }
+    }
+
+    /// Announces that the node stopped, once: the `Stopped` event, which also ends its
+    /// file logging, and its removal from the monitor.
+    fn finish(&self) {
+        if self.finished.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        info!(addr = %self.addr, "node stopped");
+        self.hub.emit(NodeEvent::Stopped);
         if let Some(id) = self.monitor_id {
             crate::monitor::unregister_running(id);
         }
@@ -377,6 +410,8 @@ impl RunningNode {
     ///
     /// Must not be called from within an async runtime.
     pub fn stop_blocking(&self) {
-        shared_runtime().block_on(self.stop());
+        // on the node's own runtime: the shared one is not created for a node spawned
+        // elsewhere
+        self.runtime.block_on(self.stop());
     }
 }
