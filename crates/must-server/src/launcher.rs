@@ -269,6 +269,16 @@ mod tests {
 
     use super::*;
 
+    /// Held by the tests that start a process or check the TUI lock more than once: on
+    /// Unix, a child being spawned holds a copy of every open file until it reaches
+    /// `exec`, and with it the lock, which would seem held just after its release.
+    fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("must-launcher-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -327,6 +337,7 @@ mod tests {
 
     #[test]
     fn already_running_and_missing_executable() {
+        let _guard = spawn_guard();
         let base = temp("running");
         let registry = base.join("registry");
         registry::prepare_dir(&registry).unwrap();
@@ -357,6 +368,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn linux_without_graphical_session_or_terminal() {
+        let _guard = spawn_guard();
         let base = temp("linux");
         let registry = base.join("registry");
         registry::prepare_dir(&registry).unwrap();
@@ -394,6 +406,7 @@ mod tests {
     fn linux_terminal_order_and_command_line() {
         use std::os::unix::fs::PermissionsExt;
 
+        let _guard = spawn_guard();
         let base = temp("terminal");
         let registry = base.join("registry");
         registry::prepare_dir(&registry).unwrap();
