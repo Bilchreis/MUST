@@ -29,11 +29,12 @@
 //!
 //! Logging never makes a node wait for the disk, but formatting the lines takes CPU: under
 //! full load a node with log files and monitoring handles about 60% of the requests it does
-//! without. Lines go through a bounded queue to one writer thread per process, which runs
-//! while any node logs and ends with the last one; when the queue is full, lines are
-//! dropped and a `* dropped <n> lines` line marks the gap. Files are
-//! flushed every second and when the node stops. If a file cannot be written, the node
-//! logs one warning and file logging stops for it until the next day.
+//! without. Lines go through a queue (bounded in lines and in bytes) to one writer thread
+//! per process, which runs while any node logs and ends with the last one; when the queue
+//! is full, lines are dropped and a `* dropped <n> lines` line marks the gap. Lines are
+//! never shortened. Files are flushed every second and when the node stops. If a file
+//! cannot be written, the node logs one warning and file logging stops for it until the
+//! next day.
 
 mod config;
 mod format;
@@ -55,7 +56,7 @@ pub use config::{
 pub use writer::pause_writer;
 
 use self::format::{LineClock, LineFormatter, dropped, node_folder};
-use self::writer::{Command, LogId};
+use self::writer::{Command, LogId, LogSender};
 use crate::events::{LogLevel, NodeEvent};
 use crate::runtime::Hub;
 
@@ -118,10 +119,10 @@ pub(crate) fn start(hub: &Arc<Hub>, config: Option<&LogFiles>) -> Option<LogHand
 }
 
 /// Hands `command` to the writer, waiting up to a few seconds while the queue is full.
-async fn send(sender: &std::sync::mpsc::SyncSender<Command>, mut command: Command) -> bool {
+async fn send(sender: &LogSender, mut command: Command) -> bool {
     let deadline = tokio::time::Instant::now() + CLOSE_TIMEOUT;
     loop {
-        match writer::try_send(sender, command) {
+        match sender.try_send(command) {
             Ok(()) => return true,
             Err(c) if tokio::time::Instant::now() < deadline => {
                 command = c;
@@ -135,7 +136,7 @@ async fn send(sender: &std::sync::mpsc::SyncSender<Command>, mut command: Comman
 /// The node's logger: turns its events into lines for the writer, never waiting for it.
 async fn run(
     mut events: tokio::sync::broadcast::Receiver<NodeEvent>,
-    sender: std::sync::mpsc::SyncSender<Command>,
+    sender: LogSender,
     node: LogId,
     open: Command,
     finished: CancellationToken,
@@ -174,7 +175,7 @@ async fn run(
                     send(&sender, command).await;
                     break;
                 }
-                match writer::try_send(&sender, command) {
+                match sender.try_send(command) {
                     Ok(()) => lost = 0,
                     Err(_) => lost += 1,
                 }
