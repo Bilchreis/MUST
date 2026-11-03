@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
-use std::sync::{Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -17,8 +18,11 @@ use super::format::{day_file, parse_day_file};
 use crate::events::LogLevel;
 use crate::runtime::Hub;
 
-/// Lines waiting for the writer, for all nodes together.
+/// Commands waiting for the writer, for all nodes together.
 const QUEUE: usize = 8192;
+/// Bytes of text waiting for the writer, for all nodes together: if the disk stalls while
+/// nodes send large values, the lines are dropped rather than held in memory.
+const QUEUE_BYTES: usize = 64 << 20;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 const CLEAN_INTERVAL: Duration = Duration::from_secs(3600);
 
@@ -49,9 +53,48 @@ pub(crate) enum Command {
     },
 }
 
+impl Command {
+    /// The text it holds, counted against [`QUEUE_BYTES`].
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Lines { text, .. } => text.len(),
+            Self::Open { .. } | Self::Close { .. } => 0,
+        }
+    }
+}
+
+/// A node's way to the writer thread: the queue, and the bytes of text in it.
+#[derive(Clone)]
+pub(crate) struct LogSender {
+    tx: SyncSender<Command>,
+    queued: Arc<AtomicUsize>,
+    budget: usize,
+}
+
+impl LogSender {
+    /// Hands `command` to the writer without blocking; gives it back if the queue is full
+    /// (in commands or bytes) or the writer is gone. Text larger than the whole budget
+    /// still goes into an empty queue.
+    pub(crate) fn try_send(&self, command: Command) -> Result<(), Command> {
+        let bytes = command.bytes();
+        // reserved first, so that two nodes cannot both take the last room
+        let before = self.queued.fetch_add(bytes, Ordering::AcqRel);
+        if before > 0 && before + bytes > self.budget {
+            self.queued.fetch_sub(bytes, Ordering::AcqRel);
+            return Err(command);
+        }
+        self.tx.try_send(command).map_err(|e| {
+            self.queued.fetch_sub(bytes, Ordering::AcqRel);
+            match e {
+                TrySendError::Full(c) | TrySendError::Disconnected(c) => c,
+            }
+        })
+    }
+}
+
 /// The writer thread while any node logs.
 struct Running {
-    sender: SyncSender<Command>,
+    sender: LogSender,
     thread: JoinHandle<()>,
     /// Nodes holding a sender from [`acquire`].
     users: usize,
@@ -65,13 +108,19 @@ fn running() -> MutexGuard<'static, Option<Running>> {
 
 /// A sender to the writer thread for one node, starting the thread if no node logs;
 /// `None` if it cannot start. Give it back with [`release`].
-pub(crate) fn acquire() -> Option<SyncSender<Command>> {
+pub(crate) fn acquire() -> Option<LogSender> {
     let mut running = running();
     if running.is_none() {
-        let (sender, rx) = sync_channel(QUEUE);
+        let (tx, rx) = sync_channel(QUEUE);
+        let queued = Arc::new(AtomicUsize::new(0));
+        let sender = LogSender {
+            tx,
+            queued: Arc::clone(&queued),
+            budget: QUEUE_BYTES,
+        };
         match std::thread::Builder::new()
             .name("must-log-writer".into())
-            .spawn(move || run(&rx))
+            .spawn(move || run(&rx, &queued))
         {
             Ok(thread) => {
                 *running = Some(Running {
@@ -94,7 +143,7 @@ pub(crate) fn acquire() -> Option<SyncSender<Command>> {
 /// Gives back a sender from [`acquire`]. For the last node, the writer thread ends once
 /// it has handled what was sent; the returned handle joins it. No thread is left running
 /// when no node logs, so a host may unload the library (e.g. LabVIEW unloading the DLL).
-pub(crate) fn release(sender: SyncSender<Command>) -> Option<JoinHandle<()>> {
+pub(crate) fn release(sender: LogSender) -> Option<JoinHandle<()>> {
     drop(sender);
     let mut guard = running();
     let running = guard.as_mut()?;
@@ -106,14 +155,6 @@ pub(crate) fn release(sender: SyncSender<Command>) -> Option<JoinHandle<()>> {
     guard.take().map(|r| r.thread)
 }
 
-/// Hands `command` to the writer without blocking; gives it back if the queue is full
-/// or the writer is gone.
-pub(crate) fn try_send(sender: &SyncSender<Command>, command: Command) -> Result<(), Command> {
-    sender.try_send(command).map_err(|e| match e {
-        TrySendError::Full(c) | TrySendError::Disconnected(c) => c,
-    })
-}
-
 static PAUSE: Mutex<()> = Mutex::new(());
 
 /// Stops the writer thread before its next command while the guard lives (tests only).
@@ -122,7 +163,7 @@ pub fn pause_writer() -> MutexGuard<'static, ()> {
     PAUSE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn run(rx: &Receiver<Command>) {
+fn run(rx: &Receiver<Command>, queued: &AtomicUsize) {
     let mut writer = Writer::new(std::process::id());
     let mut next_flush = Instant::now() + FLUSH_INTERVAL;
     let mut next_clean = Instant::now() + CLEAN_INTERVAL;
@@ -130,7 +171,9 @@ fn run(rx: &Receiver<Command>) {
         match rx.recv_timeout(next_flush.saturating_duration_since(Instant::now())) {
             Ok(command) => {
                 drop(PAUSE.lock());
+                let bytes = command.bytes();
                 writer.handle(command);
+                queued.fetch_sub(bytes, Ordering::AcqRel);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -433,6 +476,48 @@ mod tests {
             date: d,
             text: text.into(),
         });
+    }
+
+    fn line(text: &str) -> Command {
+        Command::Lines {
+            node: 1,
+            date: date(1),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn queue_bounded_in_bytes() {
+        let (tx, rx) = sync_channel(QUEUE);
+        let queued = Arc::new(AtomicUsize::new(0));
+        let sender = LogSender {
+            tx,
+            queued: Arc::clone(&queued),
+            budget: 100,
+        };
+        // a line larger than the budget goes into an empty queue ...
+        assert!(sender.try_send(line(&"x".repeat(150))).is_ok());
+        // ... but nothing more while it waits
+        assert!(sender.try_send(line("y")).is_err());
+        let _ = rx.recv().unwrap();
+        queued.fetch_sub(150, Ordering::AcqRel);
+
+        assert!(sender.try_send(line(&"a".repeat(60))).is_ok());
+        assert!(
+            sender.try_send(line(&"b".repeat(60))).is_err(),
+            "over budget"
+        );
+        assert!(sender.try_send(line(&"c".repeat(40))).is_ok(), "just fits");
+        assert_eq!(queued.load(Ordering::Acquire), 100);
+        // commands without text always fit
+        let (ack, _done) = tokio::sync::oneshot::channel();
+        assert!(sender.try_send(Command::Close { node: 1, ack }).is_ok());
+        assert_eq!(queued.load(Ordering::Acquire), 100);
+
+        // refused when the writer is gone, without counting
+        drop(rx);
+        assert!(sender.try_send(line("z")).is_err());
+        assert_eq!(queued.load(Ordering::Acquire), 100);
     }
 
     fn close(w: &mut Writer, node: LogId) {
