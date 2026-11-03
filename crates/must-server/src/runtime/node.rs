@@ -62,7 +62,8 @@ pub struct RunningNode {
     finished: Arc<AtomicBool>,
 }
 
-/// The runtime used by [`Node::start`], created on first use.
+/// The runtime used by [`Node::start`], created on first use and never shut down: its
+/// worker threads stay (idle) until the process exits.
 fn shared_runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
@@ -77,6 +78,13 @@ fn shared_runtime() -> &'static Runtime {
 impl Node {
     /// Starts serving on a runtime owned by the library, shared by all nodes started
     /// this way. Callable from any thread, also outside of any async runtime.
+    ///
+    /// The shared runtime is created by the first call and lives until the process
+    /// exits: its worker threads (one per core) stay, idle, after every node has
+    /// stopped, and so do tasks that handlers spawned on it. Where that matters, for
+    /// example in a library that is unloaded or a program that must not keep idle
+    /// threads, run nodes on a runtime you control with [`spawn`](Self::spawn) and shut
+    /// it down after [`RunningNode::stop`].
     pub fn start(self) -> Result<RunningNode, StartError> {
         self.spawn(shared_runtime().handle())
     }

@@ -23,6 +23,14 @@ use crate::events::{ConnectionId, NodeEvent};
 use crate::model::{AccessibleModel, CommandModel, ModuleModel, ParameterModel};
 use crate::protocol::{self, Frame, LineSplitter, Request, now, parse_request, split_specifier};
 
+/// `line` and its LF, in `buf`.
+fn with_lf<'b>(buf: &'b mut Vec<u8>, line: &str) -> &'b [u8] {
+    buf.clear();
+    buf.extend_from_slice(line.as_bytes());
+    buf.push(b'\n');
+    buf
+}
+
 /// Serves one client until it disconnects or `stop` is cancelled.
 pub(crate) async fn serve(
     hub: Arc<Hub>,
@@ -44,6 +52,8 @@ pub(crate) async fn serve(
     let writer_task = {
         let (hub, stats, close) = (Arc::clone(&hub), Arc::clone(&stats), close.clone());
         tokio::spawn(async move {
+            // a line and its LF, written at once; reused for every line
+            let mut buf = Vec::new();
             loop {
                 let out = tokio::select! {
                     () = close.cancelled() => break,
@@ -54,24 +64,20 @@ pub(crate) async fn serve(
                 };
                 let written = tokio::select! {
                     () = close.cancelled() => break,
-                    r = writer.write_all(out.line.as_bytes()) => r,
+                    r = writer.write_all(with_lf(&mut buf, &out.line)) => r,
                 };
-                stats.total.fetch_sub(out.line.len(), Ordering::AcqRel);
+                stats.total.fetch_sub(out.size(), Ordering::AcqRel);
                 if out.is_update {
-                    stats.updates.fetch_sub(out.line.len(), Ordering::AcqRel);
+                    stats.updates.fetch_sub(out.size(), Ordering::AcqRel);
                 }
                 stats.drained.notify_waiters();
                 if written.is_err() {
                     close.cancel();
                     break;
                 }
-                let line = out.line.trim_end_matches('\n');
-                debug!(id, "> {line}");
+                debug!(id, "> {}", out.line);
                 if !out.is_log && hub.observed() {
-                    hub.emit(NodeEvent::MessageSent {
-                        id,
-                        line: line.into(),
-                    });
+                    hub.emit(NodeEvent::MessageSent { id, line: out.line });
                 }
             }
             let _ = writer.shutdown().await;
@@ -227,19 +233,16 @@ impl Connection {
             Request::Identify => self.hub.identify(self.id),
             Request::Describe => self.reply(protocol::describing(&self.hub.report)),
             Request::Ping(token) => self.reply(protocol::pong(token, now())),
-            Request::Activate(module) | Request::Deactivate(module)
-                if module.is_some_and(|m| !self.hub.model.modules.contains_key(m)) =>
-            {
-                let action = if line.starts_with("activate") {
-                    "activate"
-                } else {
-                    "deactivate"
-                };
-                let m = module.unwrap_or_default();
-                self.error(action, module, no_such_module(m));
+            Request::Activate(module) => {
+                if self.known_module("activate", module) {
+                    self.hub.activate(self.id, module);
+                }
             }
-            Request::Activate(module) => self.hub.activate(self.id, module),
-            Request::Deactivate(module) => self.hub.deactivate(self.id, module),
+            Request::Deactivate(module) => {
+                if self.known_module("deactivate", module) {
+                    self.hub.deactivate(self.id, module);
+                }
+            }
             Request::Read(spec) => self.read(spec, incoming).await,
             Request::Change(spec, data) => self.change(spec, data).await,
             Request::Do(spec, data) => self.call(spec, data).await,
@@ -253,6 +256,17 @@ impl Connection {
                     SecopError::new(ErrorClass::ProtocolError, message),
                 );
             }
+        }
+    }
+
+    /// Whether `module` (if given) exists; replies with an error for `action` if not.
+    fn known_module(&self, action: &str, module: Option<&str>) -> bool {
+        match module {
+            Some(m) if !self.hub.model.modules.contains_key(m) => {
+                self.error(action, module, no_such_module(m));
+                false
+            }
+            _ => true,
         }
     }
 
@@ -303,9 +317,9 @@ impl Connection {
                 .read_with_repeats(module, parameter, spec, incoming)
                 .await;
         }
-        let result = match hub.cached(module, parameter) {
-            Some(CacheEntry::Value { report, .. }) => Ok(report),
-            Some(CacheEntry::Error { error, .. }) => Err(error),
+        let result = match hub.cached(module, parameter).as_deref() {
+            Some(CacheEntry::Value { report, .. }) => Ok(report.clone()),
+            Some(CacheEntry::Error { error, .. }) => Err(error.clone()),
             None => Err(SecopError::new(
                 ErrorClass::ReadFailed,
                 "no value available yet",
