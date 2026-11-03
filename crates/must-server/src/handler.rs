@@ -53,6 +53,21 @@ impl From<Value> for Reading {
     }
 }
 
+/// Severity of an application log record, see [`Ctx::log`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppLogLevel {
+    /// Something failed. Sent to remote clients as `error`.
+    Error,
+    /// Something is wrong but the module goes on. Sent to remote clients as `error`, as
+    /// SECoP has no warning level.
+    Warning,
+    /// Normal operation worth noting. Sent to remote clients as `info`.
+    Info,
+    /// Details for debugging. Sent to remote clients as `debug` and to `tracing`, but not
+    /// to the status display, monitoring or the log files.
+    Debug,
+}
+
 /// The result of a handler call.
 pub type HandlerResult = Result<Reading, SecopError>;
 
@@ -97,6 +112,21 @@ impl Ctx {
     /// read of the same parameter, which would wait for itself until the node's timeout.
     pub async fn read(&self, parameter: &str) -> Result<Reading, SecopError> {
         self.shared.read_for_poll(parameter).await
+    }
+
+    /// Logs a message for this module, as the node logs its own records.
+    ///
+    /// Clients that asked for this module's log messages with SECoP's `logging` request
+    /// receive it as a `log` event if their level admits it. Error, warning and info
+    /// records also reach the status display, monitoring and the log files (as
+    /// [`NodeEvent::Log`](crate::NodeEvent::Log)) and `tracing`; debug records only
+    /// remote clients and `tracing`.
+    ///
+    /// Log events are best effort: a client that does not read its messages misses them
+    /// rather than being disconnected. They count toward the client's unread updates,
+    /// though, so heavy logging can make a later update exceed the slow-client limit.
+    pub fn log(&self, level: AppLogLevel, message: impl Into<String>) {
+        self.hub.app_log(&self.module, level, message.into());
     }
 
     /// Whether the module's handler accepts overlapping calls, see
@@ -145,6 +175,12 @@ impl Publisher {
         Ok(())
     }
 
+    /// Logs a message for the module, see [`Ctx::log`]. Fails if the node is gone.
+    pub fn log(&self, level: AppLogLevel, message: impl Into<String>) -> Result<(), SecopError> {
+        self.hub()?.app_log(&self.module, level, message.into());
+        Ok(())
+    }
+
     fn hub(&self) -> Result<Arc<Hub>, SecopError> {
         self.hub
             .upgrade()
@@ -157,6 +193,9 @@ impl Publisher {
 ///
 /// The node calls the handler of a module for one request at a time, unless the module
 /// is declared with [`Module::concurrent_requests`](crate::Module::concurrent_requests).
+///
+/// A handler logs messages for its module with [`Ctx::log`] (or, from a background task,
+/// [`Publisher::log`]); clients receive them through SECoP's remote logging.
 #[async_trait]
 pub trait ModuleHandler: Send + Sync {
     /// The module's `implementation` property unless the module sets one: by default the

@@ -1249,3 +1249,50 @@ fn checks_in_polling_mode() {
     done(c"chk_poll");
     assert!(closed(port));
 }
+
+/// "Host logs for a module" and "From any thread" of `SECoP_S_logMessage` in
+/// specs/shall-server-abi; c/server.c checks its error codes.
+#[test]
+fn application_log_messages() {
+    const SUCCESS: c_int = 0;
+    const DEBUG: c_int = 4;
+    const INFO: c_int = 3;
+    const WARNING: c_int = 2;
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port argument
+    check("log_build", unsafe { c::ctest_log_build(port) });
+    // let the startup reads pass, whose getter logs before anyone asked for it
+    std::thread::sleep(Duration::from_millis(300));
+    let log = |level: c_int, text: &CStr| {
+        // SAFETY: a C helper taking a NUL-terminated string
+        unsafe { c::ctest_log_message(level, text.as_ptr()) }
+    };
+
+    let mut client = Client::connect(port);
+    assert_eq!(
+        client.request(r#"logging mod1 "info""#),
+        r#"logging mod1 "info""#
+    );
+    assert_eq!(log(DEBUG, c"coil at 12 V"), SUCCESS);
+    assert_eq!(log(INFO, c"cooling started"), SUCCESS);
+    assert_eq!(log(WARNING, c"flow low"), SUCCESS);
+    assert_eq!(client.recv(), r#"log mod1:info "cooling started""#);
+    assert_eq!(client.recv(), r#"log mod1:error "flow low""#);
+
+    // the getter logs for its own module while the node answers the read
+    client.send("read mod1:value");
+    assert_eq!(client.recv(), r#"log mod1:info "read requested""#);
+    let reply = client.recv();
+    assert!(reply.starts_with("reply mod1:value "), "{reply}");
+    // SAFETY: a C helper without arguments
+    assert_eq!(unsafe { c::ctest_log_getter_rc() }, SUCCESS);
+
+    // at debug, debug messages arrive too
+    client.request(r#"logging mod1 "debug""#);
+    assert_eq!(log(DEBUG, c"coil at 12 V"), SUCCESS);
+    assert_eq!(client.recv(), r#"log mod1:debug "coil at 12 V""#);
+
+    done(c"log");
+    assert!(closed(port));
+}

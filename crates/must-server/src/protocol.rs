@@ -96,7 +96,10 @@ pub(crate) enum Request<'a> {
     Do(Option<&'a str>, Option<&'a str>),
     /// `check <module>:<accessible> [<value>]`
     Check(Option<&'a str>, Option<&'a str>),
-    /// An action must does not implement (`logging`) or does not know.
+    /// `logging [<module>[:<parameter>]] <level>`: specifier (`None` for the whole node)
+    /// and level.
+    Logging(Option<&'a str>, Option<&'a str>),
+    /// An action must does not know.
     Unsupported {
         action: &'a str,
         specifier: Option<&'a str>,
@@ -122,6 +125,13 @@ pub(crate) fn parse_request(line: &str) -> Request<'_> {
         "change" => Request::Change(specifier, data),
         "do" => Request::Do(specifier, data),
         "check" => Request::Check(specifier, data),
+        // `logging "info"` with one space: no module name starts with `"`
+        "logging" => match specifier {
+            Some(s) if s.starts_with('"') => {
+                Request::Logging(None, Some(&line["logging ".len()..]))
+            }
+            _ => Request::Logging(specifier, data),
+        },
         _ => Request::Unsupported { action, specifier },
     }
 }
@@ -171,6 +181,17 @@ pub(crate) fn pong(token: Option<&str>, t: f64) -> String {
 /// `<action> <specifier> <data report>` for `reply`, `changed`, `done` and `update`.
 pub(crate) fn data_message(action: &str, specifier: &str, data_report: &impl Display) -> String {
     format!("{action} {specifier} {data_report}\n")
+}
+
+/// `logging <module> <level>`, or `logging  <level>` for the whole node.
+pub(crate) fn logging(module: Option<&str>, level: &Json) -> String {
+    format!("logging {} {level}\n", module.unwrap_or_default())
+}
+
+/// `log <module>:<level> <message>`, with the message as a JSON string.
+pub(crate) fn log_event(module: &str, level: &str, message: &str) -> String {
+    let message = serde_json::to_string(message).unwrap_or_default();
+    format!("log {module}:{level} {message}\n")
 }
 
 /// `error_<action> <specifier> <error report>`, with two spaces when there is no
@@ -286,13 +307,35 @@ mod tests {
             parse_request("check t1:stop"),
             Request::Check(Some("t1:stop"), None)
         );
+    }
+
+    #[test]
+    fn logging_requests() {
         assert_eq!(
             parse_request(r#"logging  "debug""#),
-            Request::Unsupported {
-                action: "logging",
-                specifier: None
-            }
+            Request::Logging(None, Some(r#""debug""#))
         );
+        assert_eq!(
+            parse_request(r#"logging "info""#),
+            Request::Logging(None, Some(r#""info""#))
+        );
+        assert_eq!(
+            parse_request(r#"logging t1 "error""#),
+            Request::Logging(Some("t1"), Some(r#""error""#))
+        );
+        assert_eq!(
+            parse_request(r#"logging t1:target "info""#),
+            Request::Logging(Some("t1:target"), Some(r#""info""#))
+        );
+        assert_eq!(
+            parse_request("logging t1 false"),
+            Request::Logging(Some("t1"), Some("false"))
+        );
+        assert_eq!(
+            parse_request("logging t1"),
+            Request::Logging(Some("t1"), None)
+        );
+        assert_eq!(parse_request("logging"), Request::Logging(None, None));
     }
 
     #[test]
@@ -318,6 +361,12 @@ mod tests {
         assert_eq!(activation(false, Some("t1")), "inactive t1\n");
         assert_eq!(pong(Some("42"), 1.5), "pong 42 [null,{\"t\":1.5}]\n");
         assert_eq!(pong(None, 1.5), "pong  [null,{\"t\":1.5}]\n");
+        assert_eq!(logging(None, &json!("debug")), "logging  \"debug\"\n");
+        assert_eq!(logging(Some("t1"), &json!(false)), "logging t1 false\n");
+        assert_eq!(
+            log_event("t1", "info", "say \"hi\""),
+            "log t1:info \"say \\\"hi\\\"\"\n"
+        );
         for action in ["reply", "changed", "done", "update"] {
             assert_eq!(
                 data_message(action, "t1:value", &json!([295.13, {"t": 1.0}])),

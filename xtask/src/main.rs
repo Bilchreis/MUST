@@ -601,11 +601,11 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_initLibrary(QApplication *pApplication, 
     fn header_function_counts() {
         let (server, variant) = exports().unwrap();
         // the exports of SHALL's own DLLs: 41 variant functions, minus the Qt-only
-        // SECoP_V_printStream; 27 server functions, plus must's 7 additions
+        // SECoP_V_printStream; 27 server functions, plus must's 8 additions
         // (SECoP_S_filterStoredCommand[2], SECoP_S_[un]registerUserError,
         // SECoP_S_setCheckFunction, SECoP_S_updateParameterMatrix,
-        // SECoP_S_putCommandAnswerMatrix)
+        // SECoP_S_putCommandAnswerMatrix, SECoP_S_logMessage)
         assert_eq!(variant.len(), 40);
-        assert_eq!(server.len(), 40 + 27 + 7);
+        assert_eq!(server.len(), 40 + 27 + 8);
     }
 }

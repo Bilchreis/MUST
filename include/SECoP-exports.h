@@ -473,6 +473,32 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_registerUserError(const char* szSECoPerr
 enum SECoP_S_error SHALL_EXPORT SECoP_S_unregisterUserError(int iError, const char* szContextID);
 
 /**
+ * \brief must addition, not in SHALL: logs a message for a module of a running node.
+ *        SECoP clients that asked for the module's log messages with the "logging"
+ *        request receive it as a "log" event if their level admits it
+ *        (SECoP_S_LOG_ERROR and SECoP_S_LOG_WARNING as "error", SECoP_S_LOG_INFO as
+ *        "info", SECoP_S_LOG_DEBUG as "debug"). Error, warning and info messages also
+ *        appear in the status display (must-tui) and the node's log files; debug
+ *        messages only reach remote clients, so that debug output does not fill the
+ *        log files.
+ *        Log events are best effort: a client that does not read its messages misses
+ *        them instead of being disconnected. They do count toward its unread updates,
+ *        so logging much at debug level can make a later update disconnect such a
+ *        client.
+ *        Can be called from any thread, also from a getter, setter or command
+ *        function; it never waits for the node.
+ * \ingroup expfunc
+ * \param[in] szModule  name of the module (<node>:<module>); the node must be complete
+ * \param[in] iLevel    a SECoP_S_logLevel
+ * \param[in] szMessage text of the message (UTF-8; invalid bytes are replaced)
+ * \return on success SECoP_S_SUCCESS, SECoP_S_ERROR_INVALID_NODE for an unknown node or
+ *         one that is not complete, SECoP_S_ERROR_INVALID_MODULE for an unknown module,
+ *         SECoP_S_ERROR_INVALID_VALUE for an invalid level or a NULL szMessage
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_logMessage(const char* szModule, enum SECoP_S_logLevel iLevel,
+                                                   const char* szMessage);
+
+/**
  * \brief Call SECoP_S_getErrorString to convert a SECoP_S_error value into a human
  *        readable text, which describes the error.
  * \ingroup expfunc

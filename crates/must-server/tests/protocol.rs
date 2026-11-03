@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use common::{Client, Sim, error_class, node, parse};
-use must_server::RunningNode;
+use must_server::{AppLogLevel, RunningNode};
 use serde_json::json;
 use tokio::runtime::Handle;
 
@@ -306,19 +306,206 @@ async fn empty_line_between_requests() {
 }
 
 #[tokio::test]
-async fn logging_request() {
-    let (n, _) = start();
-    let mut c = Client::connect(n.local_addr()).await;
-    let line = c.request("logging t1 \"debug\"").await;
-    assert!(line.starts_with("error_logging t1 "), "{line}");
-    assert_eq!(error_class(&line), "ProtocolError");
-}
-
-#[tokio::test]
 async fn check_of_an_accessible_without_checkable() {
     let (n, _) = start();
     let mut c = Client::connect(n.local_addr()).await;
     let line = c.request("check t1:target 5").await;
     assert!(line.starts_with("error_check t1:target "), "{line}");
     assert_eq!(error_class(&line), "NotCheckable");
+}
+
+// --- remote logging: the scenarios of "Logging request" and "Logging levels" in
+// specs/sec-node-remote-logging
+
+/// Logs one message per level for `module`, then a marker at error level that every
+/// level but off admits, so that a test knows when it has seen everything.
+fn log_all(n: &RunningNode, module: &str) {
+    for (level, text) in [
+        (AppLogLevel::Debug, "d"),
+        (AppLogLevel::Info, "i"),
+        (AppLogLevel::Warning, "w"),
+        (AppLogLevel::Error, "e"),
+    ] {
+        n.log(module, level, text).unwrap();
+    }
+}
+
+/// Lines received until none arrives for a moment.
+async fn drain(c: &mut Client) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Some(line) = c.try_line(Duration::from_millis(300)).await {
+        lines.push(line);
+    }
+    lines
+}
+
+#[tokio::test]
+async fn logging_whole_node() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    assert_eq!(
+        c.request(r#"logging  "debug""#).await,
+        r#"logging  "debug""#
+    );
+    log_all(&n, "t1");
+    log_all(&n, "t2");
+    assert_eq!(
+        drain(&mut c).await,
+        [
+            r#"log t1:debug "d""#,
+            r#"log t1:info "i""#,
+            r#"log t1:error "w""#,
+            r#"log t1:error "e""#,
+            r#"log t2:debug "d""#,
+            r#"log t2:info "i""#,
+            r#"log t2:error "w""#,
+            r#"log t2:error "e""#,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn logging_one_module() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    assert_eq!(
+        c.request(r#"logging t1 "error""#).await,
+        r#"logging t1 "error""#
+    );
+    log_all(&n, "t1");
+    log_all(&n, "t2");
+    assert_eq!(
+        drain(&mut c).await,
+        [r#"log t1:error "w""#, r#"log t1:error "e""#]
+    );
+}
+
+#[tokio::test]
+async fn logging_parameter_specifier() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    assert_eq!(
+        c.request(r#"logging t1:target "info""#).await,
+        r#"logging t1 "info""#
+    );
+    log_all(&n, "t1");
+    assert_eq!(
+        drain(&mut c).await,
+        [
+            r#"log t1:info "i""#,
+            r#"log t1:error "w""#,
+            r#"log t1:error "e""#
+        ]
+    );
+}
+
+#[tokio::test]
+async fn logging_single_space() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    assert_eq!(c.request(r#"logging "info""#).await, r#"logging  "info""#);
+    log_all(&n, "t2");
+    assert_eq!(
+        drain(&mut c).await,
+        [
+            r#"log t2:info "i""#,
+            r#"log t2:error "w""#,
+            r#"log t2:error "e""#
+        ]
+    );
+}
+
+#[tokio::test]
+async fn logging_default_off() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send("activate").await;
+    while c.line().await != "active" {}
+    log_all(&n, "t1");
+    assert_eq!(drain(&mut c).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn logging_false_is_off() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    assert_eq!(
+        c.request(r#"logging t1 "debug""#).await,
+        r#"logging t1 "debug""#
+    );
+    assert_eq!(c.request("logging t1 false").await, "logging t1 false");
+    log_all(&n, "t1");
+    assert_eq!(
+        c.request(r#"logging t1 "off""#).await,
+        r#"logging t1 "off""#
+    );
+    log_all(&n, "t1");
+    assert_eq!(drain(&mut c).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn logging_module_overrides_node() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.request(r#"logging  "error""#).await;
+    c.request(r#"logging t1 "debug""#).await;
+    log_all(&n, "t1");
+    log_all(&n, "t2");
+    assert_eq!(
+        drain(&mut c).await,
+        [
+            r#"log t1:debug "d""#,
+            r#"log t1:info "i""#,
+            r#"log t1:error "w""#,
+            r#"log t1:error "e""#,
+            r#"log t2:error "w""#,
+            r#"log t2:error "e""#,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn logging_node_replaces_modules() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.request(r#"logging t1 "debug""#).await;
+    assert_eq!(c.request(r#"logging  "off""#).await, r#"logging  "off""#);
+    log_all(&n, "t1");
+    log_all(&n, "t2");
+    assert_eq!(drain(&mut c).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn logging_invalid_level() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.request(r#"logging t1 "error""#).await;
+    for request in [r#"logging t1 "verbose""#, "logging t1 3"] {
+        let line = c.request(request).await;
+        assert!(line.starts_with("error_logging t1 "), "{line}");
+        assert_eq!(error_class(&line), "WrongType");
+    }
+    let line = c.request(r#"logging  "loud""#).await;
+    assert!(line.starts_with("error_logging  "), "{line}");
+    assert_eq!(error_class(&line), "WrongType");
+    assert_eq!(error_class(&c.request("logging t1 {oops").await), "BadJSON");
+    assert_eq!(error_class(&c.request("logging t1").await), "ProtocolError");
+    // the levels are unchanged
+    log_all(&n, "t1");
+    assert_eq!(
+        drain(&mut c).await,
+        [r#"log t1:error "w""#, r#"log t1:error "e""#]
+    );
+}
+
+#[tokio::test]
+async fn logging_unknown_module() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    let line = c.request(r#"logging nope "info""#).await;
+    assert!(line.starts_with("error_logging nope "), "{line}");
+    assert_eq!(error_class(&line), "NoSuchModule");
+    let line = c.request(r#"logging nope:value "info""#).await;
+    assert!(line.starts_with("error_logging nope:value "), "{line}");
+    assert_eq!(error_class(&line), "NoSuchModule");
 }

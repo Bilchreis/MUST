@@ -23,7 +23,7 @@ use super::Hub;
 use super::actor::{ActorHandle, Job, spawn_actor};
 use super::connection;
 use crate::events::{LogLevel, NodeEvent};
-use crate::handler::Reading;
+use crate::handler::{AppLogLevel, Reading};
 use crate::logfiles::LogHandle;
 use crate::model::{Node, PollSource};
 
@@ -373,6 +373,24 @@ impl RunningNode {
     /// `error_update`.
     pub fn update_error(&self, module: &str, parameter: &str, error: SecopError) {
         self.hub.publish_error(module, parameter, error);
+    }
+
+    /// Logs a message for a module, see [`Ctx::log`](crate::Ctx::log). Fails if the node
+    /// has no such module.
+    pub fn log(
+        &self,
+        module: &str,
+        level: AppLogLevel,
+        message: impl Into<String>,
+    ) -> Result<(), SecopError> {
+        if !self.hub.model.modules.contains_key(module) {
+            return Err(SecopError::new(
+                must_types::ErrorClass::NoSuchModule,
+                format!("`{module}` is not configured on this node"),
+            ));
+        }
+        self.hub.app_log(module, level, message.into());
+        Ok(())
     }
 
     /// Subscribes to the node's events.

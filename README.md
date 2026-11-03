@@ -9,8 +9,8 @@ Differences to SHALL:
 
 - written in Rust, without Qt (no Qt build step, library or runtime dependency)
 - speaks SECoP 2.0 (draft) instead of SECoP V2019-09-16, including the `matrix` data
-  type and `check` (with `SECoP_S_setCheckFunction` and `SECoP_S_ACTION_CHECK`, must
-  additions); the optional `logging` message is not supported yet
+  type, `check` (with `SECoP_S_setCheckFunction` and `SECoP_S_ACTION_CHECK`, must
+  additions) and remote logging (`logging`, with `SECoP_S_logMessage`, a must addition)
 - a terminal UI (`must-tui`) replaces SHALL's Qt status window
 
 ## Status

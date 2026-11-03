@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::events::{ConnectionId, LogLevel, NodeEvent};
-use crate::handler::Reading;
+use crate::handler::{AppLogLevel, Reading};
 use crate::model::{NodeModel, POLLINTERVAL};
 use crate::protocol::{self, now};
 
@@ -67,10 +67,100 @@ impl Activation {
     }
 }
 
+/// A level of SECoP's remote logging: what a connection asks for, and the level a log
+/// record is sent as. Ordered from `Off` to `Debug`; a connection's level admits the
+/// records at or below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(crate) enum RemoteLevel {
+    #[default]
+    Off,
+    Error,
+    Info,
+    Debug,
+}
+
+impl RemoteLevel {
+    /// The level of a `logging` request: `"debug"`, `"info"`, `"error"`, `"off"` or
+    /// `false`.
+    pub(crate) fn from_json(level: &serde_json::Value) -> Option<Self> {
+        match level {
+            serde_json::Value::Bool(false) => Some(Self::Off),
+            serde_json::Value::String(s) => match s.as_str() {
+                "off" => Some(Self::Off),
+                "error" => Some(Self::Error),
+                "info" => Some(Self::Info),
+                "debug" => Some(Self::Debug),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The level as it appears in a `log` event.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Error => "error",
+            Self::Info => "info",
+            Self::Debug => "debug",
+        }
+    }
+}
+
+impl From<LogLevel> for RemoteLevel {
+    /// SECoP has no warning level; must's warnings (failed polls and reads) are what a
+    /// client asking for errors wants to see.
+    fn from(level: LogLevel) -> Self {
+        match level {
+            LogLevel::Error | LogLevel::Warn => Self::Error,
+            LogLevel::Info => Self::Info,
+        }
+    }
+}
+
+/// The remote logging levels of a connection: one for the whole node, overridden per
+/// module.
+#[derive(Debug, Default)]
+struct LogFilter {
+    node: RemoteLevel,
+    modules: HashMap<String, RemoteLevel>,
+}
+
+impl LogFilter {
+    /// Whether a record of `module` at `level` is sent.
+    fn admits(&self, module: &str, level: RemoteLevel) -> bool {
+        let wanted = self.modules.get(module).copied().unwrap_or(self.node);
+        level != RemoteLevel::Off && level <= wanted
+    }
+
+    /// Whether nothing is sent at all.
+    fn is_off(&self) -> bool {
+        self.node == RemoteLevel::Off && self.modules.values().all(|l| *l == RemoteLevel::Off)
+    }
+
+    /// Sets the level of one module or, with `None`, of all modules.
+    fn set(&mut self, module: Option<&str>, level: RemoteLevel) {
+        match module {
+            None => {
+                self.node = level;
+                self.modules.clear();
+            }
+            Some(m) => {
+                self.modules.insert(m.to_owned(), level);
+            }
+        }
+    }
+}
+
 /// A line queued for a connection.
 pub(crate) struct Outgoing {
     pub line: Arc<str>,
+    /// Counted in [`QueueStats::updates`]: an update or a `log` event.
     pub is_update: bool,
+    /// A `log` event: like the copies of an update, not announced as
+    /// [`NodeEvent::MessageSent`], as its record is logged once (and debug records not
+    /// at all).
+    pub is_log: bool,
 }
 
 /// Byte counters of a connection's outgoing queue, shared with its writer task.
@@ -78,7 +168,8 @@ pub(crate) struct Outgoing {
 pub(crate) struct QueueStats {
     /// All queued bytes; above the limit, the connection's requests are not read.
     pub total: AtomicUsize,
-    /// Queued bytes of unsolicited updates; above the limit, the connection is closed.
+    /// Queued bytes of unsolicited updates and `log` events; an update that would exceed
+    /// the limit closes the connection, a `log` event is dropped.
     pub updates: AtomicUsize,
     /// Signalled whenever the writer has sent something.
     pub drained: Notify,
@@ -92,17 +183,36 @@ struct ConnSink {
     tx: mpsc::UnboundedSender<Outgoing>,
     stats: Arc<QueueStats>,
     activation: Activation,
+    logging: LogFilter,
     close: CancellationToken,
 }
 
 impl ConnSink {
     fn push(&self, line: Arc<str>, is_update: bool) {
-        self.stats.total.fetch_add(line.len(), Ordering::AcqRel);
-        if is_update {
-            self.stats.updates.fetch_add(line.len(), Ordering::AcqRel);
+        self.send(Outgoing {
+            line,
+            is_update,
+            is_log: false,
+        });
+    }
+
+    fn push_log(&self, line: Arc<str>) {
+        self.send(Outgoing {
+            line,
+            is_update: true,
+            is_log: true,
+        });
+    }
+
+    fn send(&self, out: Outgoing) {
+        self.stats.total.fetch_add(out.line.len(), Ordering::AcqRel);
+        if out.is_update {
+            self.stats
+                .updates
+                .fetch_add(out.line.len(), Ordering::AcqRel);
         }
         // a send error means the writer is gone; the connection is being closed anyway
-        let _ = self.tx.send(Outgoing { line, is_update });
+        let _ = self.tx.send(out);
     }
 }
 
@@ -124,6 +234,9 @@ pub(crate) struct Hub {
     /// Fast poll interval of each module driven by a `pollinterval` parameter, `None`
     /// while stopped, fed by every published value of that parameter.
     poll_intervals: HashMap<String, watch::Sender<Option<Duration>>>,
+    /// Connections that asked for log events of some module; changed under the hub lock,
+    /// read without it so that a record nobody asked for costs one check.
+    logging: AtomicUsize,
 }
 
 /// Longest interval a `pollinterval` value sets, as in SHALL.
@@ -174,6 +287,7 @@ impl Hub {
             events,
             log_file: Mutex::new(None),
             poll_intervals,
+            logging: AtomicUsize::new(0),
         }
     }
 
@@ -224,7 +338,10 @@ impl Hub {
     }
 
     /// Logs a record about this node: to `tracing` (target `must_server::node`, with the
-    /// node and module as fields) and as a [`NodeEvent::Log`].
+    /// node and module as fields), as a [`NodeEvent::Log`] and, for a module's record, as
+    /// a `log` event to the connections that asked for it.
+    ///
+    /// Must not be called while holding the hub lock.
     pub(crate) fn log(&self, level: LogLevel, module: Option<&str>, message: String) {
         let node = self.model.equipment_id.as_str();
         let m = module.unwrap_or_default();
@@ -239,6 +356,9 @@ impl Hub {
                 tracing::info!(target: NODE_LOG_TARGET, node, module = m, "{message}");
             }
         }
+        if let Some(m) = module {
+            self.send_log(m, level.into(), &message);
+        }
         if self.observed() {
             self.emit(NodeEvent::Log {
                 level,
@@ -246,6 +366,77 @@ impl Hub {
                 message,
             });
         }
+    }
+
+    /// Logs a debug record of a module: to `tracing` and as a `log` event, but not as a
+    /// [`NodeEvent::Log`], so that debug output stays out of the status display and the
+    /// log files.
+    ///
+    /// Must not be called while holding the hub lock.
+    pub(crate) fn log_debug(&self, module: &str, message: &str) {
+        let node = self.model.equipment_id.as_str();
+        tracing::debug!(target: NODE_LOG_TARGET, node, module, "{message}");
+        self.send_log(module, RemoteLevel::Debug, message);
+    }
+
+    /// Logs a record of the application for a module, see [`crate::Ctx::log`].
+    pub(crate) fn app_log(&self, module: &str, level: AppLogLevel, message: String) {
+        let level = match level {
+            AppLogLevel::Error => LogLevel::Error,
+            AppLogLevel::Warning => LogLevel::Warn,
+            AppLogLevel::Info => LogLevel::Info,
+            AppLogLevel::Debug => return self.log_debug(module, &message),
+        };
+        self.log(level, Some(module), message);
+    }
+
+    /// Sends a `log` event to every connection whose level for `module` admits `level`.
+    /// Best effort: a connection whose unread updates and log events would exceed the
+    /// slow-client limit does not get it, so log events never close a connection.
+    fn send_log(&self, module: &str, level: RemoteLevel, message: &str) {
+        if self.logging.load(Ordering::Acquire) == 0 {
+            return;
+        }
+        let limit = self.model.options.max_outgoing_bytes;
+        let mut line: Option<Arc<str>> = None;
+        let state = self.lock();
+        for conn in state.conns.values() {
+            if !conn.logging.admits(module, level) {
+                continue;
+            }
+            let line = line
+                .get_or_insert_with(|| protocol::log_event(module, level.as_str(), message).into());
+            if conn.stats.updates.load(Ordering::Acquire) + line.len() <= limit {
+                conn.push_log(line.clone());
+            }
+        }
+    }
+
+    /// `logging`: sets a connection's level for one module or, with `None`, for all, and
+    /// queues the reply, which echoes the level as received.
+    pub(crate) fn set_logging(
+        &self,
+        id: ConnectionId,
+        module: Option<&str>,
+        level: RemoteLevel,
+        echo: &serde_json::Value,
+    ) {
+        let mut state = self.lock();
+        let Some(conn) = state.conns.get_mut(&id) else {
+            return;
+        };
+        let was_off = conn.logging.is_off();
+        conn.logging.set(module, level);
+        match (was_off, conn.logging.is_off()) {
+            (true, false) => {
+                self.logging.fetch_add(1, Ordering::AcqRel);
+            }
+            (false, true) => {
+                self.logging.fetch_sub(1, Ordering::AcqRel);
+            }
+            _ => {}
+        }
+        conn.push(protocol::logging(module, echo).into(), false);
     }
 
     // --- connections
@@ -267,6 +458,7 @@ impl Hub {
                 tx,
                 stats,
                 activation: Activation::default(),
+                logging: LogFilter::default(),
                 close,
             },
         );
@@ -274,7 +466,15 @@ impl Hub {
     }
 
     pub(crate) fn unregister(&self, id: ConnectionId) {
-        self.lock().conns.remove(&id);
+        let removed = self.lock().conns.remove(&id);
+        self.forget_logging(removed.as_ref());
+    }
+
+    /// Updates the logging count for a connection that was removed.
+    fn forget_logging(&self, removed: Option<&ConnSink>) {
+        if removed.is_some_and(|conn| !conn.logging.is_off()) {
+            self.logging.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 
     /// Queues a reply for a connection.
@@ -479,6 +679,7 @@ impl Hub {
                 .insert((module.to_owned(), parameter.to_owned()), entry);
             for id in &overflowing {
                 if let Some(conn) = state.conns.remove(id) {
+                    self.forget_logging(Some(&conn));
                     conn.stats.overflowed.store(true, Ordering::Release);
                     conn.close.cancel();
                     closed.push(conn.peer);

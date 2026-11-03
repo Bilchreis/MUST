@@ -144,6 +144,25 @@ enum SECoP_S_action
 };
 
 /**
+ * \brief must addition, not in SHALL: levels of \ref SECoP_S_logMessage
+ * \ingroup exptype
+ */
+enum SECoP_S_logLevel
+{
+    /** something failed; sent to remote clients as "error" */
+    SECoP_S_LOG_ERROR   = 1,
+
+    /** something is wrong but the module goes on; sent to remote clients as "error" */
+    SECoP_S_LOG_WARNING = 2,
+
+    /** normal operation worth noting; sent to remote clients as "info" */
+    SECoP_S_LOG_INFO    = 3,
+
+    /** details for debugging; sent only to remote clients, as "debug" */
+    SECoP_S_LOG_DEBUG   = 4
+};
+
+/**
  * \brief prototype of getter and setter functions for parameter access
  * \ingroup exptype
  * \param[in]     name        name of the accessible (parameter) with full name (node:module:accessible)

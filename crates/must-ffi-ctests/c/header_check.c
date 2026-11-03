@@ -59,6 +59,10 @@ int run_header_example(int allowed_to_loop)
             SECoP_S_setCheckFunction(check, "example");
             SECoP_S_setCheckFunction(0, "example");
         }
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "from the header check");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_ERROR, "e");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_WARNING, "w");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_DEBUG, "d");
     }
 
     /* must additions for matrices */

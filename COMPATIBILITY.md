@@ -80,7 +80,20 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   gets `checked` with the value or `error_check`. Other accessibles answer
   `NotCheckable`, a readonly parameter `ReadOnly`. SHALL answered every `check` with an
   error.
-- The optional message `logging` is answered with `ProtocolError`.
+- **Remote logging** (`logging`) is supported; SHALL answered it with an error. A client
+  sends `logging <module> <level>`, or `logging  <level>` for the whole node, with
+  `"debug"`, `"info"`, `"error"` or `"off"` (`false` counts as `"off"`), and then receives
+  that module's log messages as `log <module>:<level> "<message>"` events. The reply
+  echoes the request; a `module:parameter` specifier stands for its module and the reply
+  names only the module. Every module starts at `"off"` for every connection.
+  - **What is sent.** What the node logs about a module (failed polls and reads, values
+    that do not fit their datainfo) and what the application logs with
+    `SECoP_S_logMessage` (see below). must's error and warning records are sent as
+    `error`, info as `info`, debug as `debug`. Records not tied to a module (a failed
+    accept, a panicking handler) are not sent: a `log` event must name a module.
+  - **Slow clients.** Log events are best effort: while a client's unread updates and log
+    events exceed the slow-client limit, its log events are dropped instead of closing
+    the connection.
 - **Matrices.** must supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
   [Matrix values](#matrix-values). Its optional `compression` property is rejected,
   since SECoP defines no compression yet.
@@ -249,6 +262,7 @@ SHALL-LabVIEW's VIs refer to the first four (`SECoP_S_filterStoredCommand[2]` an
 arguments the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass
 no context ID yet: each of them must be updated to pass `Context_ID` as one more
 argument at the end before it works with must.
+`SECoP_S_logMessage` and the matrix and check functions are must's own.
 
 - **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
   out only the oldest stored request of the context that matches a filter. The other
@@ -302,6 +316,31 @@ argument at the end before it works with must.
   registered. A removed code is never handed out again; a request answered with it gets
   an `InternalError` report. Returns `SECoP_S_ERROR_INVALID_VALUE` for a code the context
   has not registered, including SHALL's own codes.
+- **`SECoP_S_logMessage(szModule, iLevel, szMessage)`** logs a message for a module of a
+  running node, for SECoP's remote logging (see above):
+  ```c
+  enum SECoP_S_error SECoP_S_logMessage(const char* szModule, enum SECoP_S_logLevel iLevel,
+      const char* szMessage);
+  ```
+  - **Module.** `szModule` is `node:module`, like the names of
+    `SECoP_S_updateParameter`; case is ignored. Like that function it takes no
+    `szContextID`.
+  - **Levels.** `enum SECoP_S_logLevel` (in `SECoP-types.h`): `SECoP_S_LOG_ERROR` (1) and
+    `SECoP_S_LOG_WARNING` (2) are sent as `error`, `SECoP_S_LOG_INFO` (3) as `info`,
+    `SECoP_S_LOG_DEBUG` (4) as `debug`, to the clients whose level for the module admits
+    them.
+  - **Where messages go.** Error, warning and info messages also appear in the status
+    TUI and the node's log files, like the node's own records. Debug messages only reach
+    remote clients (and Rust `tracing`), so that a chatty host does not fill the log
+    files.
+  - **Threads.** It can be called from any thread, also from a getter, setter or command
+    function while the node waits for it; it never waits for the node.
+  - **Slow clients.** Log events count toward a client's unread updates: logging much at
+    debug level to a client that does not read can make a later update disconnect it.
+  - **Results.** `SECoP_S_SUCCESS`; `SECoP_S_ERROR_INVALID_NODE` for an unknown node or
+    one before `SECoP_S_nodeComplete`; `SECoP_S_ERROR_INVALID_MODULE` for an unknown
+    module; `SECoP_S_ERROR_INVALID_VALUE` for a level other than 1 to 4 or a NULL
+    `szMessage`. Invalid UTF-8 in the text is replaced.
 
 - **Checks.** A client's `check <module>:<accessible> [<value>]` asks whether a value
   would be accepted, without changing anything (see

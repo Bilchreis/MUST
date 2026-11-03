@@ -41,8 +41,8 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
 |---|---|
 | 1 Overview | every process (name, pid, must version) with its nodes: context ID, address (wide terminals), state (`building`, `failed`, `running`, `stopped`, `gone`), clients, messages per second, the most severe module status |
 | 2 Detail | the selected node: state, address, context ID, the log file it writes (or that it writes none), build errors and warnings, every module with its status and every parameter's value (formatted with its unit), age or error, and the connected clients |
-| 3 Traffic | the selected node's messages, live: time, `>` received or `<` sent, client, text; `…[cut]` marks messages shortened to 4 KiB. The node sends them only while this view is open. |
-| 4 Logs | log records of all processes, merged by time; filters by level, node, process and text |
+| 3 Traffic | the selected node's messages, live: time, `>` received or `<` sent, client, text; `…[cut]` marks messages shortened to 4 KiB. The node sends them only while this view is open. Remote logging's `log` events are not shown: their records are in the Logs view. |
+| 4 Logs | log records of all processes, merged by time: what the nodes log about themselves and what applications log for a module (`Ctx::log`, `SECoP_S_logMessage`) at error, warning or info; application debug records are not shown. Filters by level, node, process and text |
 
 Statuses are shown as a colored label (`IDLE` green, `WARN` yellow, `BUSY` blue, `ERROR`
 red, `DISABLED` grey) plus the status text, so nothing depends on the color. With
