@@ -296,16 +296,29 @@ async fn error_report_format() {
 }
 
 #[tokio::test]
-async fn optional_and_custom_messages() {
+async fn empty_line_between_requests() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send("").await;
+    c.send("").await;
+    assert!(c.request("ping 1").await.starts_with("pong 1 "));
+    assert_eq!(c.try_line(Duration::from_millis(300)).await, None);
+}
+
+#[tokio::test]
+async fn logging_request() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    let line = c.request("logging t1 \"debug\"").await;
+    assert!(line.starts_with("error_logging t1 "), "{line}");
+    assert_eq!(error_class(&line), "ProtocolError");
+}
+
+#[tokio::test]
+async fn check_of_an_accessible_without_checkable() {
     let (n, _) = start();
     let mut c = Client::connect(n.local_addr()).await;
     let line = c.request("check t1:target 5").await;
     assert!(line.starts_with("error_check t1:target "), "{line}");
-    assert_eq!(error_class(&line), "ProtocolError");
-    let line = c.request("logging t1 \"debug\"").await;
-    assert!(line.starts_with("error_logging t1 "), "{line}");
-    // empty lines are ignored
-    c.send("").await;
-    c.send("").await;
-    assert!(c.request("ping x").await.starts_with("pong x "));
+    assert_eq!(error_class(&line), "NotCheckable");
 }

@@ -8,7 +8,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use must_types::{ErrorClass, Qualifiers, SecopError, data_report};
+use indexmap::IndexMap;
+use must_types::{ErrorClass, Qualifiers, SecopError, Value, ValueError, data_report};
 use serde_json::Value as Json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -19,7 +20,7 @@ use tracing::{debug, info};
 use super::actor::{ActorHandle, Job, JobResult};
 use super::{CacheEntry, Hub, Outgoing, QueueStats};
 use crate::events::{ConnectionId, NodeEvent};
-use crate::model::{AccessibleModel, ModuleModel};
+use crate::model::{AccessibleModel, CommandModel, ModuleModel, ParameterModel};
 use crate::protocol::{self, Frame, LineSplitter, Request, now, parse_request, split_specifier};
 
 /// Serves one client until it disconnects or `stop` is cancelled.
@@ -242,8 +243,9 @@ impl Connection {
             Request::Read(spec) => self.read(spec, incoming).await,
             Request::Change(spec, data) => self.change(spec, data).await,
             Request::Do(spec, data) => self.call(spec, data).await,
+            Request::Check(spec, data) => self.check(spec, data).await,
             Request::Unsupported { action, specifier } => {
-                let message = if matches!(action, "check" | "logging") {
+                let message = if action == "logging" {
                     format!("`{action}` is not supported by this node")
                 } else {
                     format!("unknown action `{action}`")
@@ -373,25 +375,16 @@ impl Connection {
         };
         let spec = spec.unwrap_or_default();
         let m = &hub.model.modules[module];
-        let Some(param) = m.parameter(parameter) else {
-            return self.error("change", Some(spec), no_such_parameter(m, parameter));
-        };
-        if param.readonly || param.constant.is_some() {
-            let error = SecopError::new(ErrorClass::ReadOnly, format!("`{parameter}` is readonly"));
-            return self.error("change", Some(spec), error);
-        }
-        let Some(data) = data else {
-            let error = SecopError::new(ErrorClass::ProtocolError, "missing value");
-            return self.error("change", Some(spec), error);
-        };
-        let json = match parse_json(data) {
-            Ok(json) => json,
-            Err(e) => return self.error("change", Some(spec), e),
-        };
-        let limits = param.dyn_limits(|name| hub.cached_value(module, name));
-        let value = match param.datainfo.decode_request(&json, limits.as_ref()) {
+        let value = m
+            .parameter(parameter)
+            .ok_or_else(|| no_such_parameter(m, parameter))
+            .and_then(|param| {
+                writable(param, parameter)?;
+                request_value(&hub, module, param, data)
+            });
+        let value = match value {
             Ok(value) => value,
-            Err(e) => return self.error("change", Some(spec), e.into()),
+            Err(e) => return self.error("change", Some(spec), e),
         };
         let result = self
             .run(module, |reply| Job::Change {
@@ -408,20 +401,14 @@ impl Connection {
             return;
         };
         let spec = spec.unwrap_or_default();
-        let Some(cmd) = hub.model.modules[module].command(command) else {
-            let error = SecopError::new(
-                ErrorClass::NoSuchCommand,
-                format!("`{module}` has no command `{command}`"),
-            );
-            return self.error("do", Some(spec), error);
-        };
-        let json = match data.map(parse_json).transpose() {
-            Ok(json) => json,
-            Err(e) => return self.error("do", Some(spec), e),
-        };
-        let argument = match cmd.info().decode_argument(json.as_ref()) {
+        let m = &hub.model.modules[module];
+        let argument = m
+            .command(command)
+            .ok_or_else(|| no_such_command(m, command))
+            .and_then(|cmd| argument(cmd, data));
+        let argument = match argument {
             Ok(argument) => argument,
-            Err(e) => return self.error("do", Some(spec), e.into()),
+            Err(e) => return self.error("do", Some(spec), e),
         };
         let result = self
             .run(module, |reply| Job::Do {
@@ -431,6 +418,39 @@ impl Connection {
             })
             .await;
         self.answer("do", "done", spec, result);
+    }
+
+    /// `check`: validated like the matching `change` or `do`, then decided by the handler.
+    /// Only this connection gets the reply; nothing is cached or published.
+    async fn check(&self, spec: Option<&str>, data: Option<&str>) {
+        let Some((module, accessible, hub)) = self.resolve("check", spec) else {
+            return;
+        };
+        let spec = spec.unwrap_or_default();
+        let m = &hub.model.modules[module];
+        let validated = match m.accessibles.get(accessible) {
+            None => Err(no_such_parameter(m, accessible)),
+            Some(AccessibleModel::Parameter(param)) => writable(param, accessible)
+                .and_then(|()| checkable(&param.props, accessible))
+                .and_then(|()| request_value(&hub, module, param, data))
+                .and_then(|value| Ok((encode(param.datainfo.encode(&value))?, Some(value)))),
+            Some(AccessibleModel::Command(cmd)) => checkable(&cmd.props, accessible)
+                .and_then(|()| argument(cmd, data))
+                .and_then(|value| Ok((encode(cmd.info().encode_argument(value.as_ref()))?, value))),
+        };
+        let (echo, value) = match validated {
+            Ok(validated) => validated,
+            Err(e) => return self.error("check", Some(spec), e),
+        };
+        let result = self
+            .run(module, |reply| Job::Check {
+                accessible: accessible.to_owned(),
+                value,
+                echo,
+                reply,
+            })
+            .await;
+        self.answer("check", "checked", spec, result);
     }
 
     /// Sends a job to a module actor and waits for its result.
@@ -484,10 +504,69 @@ fn parse_json(data: &str) -> Result<Json, SecopError> {
     serde_json::from_str(data).map_err(|e| SecopError::new(ErrorClass::BadJSON, e.to_string()))
 }
 
+/// Fails for a readonly or constant parameter.
+fn writable(param: &ParameterModel, name: &str) -> Result<(), SecopError> {
+    if param.readonly || param.constant.is_some() {
+        return Err(SecopError::new(
+            ErrorClass::ReadOnly,
+            format!("`{name}` is readonly"),
+        ));
+    }
+    Ok(())
+}
+
+/// Fails unless the accessible is declared `checkable: true`.
+fn checkable(props: &IndexMap<String, Json>, name: &str) -> Result<(), SecopError> {
+    if props.get("checkable") == Some(&Json::Bool(true)) {
+        return Ok(());
+    }
+    Err(SecopError::new(
+        ErrorClass::NotCheckable,
+        format!("`{name}` is not checkable"),
+    ))
+}
+
+/// The value of a `change` (or `check`) of `param`: parsed and checked against its
+/// datainfo and current dynamic limits.
+fn request_value(
+    hub: &Hub,
+    module: &str,
+    param: &ParameterModel,
+    data: Option<&str>,
+) -> Result<Value, SecopError> {
+    let data = data.ok_or_else(|| SecopError::new(ErrorClass::ProtocolError, "missing value"))?;
+    let json = parse_json(data)?;
+    let limits = param.dyn_limits(|name| hub.cached_value(module, name));
+    Ok(param.datainfo.decode_request(&json, limits.as_ref())?)
+}
+
+/// The argument of a `do` (or `check`) of `cmd`, checked against its datainfo.
+fn argument(cmd: &CommandModel, data: Option<&str>) -> Result<Option<Value>, SecopError> {
+    let json = data.map(parse_json).transpose()?;
+    Ok(cmd.info().decode_argument(json.as_ref())?)
+}
+
+/// Encodes a value that was just decoded with the same datainfo.
+fn encode(json: Result<Json, ValueError>) -> Result<Json, SecopError> {
+    json.map_err(|e| {
+        SecopError::new(
+            ErrorClass::InternalError,
+            format!("cannot encode the checked value: {e}"),
+        )
+    })
+}
+
 fn no_such_module(module: &str) -> SecopError {
     SecopError::new(
         ErrorClass::NoSuchModule,
         format!("`{module}` is not configured on this node"),
+    )
+}
+
+fn no_such_command(module: &ModuleModel, command: &str) -> SecopError {
+    SecopError::new(
+        ErrorClass::NoSuchCommand,
+        format!("`{}` has no command `{command}`", module.name),
     )
 }
 
