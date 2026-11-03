@@ -36,7 +36,7 @@ Groups 2 and 4 first built process-wide, counted registrations; the user then ti
 ## 6. Checks
 
 - [ ] 6.1 If a LabVIEW installation is available, run the four VIs from SHALL-LabVIEW, once updated to pass `Context_ID`, against the built `SHALLserver` (32- or 64-bit) and confirm they work, including how the VI joins the filter array; otherwise record in the PR what was not tested in LabVIEW
-- [ ] 6.2 Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `MUST_TUI=0 cargo test --workspace`, and confirm CI passes on Linux x86_64, Windows x86_64 and Windows i686
+- [x] 6.2 Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `MUST_TUI=0 cargo test --workspace`, and confirm CI passes on Linux x86_64, Windows x86_64 and Windows i686
 
 ## Workflow follow-up
 
