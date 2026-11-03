@@ -17,7 +17,7 @@ use must_server::monitor::ExternalNode;
 use must_types::{DataInfo, Value};
 use serde_json::Value as Json;
 
-use super::build::{AccessibleKind, CallFunction, DraftNode, GetSet, valid_name};
+use super::build::{AccessibleKind, CallFunction, CheckFunction, DraftNode, GetSet, valid_name};
 use super::codes::{
     description, err, register_user_error, remove_context_user_errors, unregister_user_error,
 };
@@ -702,6 +702,21 @@ pub unsafe extern "C" fn SECoP_S_setAddFocus(szKey: *const c_char) -> c_int {
         }
         code
     })
+}
+
+/// A must addition, not in SHALL: sets the check function of the focused parameter or
+/// command and publishes `checkable: true` for it; NULL clears both.
+///
+/// # Safety
+/// `szContextID` must be NULL or a NUL-terminated string; `ptrToCheck` must be NULL or a
+/// function with the `SECoP_S_checkFunction` signature.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn SECoP_S_setCheckFunction(
+    ptrToCheck: Option<CheckFunction>,
+    szContextID: *const c_char,
+) -> c_int {
+    // SAFETY: forwarded caller contract
+    unsafe { build_step(szContextID, |node| node.set_check(ptrToCheck)) }
 }
 
 /// Validates the node of the context and starts serving it.

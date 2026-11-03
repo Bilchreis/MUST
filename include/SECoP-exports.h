@@ -204,6 +204,21 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_addPropertyJSON(const char* szKey, const
 enum SECoP_S_error SHALL_EXPORT SECoP_S_setAddFocus(const char* szKey);
 
 /**
+ * \brief must addition, not in SHALL: sets the check function of the focused parameter
+ *        or command and publishes "checkable": true for it, so that clients may send
+ *        SECoP check requests. NULL clears the function and the property. In callback
+ *        mode, \ref SECoP_S_nodeComplete fails with SECoP_S_ERROR_MISSING_MANDATORY for
+ *        an accessible with "checkable": true but no check function. In polling mode the
+ *        property alone enables checks: they are handed out with SECoP_S_ACTION_CHECK.
+ * \ingroup expfunc
+ * \param[in] ptrToCheck  check function, see \ref SECoP_S_checkFunction, or NULL
+ * \param[in] szContextID Context ID of the node being built
+ * \return on success SECoP_S_SUCCESS, SECoP_S_ERROR_INVALID_PARAMETER if the focus is not
+ *         a parameter or command, or another SECoP_S_error
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_setCheckFunction(SECoP_S_checkFunction ptrToCheck, const char* szContextID);
+
+/**
  * \brief Inform the SECoP node that it is complete. This function makes some
  *        checks and on success, it opens the TCP port and marks the node that
  *        you cannot change its structure.

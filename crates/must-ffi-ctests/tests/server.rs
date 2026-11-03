@@ -886,7 +886,7 @@ fn filtered_requests() {
     assert_eq!(filter_rc(c"fn:mod1:b", 0, c"filt"), NO_DATA);
     assert_eq!(filter_rc(c"fn:mod1:a:x", 0, c"filt"), INVALID_NAME);
     assert_eq!(filter_rc(c"fn:mod-1", 0, c"filt"), INVALID_NAME);
-    assert_eq!(filter_rc(c"fn:mod1:a", 4, c"filt"), INVALID_VALUE);
+    assert_eq!(filter_rc(c"fn:mod1:a", 5, c"filt"), INVALID_VALUE);
     assert_eq!(filter_rc(c"fn:mod1:a", -1, c"filt"), INVALID_VALUE);
     assert_eq!(filter_rc(c"", 0, c"nocontext"), INVALID_CONTEXT_ID);
     let read_a = Expected {
@@ -1096,5 +1096,156 @@ fn matrix_in_polling_mode() {
         r#"update cam:image [{"len":[0,0],"blob":""},{"t":1000.0}]"#
     );
     done(c"mpoll");
+    assert!(closed(port));
+}
+
+// --- checks (must addition)
+
+/// `SECoP_S_ACTION_CHECK`.
+const ACTION_CHECK: c_int = 4;
+
+fn check_cb_last(name: &CStr, value: f64, calls: c_int, setter_calls: c_int) {
+    // SAFETY: a C test taking a NUL-terminated string and numbers
+    check("check_cb_last", unsafe {
+        c::ctest_check_cb_last(name.as_ptr(), value, calls, setter_calls)
+    });
+}
+
+fn check_cb_answer(which: c_int) {
+    // SAFETY: a C test with a number
+    check("check_cb_answer", unsafe {
+        c::ctest_check_cb_answer(which)
+    });
+}
+
+#[test]
+fn checks_in_callback_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("check_cb_build", unsafe { c::ctest_check_cb_build(port) });
+    let mut client = Client::connect(port);
+
+    // the description shows checkable, also for commands, and not for the cleared one
+    let description = client.describe();
+    let accessibles = &description["modules"]["mod1"]["accessibles"];
+    assert_eq!(accessibles["target"]["checkable"], true);
+    assert_eq!(accessibles["go"]["checkable"], true);
+    assert_eq!(accessibles["stop"]["checkable"], true);
+    assert!(
+        accessibles["other"].get("checkable").is_none(),
+        "{accessibles}"
+    );
+
+    // accepted: the check function decides, the setter is not called
+    let reply = client.request("check mod1:target 500");
+    assert!(reply.starts_with("checked mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], 500.0);
+    check_cb_last(c"cknode:mod1:target", 500.0, 1, 0);
+
+    // rejected with a SHALL code
+    check_cb_answer(1);
+    let reply = client.request("check mod1:target 600");
+    assert!(reply.starts_with("error_check mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], "RangeError");
+
+    // rejected with a registered error class
+    check_cb_answer(2);
+    let reply = client.request("check mod1:target 700");
+    assert!(reply.starts_with("error_check mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], "Impossible");
+    check_cb_last(c"cknode:mod1:target", 700.0, 3, 0);
+    check_cb_answer(0);
+
+    // outside the datainfo: the check function is not asked
+    let reply = client.request("check mod1:target 2000");
+    assert_eq!(data(&reply)[0], "RangeError");
+    check_cb_last(c"cknode:mod1:target", 700.0, 3, 0);
+
+    // commands, with and without argument
+    let reply = client.request("check mod1:go 1.5");
+    assert!(reply.starts_with("checked mod1:go "), "{reply}");
+    check_cb_last(c"cknode:mod1:go", 1.5, 4, 0);
+    let reply = client.request("check mod1:stop");
+    assert!(reply.starts_with("checked mod1:stop "), "{reply}");
+    check_cb_last(c"cknode:mod1:stop", f64::NAN, 5, 0);
+
+    // without checkable
+    let reply = client.request("check mod1:other 1");
+    assert!(reply.starts_with("error_check mod1:other "), "{reply}");
+    assert_eq!(data(&reply)[0], "NotCheckable");
+    check_cb_last(c"cknode:mod1:stop", f64::NAN, 5, 0);
+
+    done(c"chk_cb");
+    assert!(closed(port));
+}
+
+#[test]
+fn checkable_without_check_function() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("check_cb_missing", unsafe {
+        c::ctest_check_cb_missing(port)
+    });
+    assert!(closed(port), "the port is not opened");
+}
+
+#[test]
+fn checks_in_polling_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("check_poll_build", unsafe {
+        c::ctest_check_poll_build(port)
+    });
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+
+    // poll and answer a check; the answer's value is ignored
+    a.send("check mod1:target 500");
+    settle();
+    // SAFETY: a C test with a number
+    check("check_poll_answer", unsafe {
+        c::ctest_check_poll_answer(500.0)
+    });
+    let reply = a.recv();
+    assert!(reply.starts_with("checked mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], 500.0);
+
+    // filter by the check action: the change stays queued
+    a.send("change mod1:target 5");
+    settle();
+    b.send("check mod1:target 6");
+    settle();
+    let checked = Expected {
+        name: c"cpnode:mod1:target",
+        action: ACTION_CHECK,
+        value: Some(c"6"),
+    };
+    filter_take(c"", ACTION_CHECK, c"chk_poll", &checked, 64, 2);
+    filter_answer(c"0");
+    assert!(b.recv().starts_with("checked mod1:target "));
+    let change = Expected {
+        name: c"cpnode:mod1:target",
+        action: ACTION_CHANGE,
+        value: Some(c"5"),
+    };
+    filter_take(c"", 0, c"chk_poll", &change, 64, 1);
+    filter_answer(c"5");
+    assert!(a.recv().starts_with("changed mod1:target "));
+
+    // not checkable: nothing is queued
+    let reply = a.request("check mod1:other 500");
+    assert!(reply.starts_with("error_check mod1:other "), "{reply}");
+    assert_eq!(data(&reply)[0], "NotCheckable");
+    assert_eq!(filter_rc(c"", 0, c"chk_poll"), NO_DATA);
+
+    // unanswered: TimeoutError, and the request is gone
+    let reply = a.request("check mod1:target 7");
+    assert!(reply.starts_with("error_check mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], "TimeoutError");
+    assert_eq!(filter_rc(c"", 0, c"chk_poll"), NO_DATA);
+
+    done(c"chk_poll");
     assert!(closed(port));
 }

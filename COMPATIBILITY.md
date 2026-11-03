@@ -74,7 +74,13 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `"expert"`.
 - **Custom properties** without a leading underscore are published under the given
   name, as in SHALL, and return `SECoP_S_WARNING_CUSTOM_PROPERTY`.
-- The optional messages `check` and `logging` are answered with `ProtocolError`.
+- **`check`**, SECoP's dry run of `change` and `do`, is answered for accessibles with
+  `"checkable": true`: the value is validated like the matching `change` or `do`, then
+  the application decides (see [Additions to SHALL](#additions-to-shall)), and the client
+  gets `checked` with the value or `error_check`. Other accessibles answer
+  `NotCheckable`, a readonly parameter `ReadOnly`. SHALL answered every `check` with an
+  error.
+- The optional message `logging` is answered with `ProtocolError`.
 - **Matrices.** must supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
   [Matrix values](#matrix-values). Its optional `compression` property is rejected,
   since SECoP defines no compression yet.
@@ -234,13 +240,15 @@ passes the bytes through unchanged; it does not interpret the elements.
 
 ## Additions to SHALL
 
-must exports six functions that SHALL lacks. A program that uses them does not run with
-SHALL. `SECoP-exports.h` declares them, marked as must additions.
+must exports functions that SHALL lacks, and one action code more. A program that uses
+them does not run with SHALL. `SECoP-exports.h` and `SECoP-types.h` declare them, marked
+as must additions.
 
-SHALL-LabVIEW's VIs refer to the first four, but no SHALL library ever exported them.
-All four take the arguments the VIs pass, in the VIs' order, plus `szContextID` at the
-end. The VIs pass no context ID yet: each of them must be updated to pass `Context_ID`
-as one more argument at the end before it works with must.
+SHALL-LabVIEW's VIs refer to the first four (`SECoP_S_filterStoredCommand[2]` and
+`SECoP_S_[un]registerUserError`), but no SHALL library ever exported them. They take the
+arguments the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass
+no context ID yet: each of them must be updated to pass `Context_ID` as one more
+argument at the end before it works with must.
 
 - **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
   out only the oldest stored request of the context that matches a filter. The other
@@ -260,7 +268,8 @@ as one more argument at the end before it works with must.
     Array To Spreadsheet String writes them). Case is ignored. An entry selects every
     accessible it names, so `cryo:tc` selects all of module `tc`. NULL or an empty
     string selects every accessible of the context. The node name always comes first.
-  - **Action.** `0` is any action, otherwise a `SECoP_S_action` (1 read, 2 change, 3 do).
+  - **Action.** `0` is any action, otherwise a `SECoP_S_action` (1 read, 2 change, 3 do,
+    4 check).
   - **Results.** `SECoP_S_ERROR_NO_DATA` when no request matches;
     `SECoP_S_ERROR_INVALID_NAME` for a malformed entry (more than three parts, or a part
     that is no SECoP identifier); `SECoP_S_ERROR_INVALID_VALUE` for another action;
@@ -294,7 +303,44 @@ as one more argument at the end before it works with must.
   an `InternalError` report. Returns `SECoP_S_ERROR_INVALID_VALUE` for a code the context
   has not registered, including SHALL's own codes.
 
-The last two push and answer [matrix values](#matrix-values) without building a
+- **Checks.** A client's `check <module>:<accessible> [<value>]` asks whether a value
+  would be accepted, without changing anything (see
+  [Protocol](#protocol-secop-20)). An accessible offers checks with
+  `"checkable": true`; must validates the value against the datainfo (and the dynamic
+  limits of `<parameter>_min`, `_max`, `_limits`) before the application is asked, and
+  sends the validated value back in `checked`. The application must not change anything
+  for a check, and should answer independently of the module's status.
+  - **Callback mode.** `SECoP_S_setCheckFunction(ptrToCheck, szContextID)` sets the
+    check function of the focused parameter or command and publishes
+    `"checkable": true` for it; NULL clears both. It returns
+    `SECoP_S_ERROR_INVALID_PARAMETER` when the focus is a node or a module. The function
+    is called with the full name and the value (NULL for a command without argument),
+    like a setter, on the module's thread; the setter or command function is not called:
+    ```c
+    typedef void (*SECoP_S_checkFunction)(const char* name, const CSECoPbaseType* pValue,
+        enum SECoP_S_error* piError);
+    SECoP_S_setCheckFunction(SECoP_S_checkFunction ptrToCheck, const char* szContextID);
+    ```
+    An accessible with `"checkable": true` (e.g. from `SECoP_S_addPropertyBoolean`) but
+    no check function makes `SECoP_S_nodeComplete` fail with
+    `SECoP_S_ERROR_MISSING_MANDATORY`; `SECoP_S_showErrors` names it.
+  - **Polling mode.** `"checkable": true` (e.g. `SECoP_S_addPropertyBoolean("checkable",
+    1, ctx)`) is enough. Checks are stored like `change` and `do`, with the new action
+    `SECoP_S_ACTION_CHECK` (4) and the value to check, handed out by
+    `SECoP_S_getStoredCommand[2]` and `SECoP_S_filterStoredCommand[2]`, and answered
+    with `SECoP_S_putCommandAnswer[2]`, whose value is ignored. A check not answered
+    within the polled request timeout (or the node's `timeout`) gets `TimeoutError`.
+    Only hosts that publish `"checkable": true` ever see action 4. A polling loop or
+    LabVIEW VI that dispatches on the action needs a case for 4 before the node may
+    publish `"checkable": true`; one that leaves the request unanswered makes the client
+    wait for its `TimeoutError`.
+  - **Answers.** The code maps to error classes as for any answer: `SECoP_S_SUCCESS` (or
+    another non-negative code) gives `checked`, `SECoP_S_ERROR_OUT_OF_RANGE`
+    `RangeError`, `SECoP_S_ERROR_INVALID_VALUE` `WrongType`. For SECoP's `Impossible`
+    register it: `SECoP_S_registerUserError("Impossible", "not in this configuration",
+    ctx)`, and return that code.
+
+Two more additions push and answer [matrix values](#matrix-values) without building a
 variant. They take the lengths and the raw element bytes as plain C arrays, which a
 LabVIEW Call Library node passes from a U32 and a U8 array as "Array Data Pointer". The
 library copies both before the call returns and does not keep the pointers. The bytes

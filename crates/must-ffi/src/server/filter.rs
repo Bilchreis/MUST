@@ -26,7 +26,10 @@ impl Filter {
     /// `SECoP_S_ERROR_INVALID_NAME` for a malformed entry, `SECoP_S_ERROR_INVALID_VALUE`
     /// for an unknown action.
     pub(crate) fn parse(accessibles: Option<&str>, action: c_int) -> Result<Self, c_int> {
-        if !matches!(action, 0 | action::READ | action::CHANGE | action::DO) {
+        if !matches!(
+            action,
+            0 | action::READ | action::CHANGE | action::DO | action::CHECK
+        ) {
             return Err(err::INVALID_VALUE);
         }
         let entries = accessibles
@@ -123,11 +126,22 @@ mod tests {
         let target = request("tc", "target", action::CHANGE);
         let ramp = request("tc", "ramp", action::READ);
         let stop = request("tc", "stop", action::DO);
-        let all = [&target, &ramp, &stop];
-        assert_eq!(selects("", action::READ, &all), [false, true, false]);
-        assert_eq!(selects("", action::CHANGE, &all), [true, false, false]);
-        assert_eq!(selects("cryo:tc", action::DO, &all), [false, false, true]);
-        for bad in [4, -1] {
+        let check = request("tc", "target", action::CHECK);
+        let all = [&target, &ramp, &stop, &check];
+        assert_eq!(selects("", action::READ, &all), [false, true, false, false]);
+        assert_eq!(
+            selects("", action::CHANGE, &all),
+            [true, false, false, false]
+        );
+        assert_eq!(
+            selects("cryo:tc", action::DO, &all),
+            [false, false, true, false]
+        );
+        assert_eq!(
+            selects("cryo:tc:target", action::CHECK, &all),
+            [false, false, false, true]
+        );
+        for bad in [5, -1] {
             assert_eq!(Filter::parse(Some(""), bad), Err(err::INVALID_VALUE));
         }
     }
