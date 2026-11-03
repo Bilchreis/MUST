@@ -1186,6 +1186,16 @@ impl Validator {
         self.check_common(p, path, names);
         self.check_bool(p, path, "readonly");
         self.check_bool(p, path, "checkable");
+        if p.get("checkable") == Some(&Json::Bool(true))
+            && (p.get("readonly") != Some(&Json::Bool(false)) || p.get("constant").is_some())
+        {
+            self.warnings.push(ModelWarning {
+                path: path.to_owned(),
+                message: "`checkable` has no effect on a readonly parameter: a `check` of it \
+                          is answered with `ReadOnly`"
+                    .into(),
+            });
+        }
         if let Some(constant) = p.get("constant")
             && let Err(e) = param.datainfo.decode(constant, Mode::Request)
         {

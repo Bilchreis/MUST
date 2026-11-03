@@ -886,7 +886,7 @@ fn filtered_requests() {
     assert_eq!(filter_rc(c"fn:mod1:b", 0, c"filt"), NO_DATA);
     assert_eq!(filter_rc(c"fn:mod1:a:x", 0, c"filt"), INVALID_NAME);
     assert_eq!(filter_rc(c"fn:mod-1", 0, c"filt"), INVALID_NAME);
-    assert_eq!(filter_rc(c"fn:mod1:a", 4, c"filt"), INVALID_VALUE);
+    assert_eq!(filter_rc(c"fn:mod1:a", 5, c"filt"), INVALID_VALUE);
     assert_eq!(filter_rc(c"fn:mod1:a", -1, c"filt"), INVALID_VALUE);
     assert_eq!(filter_rc(c"", 0, c"nocontext"), INVALID_CONTEXT_ID);
     let read_a = Expected {
@@ -969,6 +969,285 @@ fn filtered_within_one_context() {
     assert_eq!(data(&other.recv())[0], 3.5);
     done(c"filt");
     done(c"filt2");
+}
+
+// --- matrix parameters
+
+/// The specification's matrix example: 2×3 `<f4` holding 1 to 6.
+const SPEC_MATRIX: &str = r#"{"len":[2,3],"blob":"AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA"}"#;
+
+fn spec_matrix() -> serde_json::Value {
+    serde_json::from_str(SPEC_MATRIX).unwrap()
+}
+
+#[test]
+fn matrix_in_callback_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port argument
+    check("matrix_callbacks", unsafe {
+        c::ctest_server_matrix_callbacks(port)
+    });
+    let description = Client::connect(port).describe();
+    assert_eq!(
+        description["modules"]["cam"]["accessibles"]["image"]["datainfo"],
+        serde_json::json!({"type": "matrix", "elementtype": "<f4",
+                           "names": ["x", "y"], "maxlen": [100, 100]})
+    );
+
+    let mut active = Client::connect(port);
+    active.send("activate cam");
+    active.recv_until("active");
+    let mut client = Client::connect(port);
+
+    // a getter that fills the struct a member at a time
+    let reply = client.request("read cam:image");
+    assert!(reply.starts_with("reply cam:image "), "{reply}");
+    assert_eq!(data(&reply)[0], spec_matrix());
+    assert_eq!(
+        data(&active.recv_until("update cam:image "))[0],
+        spec_matrix()
+    );
+
+    // a getter whose blob is too short for its lengths
+    let reply = client.request("read cam:bad");
+    assert!(reply.starts_with("error_read cam:bad "), "{reply}");
+    assert_eq!(data(&reply)[0], "InternalError");
+    // no update with a value reaches the activated client
+    active.send("ping matrix");
+    loop {
+        let line = active.recv();
+        assert!(!line.starts_with("update cam:bad "), "{line}");
+        if line.starts_with("pong matrix") {
+            break;
+        }
+    }
+    done(c"mcb");
+    assert!(closed(port));
+}
+
+fn matrix_step(port: u16, request: &'static str, step: c_int) -> String {
+    let client = std::thread::spawn(move || Client::connect(port).request(request));
+    // SAFETY: a C test with a step number
+    check(&format!("matrix step {step}"), unsafe {
+        c::ctest_server_matrix_step(step)
+    });
+    client.join().unwrap()
+}
+
+#[test]
+fn matrix_in_polling_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port argument
+    check("matrix_polling", unsafe {
+        c::ctest_server_matrix_polling(port)
+    });
+    let mut active = Client::connect(port);
+    active.send("activate cam");
+    active.recv_until("active");
+
+    // the value of a change, as a struct handle
+    let reply = matrix_step(
+        port,
+        r#"change cam:image {"len":[1,1],"blob":"AACAPw=="}"#,
+        1,
+    );
+    assert!(reply.starts_with("changed cam:image "), "{reply}");
+    assert_eq!(
+        data(&reply)[0],
+        serde_json::json!({"len": [1, 1], "blob": "AACAPw=="})
+    );
+
+    // answers with the matrix arguments
+    let reply = matrix_step(port, "read cam:image", 2);
+    assert!(reply.starts_with("reply cam:image "), "{reply}");
+    assert_eq!(data(&reply)[0], spec_matrix());
+    assert_eq!(data(&reply)[1]["t"], 1000.0);
+    let reply = matrix_step(port, "read cam:image", 3);
+    assert!(reply.starts_with("error_read cam:image "), "{reply}");
+    assert_eq!(data(&reply)[0], "CommunicationFailed");
+    let reply = matrix_step(port, "read cam:plain", 4);
+    assert!(reply.starts_with("reply cam:plain "), "{reply}");
+    assert_eq!(data(&reply)[0], 1.5);
+
+    // pushed matrices, after the updates of the change and the reads
+    active.send("ping drained");
+    active.recv_until("pong drained");
+    // SAFETY: a C test with a step number
+    check("matrix step 5", unsafe { c::ctest_server_matrix_step(5) });
+    let now = data(&active.recv_until("update cam:image "));
+    assert_eq!(now[0], spec_matrix());
+    assert!(now[1]["t"].as_f64().unwrap() > 1.0e9, "NaN means now");
+    // updateParameter (handle), updateParameter2 (JSON), updateParameterMatrix
+    let lines: Vec<String> = (0..3)
+        .map(|_| active.recv_until("update cam:image "))
+        .collect();
+    assert_eq!(
+        lines[0],
+        format!("update cam:image [{SPEC_MATRIX},{{\"t\":1000.0}}]")
+    );
+    assert_eq!(lines[1], lines[0], "updateParameter2 differs");
+    assert_eq!(lines[2], lines[0], "updateParameterMatrix differs");
+    // the failed pushes sent nothing; the empty matrix is next
+    let empty = active.recv_until("update ");
+    assert_eq!(
+        empty,
+        r#"update cam:image [{"len":[0,0],"blob":""},{"t":1000.0}]"#
+    );
+    done(c"mpoll");
+    assert!(closed(port));
+}
+
+// --- checks (must addition)
+
+/// `SECoP_S_ACTION_CHECK`.
+const ACTION_CHECK: c_int = 4;
+
+fn check_cb_last(name: &CStr, value: f64, calls: c_int, setter_calls: c_int) {
+    // SAFETY: a C test taking a NUL-terminated string and numbers
+    check("check_cb_last", unsafe {
+        c::ctest_check_cb_last(name.as_ptr(), value, calls, setter_calls)
+    });
+}
+
+fn check_cb_answer(which: c_int) {
+    // SAFETY: a C test with a number
+    check("check_cb_answer", unsafe {
+        c::ctest_check_cb_answer(which)
+    });
+}
+
+#[test]
+fn checks_in_callback_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("check_cb_build", unsafe { c::ctest_check_cb_build(port) });
+    let mut client = Client::connect(port);
+
+    // the description shows checkable, also for commands, and not for the cleared one
+    let description = client.describe();
+    let accessibles = &description["modules"]["mod1"]["accessibles"];
+    assert_eq!(accessibles["target"]["checkable"], true);
+    assert_eq!(accessibles["go"]["checkable"], true);
+    assert_eq!(accessibles["stop"]["checkable"], true);
+    assert!(
+        accessibles["other"].get("checkable").is_none(),
+        "{accessibles}"
+    );
+
+    // accepted: the check function decides, the setter is not called
+    let reply = client.request("check mod1:target 500");
+    assert!(reply.starts_with("checked mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], 500.0);
+    check_cb_last(c"cknode:mod1:target", 500.0, 1, 0);
+
+    // rejected with a SHALL code
+    check_cb_answer(1);
+    let reply = client.request("check mod1:target 600");
+    assert!(reply.starts_with("error_check mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], "RangeError");
+
+    // rejected with a registered error class
+    check_cb_answer(2);
+    let reply = client.request("check mod1:target 700");
+    assert!(reply.starts_with("error_check mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], "Impossible");
+    check_cb_last(c"cknode:mod1:target", 700.0, 3, 0);
+    check_cb_answer(0);
+
+    // outside the datainfo: the check function is not asked
+    let reply = client.request("check mod1:target 2000");
+    assert_eq!(data(&reply)[0], "RangeError");
+    check_cb_last(c"cknode:mod1:target", 700.0, 3, 0);
+
+    // commands, with and without argument
+    let reply = client.request("check mod1:go 1.5");
+    assert!(reply.starts_with("checked mod1:go "), "{reply}");
+    check_cb_last(c"cknode:mod1:go", 1.5, 4, 0);
+    let reply = client.request("check mod1:stop");
+    assert!(reply.starts_with("checked mod1:stop "), "{reply}");
+    check_cb_last(c"cknode:mod1:stop", f64::NAN, 5, 0);
+
+    // without checkable
+    let reply = client.request("check mod1:other 1");
+    assert!(reply.starts_with("error_check mod1:other "), "{reply}");
+    assert_eq!(data(&reply)[0], "NotCheckable");
+    check_cb_last(c"cknode:mod1:stop", f64::NAN, 5, 0);
+
+    done(c"chk_cb");
+    assert!(closed(port));
+}
+
+#[test]
+fn checkable_without_check_function() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("check_cb_missing", unsafe {
+        c::ctest_check_cb_missing(port)
+    });
+    assert!(closed(port), "the port is not opened");
+}
+
+#[test]
+fn checks_in_polling_mode() {
+    let _serial = serial();
+    let port = free_port();
+    // SAFETY: a C test with a port
+    check("check_poll_build", unsafe {
+        c::ctest_check_poll_build(port)
+    });
+    let (mut a, mut b) = (Client::connect(port), Client::connect(port));
+
+    // poll and answer a check; the answer's value is ignored
+    a.send("check mod1:target 500");
+    settle();
+    // SAFETY: a C test with a number
+    check("check_poll_answer", unsafe {
+        c::ctest_check_poll_answer(500.0)
+    });
+    let reply = a.recv();
+    assert!(reply.starts_with("checked mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], 500.0);
+
+    // filter by the check action: the change stays queued
+    a.send("change mod1:target 5");
+    settle();
+    b.send("check mod1:target 6");
+    settle();
+    let checked = Expected {
+        name: c"cpnode:mod1:target",
+        action: ACTION_CHECK,
+        value: Some(c"6"),
+    };
+    filter_take(c"", ACTION_CHECK, c"chk_poll", &checked, 64, 2);
+    filter_answer(c"0");
+    assert!(b.recv().starts_with("checked mod1:target "));
+    let change = Expected {
+        name: c"cpnode:mod1:target",
+        action: ACTION_CHANGE,
+        value: Some(c"5"),
+    };
+    filter_take(c"", 0, c"chk_poll", &change, 64, 1);
+    filter_answer(c"5");
+    assert!(a.recv().starts_with("changed mod1:target "));
+
+    // not checkable: nothing is queued
+    let reply = a.request("check mod1:other 500");
+    assert!(reply.starts_with("error_check mod1:other "), "{reply}");
+    assert_eq!(data(&reply)[0], "NotCheckable");
+    assert_eq!(filter_rc(c"", 0, c"chk_poll"), NO_DATA);
+
+    // unanswered: TimeoutError, and the request is gone
+    let reply = a.request("check mod1:target 7");
+    assert!(reply.starts_with("error_check mod1:target "), "{reply}");
+    assert_eq!(data(&reply)[0], "TimeoutError");
+    assert_eq!(filter_rc(c"", 0, c"chk_poll"), NO_DATA);
+
+    done(c"chk_poll");
+    assert!(closed(port));
 }
 
 /// "Host logs for a module" and "From any thread" of `SECoP_S_logMessage` in

@@ -17,7 +17,10 @@
 //! `change` and `do`, validates incoming values against their datainfo (including
 //! dynamic limits from `_min`/`_max`/`_limits` parameters), sends updates to activated
 //! clients, and keeps SECoP's ordering rules: updates caused by a request reach clients
-//! before its reply. The optional `check` message is answered with `ProtocolError`.
+//! before its reply. A `check` of an accessible declared `checkable: true` is validated
+//! like the matching `change` or `do` and then decided by [`ModuleHandler::check`];
+//! other accessibles answer it with `NotCheckable`. Clients can receive log messages
+//! through SECoP's remote logging (`logging`), see below.
 //!
 //! # Example
 //!
@@ -169,7 +172,9 @@ pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
 pub use launcher::show_status_tui;
 
-pub use handler::{AppLogLevel, CallResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading};
+pub use handler::{
+    AppLogLevel, CallResult, CheckResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading,
+};
 pub use model::{
     BuildError, Command, ModelError, ModelErrorKind, ModelWarning, Module, Node, NodeBuilder,
     Parameter,

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
+use serde_json::Value as Json;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -41,6 +42,14 @@ pub(crate) enum Job {
     Do {
         command: String,
         argument: Option<Value>,
+        reply: oneshot::Sender<JobResult>,
+    },
+    /// A dry run of a `change` or `do`: the handler decides, nothing is published.
+    Check {
+        accessible: String,
+        value: Option<Value>,
+        /// The validated value as sent back in `checked`.
+        echo: Json,
         reply: oneshot::Sender<JobResult>,
     },
     /// A read whose result only goes to the cache and activated clients.
@@ -401,6 +410,25 @@ impl ModuleShared {
                 };
                 let result = result.and_then(|reading| done_report(hub, module, &command, reading));
                 self.lock().epoch += 1;
+                let _ = reply.send(result);
+            }
+            Job::Check {
+                accessible,
+                value,
+                echo,
+                reply,
+            } => {
+                // changes nothing: no epoch, no published value
+                let result = {
+                    let (handler, ctx) = (Arc::clone(handler), self.ctx());
+                    guarded(
+                        hub,
+                        async move { handler.check(&ctx, &accessible, value).await },
+                    )
+                    .await
+                };
+                let result =
+                    result.map(|()| report_text(&data_report(echo, &Qualifiers::at(now()))));
                 let _ = reply.send(result);
             }
         }

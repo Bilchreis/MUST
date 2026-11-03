@@ -274,6 +274,7 @@ pub(crate) fn shut_down(runtime: Runtime) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::codes::action;
 
     /// A context of its own: the state is global and shared with other tests.
     const CONTEXT: &str = "state-tests-queued";
@@ -367,6 +368,7 @@ mod tests {
         }
         let read_a = queue(A, "a", 1);
         let change_b = queue(A, "b", 2);
+        let check_b = queue(A, "b", action::CHECK);
         let read_b = queue(A, "b", 1);
         let other = queue(B, "b", 1);
         let filter = |accessibles: &str, action: c_int| {
@@ -374,6 +376,10 @@ mod tests {
         };
 
         let mut state = lock();
+        assert_eq!(
+            state.take_matching(A, Some(&filter("", action::CHECK))),
+            Ok(check_b)
+        );
         assert_eq!(
             state.take_matching(A, Some(&filter("n:mod1:b", 0))),
             Ok(change_b)
@@ -396,7 +402,7 @@ mod tests {
         assert_eq!(lock().take_matching(A, None), Err(err::NO_DATA));
 
         let mut state = lock();
-        for id in [change_b, read_a, read_b] {
+        for id in [check_b, change_b, read_a, read_b] {
             state.handed_out.remove(&id);
         }
         state.contexts.remove(A);

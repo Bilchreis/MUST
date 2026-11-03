@@ -39,6 +39,11 @@ pub(crate) type CallFunction = unsafe extern "C" fn(
     *mut f64,
 );
 
+/// `SECoP_S_checkFunction` (a must addition): decides a `check` of a parameter or
+/// command.
+pub(crate) type CheckFunction =
+    unsafe extern "C" fn(*const c_char, *const CSECoPbaseType, *mut c_int);
+
 /// The item that `SECoP_S_add*` calls apply to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {
@@ -78,6 +83,8 @@ pub(crate) struct DraftAccessible {
     /// SHALL's `pollinterval` property, if given.
     pub poll: Option<ShallPoll>,
     pub kind: AccessibleKind,
+    /// The function of `SECoP_S_setCheckFunction`.
+    pub check: Option<CheckFunction>,
 }
 
 /// A value of SHALL's `pollinterval` property.
@@ -226,6 +233,7 @@ impl DraftNode {
             info: None,
             poll: None,
             kind,
+            check: None,
         });
         self.focus = Focus::Accessible(m, module.accessibles.len() - 1);
         err::SUCCESS
@@ -323,6 +331,22 @@ impl DraftNode {
                 }
             }
         }
+    }
+
+    /// `SECoP_S_setCheckFunction`: sets the check function of the focused accessible and
+    /// publishes it as `checkable: true`; `None` clears both.
+    pub(crate) fn set_check(&mut self, function: Option<CheckFunction>) -> c_int {
+        let Focus::Accessible(m, a) = self.focus else {
+            return err::INVALID_PARAMETER;
+        };
+        let acc = &mut self.modules[m].accessibles[a];
+        acc.props
+            .retain(|key, _| !key.eq_ignore_ascii_case("checkable"));
+        if function.is_some() {
+            acc.props.insert("checkable".into(), Json::Bool(true));
+        }
+        acc.check = function;
+        err::SUCCESS
     }
 
     /// Validates the node and turns it into a `must-server` node, with remarks on what
@@ -496,6 +520,18 @@ impl DraftNode {
                 });
                 continue;
             };
+            if callbacks
+                && acc.check.is_none()
+                && acc.props.get("checkable") == Some(&Json::Bool(true))
+            {
+                problems.push(Problem {
+                    code: err::MISSING_MANDATORY,
+                    message: format!(
+                        "{path}: `checkable` is set but no check function was registered \
+                         with SECoP_S_setCheckFunction"
+                    ),
+                });
+            }
             let mut props = acc.props.clone();
             let description = take_string(&mut props, "description");
             match &acc.kind {
@@ -567,6 +603,7 @@ impl DraftNode {
                             proto: proto.clone(),
                             getter: *getter,
                             setter: *setter,
+                            check: acc.check,
                         },
                     );
                 }
@@ -609,6 +646,7 @@ impl DraftNode {
                             argument,
                             result,
                             function: *function,
+                            check: acc.check,
                         },
                     );
                 }
@@ -831,6 +869,77 @@ mod tests {
         };
         assert!(concurrent(false));
         assert!(!concurrent(true));
+    }
+
+    unsafe extern "C" fn accept(_: *const c_char, _: *const CSECoPbaseType, error: *mut c_int) {
+        // SAFETY: called by the library with a valid pointer
+        unsafe { *error = err::SUCCESS };
+    }
+
+    fn checkable_node() -> DraftNode {
+        let mut node = DraftNode::new("n", "a node", "127.0.0.1:0".parse().unwrap());
+        node.add_module("m");
+        node.add_accessible(
+            "p",
+            AccessibleKind::Parameter {
+                writable: false,
+                getter: None,
+                setter: None,
+                initial: None,
+            },
+        );
+        node.add_property("datainfo", serde_json::json!({"type": "double"}));
+        node
+    }
+
+    #[test]
+    fn check_function_needs_an_accessible_in_focus() {
+        let mut node = checkable_node();
+        node.set_focus("m");
+        assert_eq!(node.set_check(Some(accept)), err::INVALID_PARAMETER);
+        assert!(!node.modules[0].props.contains_key("checkable"));
+        assert!(node.modules[0].accessibles[0].check.is_none());
+    }
+
+    #[test]
+    fn check_function_sets_and_clears_checkable() {
+        let mut node = checkable_node();
+        assert_eq!(node.add_property("Checkable", false.into()), err::SUCCESS);
+        assert_eq!(node.set_check(Some(accept)), err::SUCCESS);
+        let acc = &node.modules[0].accessibles[0];
+        assert!(acc.check.is_some());
+        assert_eq!(acc.props.get("checkable"), Some(&Json::Bool(true)));
+        assert!(!acc.props.contains_key("Checkable"));
+        assert_eq!(node.set_check(None), err::SUCCESS);
+        let acc = &node.modules[0].accessibles[0];
+        assert!(acc.check.is_none());
+        assert!(!acc.props.contains_key("checkable"));
+    }
+
+    #[test]
+    fn checkable_without_function_fails_in_callback_mode() {
+        let mut node = checkable_node();
+        assert_eq!(node.add_property("checkable", true.into()), err::SUCCESS);
+        let mut problems = Vec::new();
+        node.build_module(&node.modules[0], "c", true, &mut problems);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.code == err::MISSING_MANDATORY && p.message.starts_with("n:m:p: ")),
+            "{problems:?}"
+        );
+        // polling mode: the property alone is the opt-in
+        let mut problems = Vec::new();
+        node.build_module(&node.modules[0], "c", false, &mut problems);
+        assert!(problems.is_empty(), "{problems:?}");
+        // with a function, callback mode is fine too
+        node.set_check(Some(accept));
+        let mut problems = Vec::new();
+        node.build_module(&node.modules[0], "c", true, &mut problems);
+        assert!(
+            !problems.iter().any(|p| p.code == err::MISSING_MANDATORY),
+            "{problems:?}"
+        );
     }
 
     #[test]

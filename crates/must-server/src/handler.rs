@@ -224,6 +224,21 @@ pub trait ModuleHandler: Send + Sync {
         Err(not_implemented("do", command))
     }
 
+    /// Decides whether a `check` of `accessible` (a parameter or a command) with `value`
+    /// would be accepted, without doing anything: the dry run of a `change` or `do`. The
+    /// node calls it only for accessibles declared `checkable: true`, after checking the
+    /// value against the datainfo and the dynamic limits as for `change` (or the argument
+    /// as for `do`), and answers `checked` with that value if it returns `Ok`. `value` is
+    /// `None` for a command without argument.
+    ///
+    /// A check must not change anything: no hardware state, no parameter, no published
+    /// value. It must also not depend on the module's `status`: it answers whether the
+    /// request would be accepted in principle, not whether it could run right now.
+    async fn check(&self, ctx: &Ctx, accessible: &str, value: Option<Value>) -> CheckResult {
+        let _ = (ctx, value);
+        Err(not_implemented("check", accessible))
+    }
+
     /// Polls the parameters `due` at this tick of the module's polling, in declaration
     /// order. The node sends only what is published through `ctx`: the default reads each
     /// parameter with [`Ctx::read`], which publishes the value or error, one after another
@@ -249,6 +264,9 @@ pub trait ModuleHandler: Send + Sync {
 
 /// The result of a command call: its result value, `None` for a command without result.
 pub type CallResult = Result<Option<Reading>, SecopError>;
+
+/// The result of a check: `Ok` if the value would be accepted.
+pub type CheckResult = Result<(), SecopError>;
 
 fn not_implemented(action: &str, accessible: &str) -> SecopError {
     SecopError::new(

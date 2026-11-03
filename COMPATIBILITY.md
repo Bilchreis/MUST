@@ -74,6 +74,12 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `"expert"`.
 - **Custom properties** without a leading underscore are published under the given
   name, as in SHALL, and return `SECoP_S_WARNING_CUSTOM_PROPERTY`.
+- **`check`**, SECoP's dry run of `change` and `do`, is answered for accessibles with
+  `"checkable": true`: the value is validated like the matching `change` or `do`, then
+  the application decides (see [Additions to SHALL](#additions-to-shall)), and the client
+  gets `checked` with the value or `error_check`. Other accessibles answer
+  `NotCheckable`, a readonly parameter `ReadOnly`. SHALL answered every `check` with an
+  error.
 - **Remote logging** (`logging`) is supported; SHALL answered it with an error. A client
   sends `logging <module> <level>`, or `logging  <level>` for the whole node, with
   `"debug"`, `"info"`, `"error"` or `"off"` (`false` counts as `"off"`), and then receives
@@ -88,8 +94,52 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   - **Slow clients.** Log events are best effort: while a client's unread updates and log
     events exceed the slow-client limit, its log events are dropped instead of closing
     the connection.
-- The optional message `check` is answered with `ProtocolError`; the data type `matrix`
-  is not supported.
+- **Matrices.** must supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
+  [Matrix values](#matrix-values). Its optional `compression` property is rejected,
+  since SECoP defines no compression yet.
+
+### Matrix values
+
+A `matrix` datainfo describes homogeneous, multi-dimensional numbers, such as detector
+images or spectra, e.g. `{"type": "matrix", "elementtype": "<f4", "names": ["x", "y"],
+"maxlen": [100, 100]}`. The value travels as the lengths and the raw element bytes in
+base64, first dimension varying fastest: `{"len": [2, 3], "blob": "AACAPwAA..."}`. must
+passes the bytes through unchanged; it does not interpret the elements.
+
+- **As a variant.** No `SECoP_V_type` is added. A matrix value is a `SECoP_VT_STRUCT`
+  with two members, which is its transport form as JSON:
+
+  | Position | Type | Name | Content |
+  |---|---|---|---|
+  | 0 | `SECoP_VT_STRUCT` | | count 2 |
+  | 1 | `SECoP_VT_ARRAY_INTEGER` | `len` | one length per dimension |
+  | 2 | `SECoP_VT_BLOB` | `blob` | the raw element bytes |
+
+  `SECoP_V_create` with a matrix datainfo gives this shape with all lengths 0 and an
+  empty blob; `SECoP_V_fromJSON` with such a handle as hint parses the transport JSON.
+  `SECoP_V_getType` still returns the matrix datainfo, so the handle can serve as a
+  parameter's datainfo. `SECoP_V_getInfo` reports a struct, though: a host tells a matrix
+  from a struct with these members by its own datainfo.
+- **Reading and writing a matrix handle.** Read the bytes with
+  `SECoP_V_getString(p, 2, size, buffer)`: the buffer needs one byte more than the blob,
+  for the NUL it always writes. Write them with `SECoP_V_modifyString(p, 2, bytes,
+  iSize)`, with the byte count as `iSize`. Set the lengths with
+  `SECoP_V_modifyInteger(p, 1, dimension, length)`. Each call checks only the member it
+  changes; whether lengths and blob agree is checked when the value reaches the node.
+  A value from a getter, a command or `SECoP_S_putCommandAnswer` that does not fit gives
+  the client an `InternalError`; `SECoP_S_updateParameter` returns
+  `SECoP_S_ERROR_INVALID_VALUE` and sends nothing.
+- **Without JSON.** Inside must, a matrix handle moves between the host and the node
+  without JSON: a getter's result or a pushed handle is base64-encoded once, for the
+  clients. `SECoP_S_updateParameter2` and `SECoP_S_putCommandAnswer2` take the transport
+  JSON and decode its base64 once.
+- **Faster pushes and answers.** `SECoP_S_updateParameterMatrix` and
+  `SECoP_S_putCommandAnswerMatrix` (see [Additions to SHALL](#additions-to-shall)) take
+  the lengths and bytes as plain pointers, so no variant has to be built. Prefer them for
+  large or frequent matrices, and from LabVIEW.
+- **Size.** Base64 makes the bytes a third larger: a 100×100 `<f8` matrix is about
+  107 kB on the wire, and every update goes to every activated client. A `change` from
+  a client is bounded by the maximum length of an incoming line (1 MiB by default).
 
 ## Library behavior
 
@@ -203,15 +253,16 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 
 ## Additions to SHALL
 
-must exports five functions that SHALL lacks. A program that uses them does not run
-with SHALL. `SECoP-exports.h` declares them, marked as must additions.
+must exports functions that SHALL lacks, and one action code more. A program that uses
+them does not run with SHALL. `SECoP-exports.h` and `SECoP-types.h` declare them, marked
+as must additions.
 
-SHALL-LabVIEW's VIs refer to four of them, but no SHALL library ever exported them:
-`SECoP_S_filterStoredCommand[2]` and `SECoP_S_registerUserError` /
-`SECoP_S_unregisterUserError`. They take the arguments the VIs pass, in the VIs' order,
-plus `szContextID` at the end. The VIs pass no context ID yet: each of them must be
-updated to pass `Context_ID` as one more argument at the end before it works with must.
-The fifth, `SECoP_S_logMessage`, is must's own.
+SHALL-LabVIEW's VIs refer to the first four (`SECoP_S_filterStoredCommand[2]` and
+`SECoP_S_[un]registerUserError`), but no SHALL library ever exported them. They take the
+arguments the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass
+no context ID yet: each of them must be updated to pass `Context_ID` as one more
+argument at the end before it works with must.
+`SECoP_S_logMessage` and the matrix and check functions are must's own.
 
 - **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
   out only the oldest stored request of the context that matches a filter. The other
@@ -231,7 +282,8 @@ The fifth, `SECoP_S_logMessage`, is must's own.
     Array To Spreadsheet String writes them). Case is ignored. An entry selects every
     accessible it names, so `cryo:tc` selects all of module `tc`. NULL or an empty
     string selects every accessible of the context. The node name always comes first.
-  - **Action.** `0` is any action, otherwise a `SECoP_S_action` (1 read, 2 change, 3 do).
+  - **Action.** `0` is any action, otherwise a `SECoP_S_action` (1 read, 2 change, 3 do,
+    4 check).
   - **Results.** `SECoP_S_ERROR_NO_DATA` when no request matches;
     `SECoP_S_ERROR_INVALID_NAME` for a malformed entry (more than three parts, or a part
     that is no SECoP identifier); `SECoP_S_ERROR_INVALID_VALUE` for another action;
@@ -289,6 +341,71 @@ The fifth, `SECoP_S_logMessage`, is must's own.
     one before `SECoP_S_nodeComplete`; `SECoP_S_ERROR_INVALID_MODULE` for an unknown
     module; `SECoP_S_ERROR_INVALID_VALUE` for a level other than 1 to 4 or a NULL
     `szMessage`. Invalid UTF-8 in the text is replaced.
+
+- **Checks.** A client's `check <module>:<accessible> [<value>]` asks whether a value
+  would be accepted, without changing anything (see
+  [Protocol](#protocol-secop-20)). An accessible offers checks with
+  `"checkable": true`; must validates the value against the datainfo (and the dynamic
+  limits of `<parameter>_min`, `_max`, `_limits`) before the application is asked, and
+  sends the validated value back in `checked`. The application must not change anything
+  for a check, and should answer independently of the module's status.
+  - **Callback mode.** `SECoP_S_setCheckFunction(ptrToCheck, szContextID)` sets the
+    check function of the focused parameter or command and publishes
+    `"checkable": true` for it; NULL clears both. It returns
+    `SECoP_S_ERROR_INVALID_PARAMETER` when the focus is a node or a module. The function
+    is called with the full name and the value (NULL for a command without argument),
+    like a setter, on the module's thread; the setter or command function is not called:
+    ```c
+    typedef void (*SECoP_S_checkFunction)(const char* name, const CSECoPbaseType* pValue,
+        enum SECoP_S_error* piError);
+    SECoP_S_setCheckFunction(SECoP_S_checkFunction ptrToCheck, const char* szContextID);
+    ```
+    An accessible with `"checkable": true` (e.g. from `SECoP_S_addPropertyBoolean`) but
+    no check function makes `SECoP_S_nodeComplete` fail with
+    `SECoP_S_ERROR_MISSING_MANDATORY`; `SECoP_S_showErrors` names it.
+  - **Polling mode.** `"checkable": true` (e.g. `SECoP_S_addPropertyBoolean("checkable",
+    1, ctx)`) is enough. Checks are stored like `change` and `do`, with the new action
+    `SECoP_S_ACTION_CHECK` (4) and the value to check, handed out by
+    `SECoP_S_getStoredCommand[2]` and `SECoP_S_filterStoredCommand[2]`, and answered
+    with `SECoP_S_putCommandAnswer[2]`, whose value is ignored. A check not answered
+    within the polled request timeout (or the node's `timeout`) gets `TimeoutError`.
+    Only hosts that publish `"checkable": true` ever see action 4. A polling loop or
+    LabVIEW VI that dispatches on the action needs a case for 4 before the node may
+    publish `"checkable": true`; one that leaves the request unanswered makes the client
+    wait for its `TimeoutError`.
+  - **Answers.** The code maps to error classes as for any answer: `SECoP_S_SUCCESS` (or
+    another non-negative code) gives `checked`, `SECoP_S_ERROR_OUT_OF_RANGE`
+    `RangeError`, `SECoP_S_ERROR_INVALID_VALUE` `WrongType`. For SECoP's `Impossible`
+    register it: `SECoP_S_registerUserError("Impossible", "not in this configuration",
+    ctx)`, and return that code.
+
+Two more additions push and answer [matrix values](#matrix-values) without building a
+variant. They take the lengths and the raw element bytes as plain C arrays, which a
+LabVIEW Call Library node passes from a U32 and a U8 array as "Array Data Pointer". The
+library copies both before the call returns and does not keep the pointers. The bytes
+are base64-encoded once, for the clients. Neither function takes a sigma: SECoP's `e`
+of a matrix would be a matrix itself. Use `SECoP_S_updateParameter2` or
+`SECoP_S_putCommandAnswer2` if one is needed.
+
+- **`SECoP_S_updateParameterMatrix(szParameterName, puLen, iDims, pData, iDataSize,
+  dblTimestamp)`** pushes a new value of a matrix parameter, like
+  `SECoP_S_updateParameter2` and with the same timestamp rules:
+  ```c
+  const unsigned int len[2] = {2, 3};
+  const float data[6] = {1, 2, 3, 4, 5, 6};
+  SECoP_S_updateParameterMatrix("my_node:mod1:image", len, 2, data, sizeof data, NAN);
+  ```
+  An unknown name gives the codes of `SECoP_S_updateParameter2`. A parameter that is not
+  a matrix, `iDims` other than the number of dimensions, or `iDataSize` other than the
+  product of the lengths times the element size give `SECoP_S_ERROR_INVALID_VALUE`, and
+  nothing is sent. An empty matrix (a length 0) needs no data: `pData` may be NULL.
+- **`SECoP_S_putCommandAnswerMatrix(llId, iErrorCode, puLen, iDims, pData, iDataSize,
+  dblTimestamp)`** answers a request from `SECoP_S_getStoredCommand[2]`, like
+  `SECoP_S_putCommandAnswer2`, with a matrix as the read value, the value after a change
+  or the command result. With a negative `iErrorCode` the matrix arguments are not read
+  and may be NULL. If the request's value is not a matrix, or the lengths and bytes do
+  not fit, it returns `SECoP_S_ERROR_INVALID_VALUE` and the request stays handed out, so
+  that it can still be answered.
 
 ## Not provided
 
