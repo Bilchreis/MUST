@@ -12,6 +12,10 @@ authors.workspace = true
 name = "must-tui"
 path = "src/main.rs"
 
+[[bin]]
+name = "must"
+path = "src/bin/must.rs"
+
 [dependencies]
 chrono.workspace = true
 indexmap.workspace = true
