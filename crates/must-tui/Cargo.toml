@@ -19,6 +19,7 @@ path = "src/bin/must.rs"
 [dependencies]
 chrono.workspace = true
 indexmap.workspace = true
+must-config.workspace = true
 must-monitor.workspace = true
 must-types.workspace = true
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }

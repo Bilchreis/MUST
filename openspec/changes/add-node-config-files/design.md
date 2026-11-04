@@ -97,7 +97,7 @@ Warnings use the same form.
 ### Simulation types
 
 Both are `#[must_server::module(Drivable)]` structs in `must-config::sim`, and the first in-tree users of the macro.
-- **`must::sim::Temperature`** is the example cryostat (properties `temperature`, the initial temperature, and `ramp`).
+- **`must::sim::Temperature`** is the example cryostat: property `temperature` (the temperature at start), with `ramp` a writable parameter.
 - **`must::sim::FlowController`** is a first-order flow towards `target`, with properties `range` (required), `unit` (default `ln/min`) and `settling_time` (default 2 s). Its datainfos name these properties (`target: param!("setpoint", double(min = 0.0, max = range, unit = unit), writable)`), so each instance gets its own limit and unit.
 - **State:** each module keeps its state in plain fields, advanced by the elapsed time in every read or write method, so there are no background tasks.
 - **Polling:** both declare a writable `pollinterval` without methods (an implicit callback), so `pollinterval = …` in a config works, and `target = …` exercises the initial write.

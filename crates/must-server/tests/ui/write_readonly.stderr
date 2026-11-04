@@ -1,0 +1,5 @@
+error: `value` is readonly: `write_value` needs `value` declared `writable`
+  --> tests/ui/write_readonly.rs:11:14
+   |
+11 |     async fn write_value(&mut self, v: f64) -> Result<f64> {
+   |              ^^^^^^^^^^^

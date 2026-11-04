@@ -317,6 +317,8 @@ impl Connection {
                 .read_with_repeats(module, parameter, spec, incoming)
                 .await;
         }
+        // a module's start hook may still set its cached values
+        self.actors[module].started().await;
         let result = match hub.cached(module, parameter).as_deref() {
             Some(CacheEntry::Value { report, .. }) => Ok(report.clone()),
             Some(CacheEntry::Error { error, .. }) => Err(error.clone()),

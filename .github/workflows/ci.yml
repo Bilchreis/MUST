@@ -72,6 +72,58 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           # make sure tests actually ran on this target, not only compiled
           grep -E "test result: ok\. [1-9][0-9]* passed" test.log
+      # the example node declared with the module macros answers like simple_node
+      - name: typed example node
+        shell: bash
+        run: |
+          cargo build --example typed_node --example simple_node --target ${{ matrix.target }}
+          PY=$(command -v python3 || command -v python)
+          "$PY" - "target/${{ matrix.target }}/debug/examples" <<'EOF'
+          import json, socket, subprocess, sys, time
+
+          def run(name):
+              p = subprocess.Popen([f"{sys.argv[1]}/{name}", "127.0.0.1:0"], text=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+              while "listening on " not in (line := p.stdout.readline()):
+                  assert line, f"{name} exited"
+              host, port = line.split()[-1].rsplit(":", 1)
+              f = socket.create_connection((host, int(port)), timeout=10).makefile("rw", newline="\n")
+              return p, f
+
+          def request(f, line):
+              f.write(line + "\n")
+              f.flush()
+              return f.readline().strip()
+
+          described = {}
+          for name in ["simple_node", "typed_node"]:
+              p, f = run(name)
+              try:
+                  module = json.loads(request(f, "describe").split(" ", 2)[2])["modules"]["cryo"]
+                  module.pop("implementation")
+                  described[name] = module
+                  if name == "typed_node":
+                      f.write("activate\n")
+                      f.flush()
+                      while f.readline().strip() != "active":
+                          pass
+                      assert request(f, "change cryo:target 294.5").startswith("update cryo:status [[300")
+                      deadline = time.time() + 10
+                      while not f.readline().startswith("update cryo:status [[100"):
+                          assert time.time() < deadline, "status did not return to IDLE"
+              finally:
+                  p.terminate()
+          assert described["simple_node"] == described["typed_node"], described
+          print("typed_node describes and ramps like simple_node")
+          EOF
+      # the example node configs load with the built-in module types
+      - name: must check on the example configs
+        shell: bash
+        run: |
+          cargo build --bin must --target ${{ matrix.target }}
+          for config in cryostat gas-rack; do
+            target/${{ matrix.target }}/debug/must check crates/must-config/examples/$config.toml
+          done
       # the manual monitoring session documented in docs/monitoring-protocol.md
       - name: monitoring session with PowerShell
         if: runner.os == 'Windows'

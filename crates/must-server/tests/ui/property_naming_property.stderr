@@ -1,0 +1,5 @@
+error: the datainfo of a property cannot use the property `range`: properties are read first
+ --> tests/ui/property_naming_property.rs:7:44
+  |
+7 |     limit: property!("limit", double(max = range)),
+  |                                            ^^^^^
