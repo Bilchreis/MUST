@@ -419,12 +419,12 @@ impl DraftNode {
         let mut problems = Vec::new();
         let mut props = self.props.clone();
         let description = take_string(&mut props, "description");
-        // the C ABI registers its nodes with the monitor itself, from creation on
-        // SHALL waits 60 s for the application; a `timeout` property of the host wins
         let mut node = NodeBuilder::new(&self.name, &description)
             .bind(self.bind)
             .initial_read(callbacks)
+            // the C ABI registers its nodes with the monitor itself, from creation on
             .monitored(false)
+            // SHALL waits 60 s for the application; a `timeout` property of the host wins
             .timeout(NODE_TIMEOUT);
         for (key, value) in props {
             node = if is_settable(Level::Node, &key) {

@@ -154,6 +154,8 @@ impl LogFilter {
 
 /// A line queued for a connection.
 pub(crate) struct Outgoing {
+    /// The line without its LF, which the writer adds; shared with the
+    /// [`NodeEvent::MessageSent`] announcing it.
     pub line: Arc<str>,
     /// Counted in [`QueueStats::updates`]: an update or a `log` event.
     pub is_update: bool,
@@ -161,6 +163,18 @@ pub(crate) struct Outgoing {
     /// [`NodeEvent::MessageSent`], as its record is logged once (and debug records not
     /// at all).
     pub is_log: bool,
+}
+
+impl Outgoing {
+    /// Bytes on the wire, including the LF.
+    pub fn size(&self) -> usize {
+        wire_size(&self.line)
+    }
+}
+
+/// Bytes a line takes on the wire, including its LF.
+fn wire_size(line: &str) -> usize {
+    line.len() + 1
 }
 
 /// Byte counters of a connection's outgoing queue, shared with its writer task.
@@ -205,20 +219,22 @@ impl ConnSink {
     }
 
     fn send(&self, out: Outgoing) {
-        self.stats.total.fetch_add(out.line.len(), Ordering::AcqRel);
+        self.stats.total.fetch_add(out.size(), Ordering::AcqRel);
         if out.is_update {
-            self.stats
-                .updates
-                .fetch_add(out.line.len(), Ordering::AcqRel);
+            self.stats.updates.fetch_add(out.size(), Ordering::AcqRel);
         }
         // a send error means the writer is gone; the connection is being closed anyway
         let _ = self.tx.send(out);
     }
 }
 
+/// Cached parameter states by module and parameter name. Nested so that lookups take
+/// `&str`; entries are shared so that reading one does not copy its value.
+type Cache = HashMap<String, HashMap<String, Arc<CacheEntry>>>;
+
 #[derive(Default)]
 struct HubState {
-    cache: HashMap<(String, String), CacheEntry>,
+    cache: Cache,
     conns: HashMap<ConnectionId, ConnSink>,
     next_id: ConnectionId,
 }
@@ -254,6 +270,7 @@ impl Hub {
     pub(crate) fn new(model: Arc<NodeModel>, report: Arc<str>) -> Self {
         let mut state = HubState::default();
         for (mname, module) in &model.modules {
+            let entries = state.cache.entry(mname.clone()).or_default();
             for (pname, param) in module.parameters() {
                 if let Some(value) = &param.initial
                     && let Ok(json) = param.datainfo.encode(value)
@@ -263,7 +280,7 @@ impl Hub {
                         value: value.clone(),
                         report,
                     };
-                    state.cache.insert((mname.clone(), pname.clone()), entry);
+                    entries.insert(pname.clone(), Arc::new(entry));
                 }
             }
         }
@@ -272,7 +289,7 @@ impl Hub {
             .iter()
             .filter(|(_, m)| m.poll.driven)
             .map(|(name, m)| {
-                let start = match state.cache.get(&(name.clone(), POLLINTERVAL.to_owned())) {
+                let start = match cache_get(&state.cache, name, POLLINTERVAL) {
                     Some(CacheEntry::Value { value, .. }) => poll_interval_of(value),
                     _ => m.poll.fast,
                 };
@@ -406,7 +423,7 @@ impl Hub {
             }
             let line = line
                 .get_or_insert_with(|| protocol::log_event(module, level.as_str(), message).into());
-            if conn.stats.updates.load(Ordering::Acquire) + line.len() <= limit {
+            if conn.stats.updates.load(Ordering::Acquire) + wire_size(line) <= limit {
                 conn.push_log(line.clone());
             }
         }
@@ -519,7 +536,7 @@ impl Hub {
                 if param.constant.is_some() {
                     continue;
                 }
-                if let Some(entry) = cache.get(&(mname.clone(), pname.clone())) {
+                if let Some(entry) = cache_get(cache, mname, pname) {
                     conn.push(update_line(mname, pname, entry).into(), false);
                 }
             }
@@ -557,18 +574,15 @@ impl Hub {
 
     // --- values
 
-    /// The cached state of a parameter.
-    pub(crate) fn cached(&self, module: &str, parameter: &str) -> Option<CacheEntry> {
-        self.lock()
-            .cache
-            .get(&(module.to_owned(), parameter.to_owned()))
-            .cloned()
+    /// The cached state of a parameter, shared with the cache.
+    pub(crate) fn cached(&self, module: &str, parameter: &str) -> Option<Arc<CacheEntry>> {
+        self.lock().cache.get(module)?.get(parameter).cloned()
     }
 
     /// The cached value of a parameter, if it has one.
     pub(crate) fn cached_value(&self, module: &str, parameter: &str) -> Option<Value> {
-        match self.cached(module, parameter) {
-            Some(CacheEntry::Value { value, .. }) => Some(value),
+        match cache_get(&self.lock().cache, module, parameter) {
+            Some(CacheEntry::Value { value, .. }) => Some(value.clone()),
             _ => None,
         }
     }
@@ -668,15 +682,22 @@ impl Hub {
                 }
                 let line =
                     line.get_or_insert_with(|| update_line(module, parameter, &entry).into());
-                if conn.stats.updates.load(Ordering::Acquire) + line.len() > limit {
+                if conn.stats.updates.load(Ordering::Acquire) + wire_size(line) > limit {
                     overflowing.push(*id);
                 } else {
                     conn.push(line.clone(), true);
                 }
             }
-            state
-                .cache
-                .insert((module.to_owned(), parameter.to_owned()), entry);
+            let entries = match state.cache.get_mut(module) {
+                Some(entries) => entries,
+                None => state.cache.entry(module.to_owned()).or_default(),
+            };
+            match entries.get_mut(parameter) {
+                Some(slot) => *slot = Arc::new(entry),
+                None => {
+                    entries.insert(parameter.to_owned(), Arc::new(entry));
+                }
+            }
             for id in &overflowing {
                 if let Some(conn) = state.conns.remove(id) {
                     self.forget_logging(Some(&conn));
@@ -698,10 +719,15 @@ impl Hub {
             self.emit(NodeEvent::Updated {
                 module: module.to_owned(),
                 parameter: parameter.to_owned(),
-                line: line.trim_end_matches('\n').into(),
+                line,
             });
         }
     }
+}
+
+/// The cached state of `module:parameter`.
+fn cache_get<'c>(cache: &'c Cache, module: &str, parameter: &str) -> Option<&'c CacheEntry> {
+    cache.get(module)?.get(parameter).map(|e| &**e)
 }
 
 /// The text of a data report; faster than through `Display`, and a JSON value cannot fail.
@@ -712,10 +738,10 @@ pub(crate) fn report_text(report: &serde_json::Value) -> Report {
 /// `update` or `error_update` line for a cache entry.
 fn update_line(module: &str, parameter: &str, entry: &CacheEntry) -> String {
     match entry {
-        CacheEntry::Value { report, .. } => format!("update {module}:{parameter} {report}\n"),
+        CacheEntry::Value { report, .. } => format!("update {module}:{parameter} {report}"),
         CacheEntry::Error { error, t } => {
             let report = must_types::error_report(error, Some(*t));
-            format!("error_update {module}:{parameter} {report}\n")
+            format!("error_update {module}:{parameter} {report}")
         }
     }
 }
