@@ -13,8 +13,9 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
 
 - **By hand:** run `must monitor` (or `must-tui`) in a terminal. `./install.sh`
   (`.\install.ps1` on Windows) installs both from a checkout into `~/.cargo/bin`, and
-  `must update` installs the newest release (`vX.Y.Z` tag) from that checkout
-  (`--tag v0.2.0` a given release, `--tag main` the latest commit on `main`).
+  `must update` installs the newest release (`vX.Y.Z` tag) in that checkout
+  (`--tag v0.2.0` a given release, `--tag main` the latest commit on `main`),
+  fetched from the public repository over HTTPS without credentials.
   `must` and `must-tui` also ship next to the libraries in `dist/<target>/` and the
   release archives (download new releases there; `must update` needs a checkout), and
   `cargo run -p must-tui` runs it from the source tree.

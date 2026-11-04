@@ -2,12 +2,20 @@
 
 //! `must`: the command line entry point. `must monitor` runs the status TUI
 //! (`must-tui`), found next to this executable or else on `PATH`. `must update` installs
-//! the latest release (the highest `vX.Y.Z` tag), a given tag or `main` from the
-//! checkout `must` was installed from, without changing what that checkout has checked
-//! out.
+//! the latest release (the highest `vX.Y.Z` tag), a given tag or `main` in the checkout
+//! `must` was installed from, without changing what that checkout has checked out. It
+//! fetches them from the public repository over HTTPS, which needs no credentials.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+/// Where `must update` fetches releases and `main` from, whatever the checkout's remotes
+/// are: anonymous HTTPS works without SSH keys and through firewalls closing port 22.
+const UPSTREAM: &str = concat!(env!("CARGO_PKG_REPOSITORY"), ".git");
+
+/// The checkout's ref that `must update` fetches upstream's `main` into, apart from the
+/// checkout's own remote-tracking branches.
+const UPSTREAM_MAIN: &str = "refs/must-update/main";
 
 const USAGE: &str = "\
 usage: must <command> [arguments]
@@ -111,8 +119,8 @@ fn run(command: &mut Command) -> ExitCode {
     }
 }
 
-/// Installs `tag` from the checkout's remote: `None` or `latest` the highest `vX.Y.Z`
-/// tag if it is newer than this `must`, `main` the latest commit of `origin/main`,
+/// Installs `tag` from [`UPSTREAM`]: `None` or `latest` the highest `vX.Y.Z` tag if it
+/// is newer than this `must`, `main` the latest commit of upstream's `main`,
 /// anything else that tag. It is built in a temporary worktree, so the checkout keeps
 /// its branch and local changes.
 fn update(tag: Option<&str>) -> ExitCode {
@@ -139,7 +147,20 @@ fn update(tag: Option<&str>) -> ExitCode {
         git.arg("-C").arg(&root);
         git
     };
-    if !succeeds(git().args(["fetch", "--tags", "--force", "--quiet"])) {
+    let fetched = succeeds(
+        git()
+            .args([
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                UPSTREAM,
+                "+refs/tags/*:refs/tags/*",
+            ])
+            .arg(format!("+refs/heads/main:{UPSTREAM_MAIN}"))
+            // fail instead of asking for credentials the public repository does not need
+            .env("GIT_TERMINAL_PROMPT", "0"),
+    );
+    if !fetched {
         eprintln!("must: cannot fetch the releases; nothing was installed");
         return ExitCode::FAILURE;
     }
@@ -156,7 +177,7 @@ fn update(tag: Option<&str>) -> ExitCode {
             }
             (tag.clone(), tag)
         }
-        Some("main") => ("origin/main".to_owned(), "main".to_owned()),
+        Some("main") => (UPSTREAM_MAIN.to_owned(), "main".to_owned()),
         // `0.2.0` means `v0.2.0`
         Some(tag) if !tag.starts_with('v') && parse_version(tag).is_some() => {
             (format!("refs/tags/v{tag}"), format!("v{tag}"))
