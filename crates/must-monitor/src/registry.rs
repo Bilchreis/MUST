@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! The per-user directory in which every process with must nodes registers its
+//! The per-user directory in which every process with MUST nodes registers its
 //! monitoring endpoint as `<pid>.json`.
 
 use std::io;

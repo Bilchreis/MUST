@@ -1,51 +1,141 @@
-# must
+# MUST
 
-must is a Rust rewrite of [SHALL](https://github.com/SampleEnvironment/SHALL), the
+MUST is a Rust rewrite of [SHALL](https://github.com/SampleEnvironment/SHALL), the
 SECoP hardware abstraction layer. It lets existing programs, drivers and LabVIEW code
-offer their hardware as a SEC node speaking [SECoP](https://github.com/SampleEnvironment/SECoP),
-the Sample Environment Communication Protocol.
+offer their hardware as a SEC node speaking [SECoP](https://github.com/SampleEnvironment/SECoP)
+2.0, the Sample Environment Communication Protocol. It is a drop-in replacement for
+SHALL's C interface, and a library for writing SEC nodes in Rust.
+
+The name is written MUST; `must` in lowercase is the command, and crate names start with
+`must-`.
 
 Differences to SHALL:
 
 - written in Rust, without Qt (no Qt build step, library or runtime dependency)
 - speaks SECoP 2.0 (draft) instead of SECoP V2019-09-16, including the `matrix` data
-  type, `check` (with `SECoP_S_setCheckFunction` and `SECoP_S_ACTION_CHECK`, must
-  additions) and remote logging (`logging`, with `SECoP_S_logMessage`, a must addition)
+  type, `check` (with `SECoP_S_setCheckFunction` and `SECoP_S_ACTION_CHECK`, MUST
+  additions) and remote logging (`logging`, with `SECoP_S_logMessage`, a MUST addition)
 - a terminal UI (`must-tui`) replaces SHALL's Qt status window
 
-## Status
+**Status:** early development. All planned features are implemented (see the
+[roadmap](docs/roadmap.md)); a manual LabVIEW smoke test and a manual check of the status
+TUI on Windows are pending. SHALL's client library (`SECoP_C_*`) is out of scope.
 
-Early development. The roadmap is planned as [OpenSpec](openspec/) changes, implemented
-in this order:
+## Getting started
 
-1. `add-secop-data-types` – SECoP data types: datainfo, values, identifiers, parameter
-   postfixes (crate `must-types`, done)
-2. `add-sec-node-server` – SEC node library for Rust applications (`must-server`, done)
-3. `add-shall-c-abi` – drop-in replacement for SHALL's C interface: libraries named
-   `SHALLserver64`/`32` and `SHALLvariant64`/`32` exporting the same `SECoP_S_*` and
-   `SECoP_V_*` functions, for C and LabVIEW callers (`must-ffi`, done; manual LabVIEW
-   smoke test pending)
-4. `add-node-monitoring` – per-process monitoring endpoint for status, clients, traffic
-   and logs (`must-monitor`, `must_server::monitor`, done)
-5. `add-node-log-files` – rolling per-node log files of all traffic and log records
-   (`must_server::logfiles`, done)
-6. `add-status-tui` – `must-tui`, a terminal UI showing all running must nodes on the
-   machine, opened by SHALL's status window flags (`must-tui`, done; manual check on
-   Windows pending)
-7. `sample-node-polling` – polling in two tiers inferred from the interface class, the
-   `pollinterval` parameter and a poll hook for batched hardware access; the example
-   node polls its noisy readback (`must-server`, done)
-8. `add-udp-discovery` – SECoP UDP discovery of nodes on the network (`must-server`,
-   done)
-9. `concurrent-polled-requests` – polling-mode requests run concurrently, and running
-   reads of one parameter are shared (`must-server`, `must-ffi`, done)
-10. `user-errors-and-filtered-commands` – `filterStoredCommand` and SHALL's user error
-    codes for SHALL-LabVIEW (`must-ffi`, done)
-11. `add-matrix-datatype` – the SECoP 2.0 matrix data type (`must-types`, done)
-12. `add-check-message` – answers to SECoP `check` requests (`must-server`, done)
-13. `add-logging-messages` – SECoP remote logging (`must-server`, done)
+### Replacing SHALL (C and LabVIEW)
 
-SHALL's client library (`SECoP_C_*`) is out of scope.
+1. Download the libraries for your platform from the
+   [Releases](https://github.com/Bilchreis/MUST/releases) page.
+2. Put `SHALLserver` and `SHALLvariant` in place of SHALL's files (both in one folder).
+3. Remove SHALL's Qt libraries.
+
+C programs and LabVIEW VIs that use SHALL's C functions run unchanged.
+[COMPATIBILITY.md](COMPATIBILITY.md) describes the differences to SHALL and the functions
+MUST adds (`SECoP_S_filterStoredCommand[2]`, `SECoP_S_registerUserError`,
+`SECoP_S_setCheckFunction`, …). To build the libraries yourself, see
+[Building from source](#building-from-source).
+
+### Writing a SEC node in Rust
+
+Add `must-server` and `must-types` from this repository (they are not on crates.io), and
+`async-trait` for the handler trait:
+
+```toml
+[dependencies]
+must-server = { git = "https://github.com/Bilchreis/MUST", tag = "v0.2.1" }
+must-types = { git = "https://github.com/Bilchreis/MUST", tag = "v0.2.1" }
+async-trait = "0.1"
+```
+
+Declare the node and connect each module to the hardware:
+
+```rust
+use async_trait::async_trait;
+use must_server::{Ctx, HandlerResult, Module, ModuleHandler, NodeBuilder, Parameter, Reading};
+use must_types::{DataInfo, Value};
+
+struct Thermometer;
+
+#[async_trait]
+impl ModuleHandler for Thermometer {
+    async fn read(&self, _ctx: &Ctx, parameter: &str) -> HandlerResult {
+        let value = match parameter {
+            "value" => Value::Double(4.2), // ask the hardware here
+            _ => Value::Tuple(vec![Value::Enum(100), Value::String("ok".into())]),
+        };
+        Ok(Reading::new(value))
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let kelvin = DataInfo::double().min(0.0).unit("K").build()?;
+    let status = DataInfo::tuple(&[
+        DataInfo::enumeration([("IDLE", 100), ("ERROR", 400)]).build()?,
+        DataInfo::string().build()?,
+    ])
+    .build()?;
+
+    let node = NodeBuilder::new("HZB-example", "an example node")
+        .module(
+            Module::new("t1", "sample thermometer")
+                .interface_classes(["Readable"])
+                .parameter(Parameter::new("value", kelvin, "temperature"))?
+                .parameter(Parameter::new("status", status, "status"))?
+                .handler(Thermometer),
+        )?
+        .build()?;
+
+    let running = node.start()?;
+    println!("SEC node listening on {}", running.local_addr());
+    // push new values whenever the hardware reports them:
+    running.update("t1", "value", Value::Double(4.25))?;
+    std::thread::park();
+    Ok(())
+}
+```
+
+A complete simulated temperature controller is in the repository (port 2055):
+
+```bash
+cargo run --example simple_node
+# in another terminal: nc localhost 2055, then `*IDN?`, `describe`, `activate`
+```
+
+Any SECoP client works with it, for example Frappy's `frappy-gui` or `frappy-scan`. The
+[API docs of `must-server`](https://bilchreis.github.io/MUST/api/must_server/index.html)
+describe the library.
+
+### Installing the tools
+
+`must monitor` opens `must-tui`, the status TUI showing all MUST nodes running for your
+user. Install `must` and `must-tui` from a checkout (needs [Rust](https://rustup.rs)):
+
+```bash
+./install.sh      # Linux; on Windows: .\install.ps1
+must monitor
+must update       # later: installs the newest release in this checkout
+```
+
+Both also ship next to the libraries in the release archives. See
+[the status TUI guide](docs/status-tui.md) for views, keys and `must update`.
+
+## Features
+
+- **Monitoring.** Every process running MUST nodes offers a local, read-only monitoring
+  endpoint with the status of its nodes, their clients, message traffic, parameter
+  values and log records. `MUST_MONITOR=0` turns it off.
+  [Guide](docs/monitoring-protocol.md)
+- **Status TUI.** `must-tui` shows all MUST nodes of the user in one terminal window.
+  Programs that set SHALL's `bGUI` flag or call `SECoP_S_showStatusWindow(1)` open it in
+  a window of its own. [Guide](docs/status-tui.md)
+- **Polling.** Modules are polled in two tiers inferred from the interface class
+  (`value` and `status` every 5 s, the rest every 60 s); clients can change the rate
+  through a `pollinterval` parameter. [Guide](docs/polling.md)
+- **Log files.** Every node writes a rolling daily log file of its traffic and log
+  records, kept for 2 days. [Guide](docs/log-files.md)
+- **Discovery.** Every node answers SECoP's UDP discovery on port 10767 and announces
+  itself at startup. [Guide](docs/discovery.md)
 
 ## Platforms
 
@@ -64,113 +154,25 @@ CI builds and tests on all three.
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
 | `crates/must-monitor` | Monitoring protocol, per-user registry of endpoints, local transport and client library |
-| `crates/must-tui` | `must-tui`, the terminal UI showing all must nodes of the user |
+| `crates/must-tui` | `must-tui`, the terminal UI showing all MUST nodes of the user, and the `must` command |
 | `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |
 | `crates/must-ffi-variant` | `SHALLvariant64`/`32`, forwarding to `SHALLserver` |
 | `crates/must-ffi-ctests` | C conformance tests of the C interface |
 
-## Building
+## Building from source
+
+The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.
 
 ```bash
 cargo test --workspace
 ```
 
-On Windows, set `MUST_TUI=0` while testing: the C tests use SHALL's `bGUI` flag, and
-cargo puts the built `must-tui` on `PATH`, so they would open the status TUI.
+The C tests use SHALL's `bGUI` flag and open the status TUI (on Linux, in a terminal
+window when there is a graphical session). Run them with `MUST_TUI=0` to keep it closed,
+as CI does.
 
-A simulated temperature controller to try with any SECoP client (port 2055 by default):
-
-```bash
-cargo run --example simple_node
-```
-
-## Monitoring
-
-Every process running must nodes offers a local, read-only monitoring endpoint (a Unix
-domain socket on Linux, a named pipe on Windows, only accessible to the user) with the
-status of its nodes, their clients, message traffic, parameter values and log records.
-`must-tui` shows all of them; the protocol and the client library are described
-in [docs/monitoring-protocol.md](docs/monitoring-protocol.md). Turn it off with
-`MUST_MONITOR=0`.
-
-## Status TUI
-
-`must-tui` shows all must nodes running for your user in one terminal window: their
-state, clients, parameter values and statuses, message traffic, log records and log
-files. It only reads. Install it from a checkout with
-
-```bash
-./install.sh      # Linux; on Windows: .\install.ps1
-```
-
-which needs [Rust](https://rustup.rs) and puts `must` and `must-tui` into
-`~/.cargo/bin`. Then run `must monitor` in a terminal (or `cargo run -p must-tui`
-without installing; both also ship in `dist/<target>/` and the release archives).
-`must update` installs the newest release (the highest `vX.Y.Z` tag) in that
-checkout, leaving its branch and local changes alone; `must update --tag v0.2.0`
-installs a given release, `--tag main` the latest commit on `main`. It fetches them
-from this repository over HTTPS, whatever the checkout's remote, so no SSH key is
-needed. Programs that set
-SHALL's `bGUI` flag or call `SECoP_S_showStatusWindow(1)` open it in a window of their
-own. Views, keys and settings are described in [docs/status-tui.md](docs/status-tui.md).
-
-## Polling
-
-`must-server` modules are polled by default: `value` and `status` of a
-`Readable`/`Writable`/`Drivable` module every 5 s, the other parameters every 60 s.
-`Module::poll_interval(d)` changes the 5 s, `Module::poll_all(d)` polls everything every
-`d`, and `Module::no_polling()` turns it off. A `pollinterval` parameter lets clients
-change the rate at runtime. **API change:** `Module::poll_interval` used to poll all
-parameters at one interval (use `Module::poll_all` for that), and modules without poll
-settings used to be not polled. C programs that use SHALL's `pollinterval` properties
-keep SHALL's behavior ([COMPATIBILITY.md](COMPATIBILITY.md)). See the crate
-documentation of `must-server` for details, and try it with the example node:
-
-```bash
-cargo run --example simple_node
-# in another terminal: nc localhost 2055, then `activate` and `change cryo:pollinterval 0.2`
-```
-
-## Log files
-
-Every node writes what it exchanged with its clients (each published value once) and what
-it logged to `~/.local/state/must/logs/<equipment_id>/<YYYY-MM-DD>.log` on Linux or
-`%LOCALAPPDATA%\must\logs\<equipment_id>\<YYYY-MM-DD>.log` on Windows, and deletes files
-older than 2 days. `MUST_LOG_FILES=0` turns it off, `MUST_LOG_DIR` and `MUST_LOG_DAYS`
-change the directory and the retention:
-
-```bash
-MUST_LOG_DIR=/tmp/must-logs MUST_LOG_DAYS=7 cargo run --example simple_node
-# writes /tmp/must-logs/must-example/<today>.log
-```
-
-The line format, disk usage and the Rust API are described in
-[docs/log-files.md](docs/log-files.md).
-
-## Discovery
-
-Every node takes part in SECoP's
-[UDP discovery](https://github.com/SampleEnvironment/SECoP/blob/main/protocol/specification/discovery.rst):
-it answers `{"SECoP":"discover"}` broadcasts on UDP port 10767 with its TCP port,
-`equipment_id`, `firmware` and `description`, and announces itself once at startup.
-Several must and Frappy nodes can run on one host. Clients should broadcast: on Linux a
-request sent to one host directly reaches only one of its nodes. A node bound to a
-loopback address only answers local requests. Turn discovery off with `MUST_DISCOVERY=0`
-or `NodeBuilder::discovery(Discovery::off())`; on a host with a firewall, open 10767/udp
-for it to work. Frappy's `frappy-scan` finds the example node (it needs only Python, no
-installation):
-
-```bash
-cargo run --example simple_node
-# in another terminal, with a checkout of https://github.com/SampleEnvironment/frappy:
-python3 frappy/bin/frappy-scan
-```
-
-## Replacing SHALL
-
-Download the libraries for your platform from the
-[Releases](https://github.com/Bilchreis/MUST/releases) page, or build the SHALL-named
-libraries and their headers into `dist/<target>/`:
+Build the SHALL-named libraries, their headers, `must` and `must-tui` into
+`dist/<target>/`:
 
 ```bash
 cargo xtask dist                                 # this machine's target
@@ -178,15 +180,6 @@ cargo xtask dist --target i686-pc-windows-msvc   # 32-bit Windows, e.g. for 32-b
 cargo xtask check                                # exports, dependencies, cross-library calls
 ```
 
-Then put `SHALLserver` and `SHALLvariant` in place of SHALL's files (both in one folder)
-and remove SHALL's Qt libraries. C programs and LabVIEW VIs that use SHALL's C functions
-run unchanged; see [COMPATIBILITY.md](COMPATIBILITY.md) for the details and the
-differences to SHALL. must also exports functions that SHALL lacks
-(`SECoP_S_filterStoredCommand[2]`, `SECoP_S_registerUserError`,
-`SECoP_S_unregisterUserError`, `SECoP_S_setCheckFunction`) and hands out checks with
-the action `SECoP_S_ACTION_CHECK`, described there under "Additions to SHALL".
-
-The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.
 How releases are made is described in [docs/releasing.md](docs/releasing.md).
 
 ## Documentation
@@ -201,6 +194,6 @@ mdbook build docs  # writes target/book; needs mdbook (cargo install mdbook)
 
 ## License
 
-must is licensed under the GNU Lesser General Public License v3.0 or later
+MUST is licensed under the GNU Lesser General Public License v3.0 or later
 (LGPL-3.0-or-later), the same license as SHALL. See [COPYING.LESSER](COPYING.LESSER) and
 [COPYING](COPYING).

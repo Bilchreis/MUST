@@ -3,7 +3,7 @@
 
 Usage: python3 frappy_discovery.py <simple_node binary> <frappy checkout>
 
-Starts must node A, Frappy's demo cryo node and must node B on one host, so that each
+Starts MUST node A, Frappy's demo cryo node and MUST node B on one host, so that each
 joins a port that the other implementation already holds. The dependencies of
 frappy-server must be installed (the checkout's requirements.txt), and the checkout needs
 a git tag or a frappy/RELEASE-VERSION file for Frappy's version. Needs a host where
@@ -108,8 +108,8 @@ class Interop:
 
 def run(interop):
     node_a, port_a = interop.start_must_node()
-    print("must node A on TCP port", port_a)
-    wait_for(lambda: (MUST_ID, port_a) in interop.scan(), "frappy-scan to find must node A")
+    print("MUST node A on TCP port", port_a)
+    wait_for(lambda: (MUST_ID, port_a) in interop.scan(), "frappy-scan to find MUST node A")
 
     # Frappy joins the port that must holds. Without sharing, its bind would fail.
     interop.start_frappy_node()
@@ -122,16 +122,16 @@ def run(interop):
     # there first: frappy-scan's scan has ended, so only the announcement can report it.
     listened = interop.start_listener()
     _, port_b = interop.start_must_node()
-    print("must node B on TCP port", port_b)
+    print("MUST node B on TCP port", port_b)
     announced = f"{MUST_ID} "
     wait_for(
         lambda: any(
             line.startswith(announced) and line.endswith(f":{port_b}")
             for line in listened.read_text().splitlines()
         ),
-        "frappy-scan --listen to report must node B's announcement",
+        "frappy-scan --listen to report MUST node B's announcement",
     )
-    print("announcement of must node B seen")
+    print("announcement of MUST node B seen")
 
     # everyone answers a single broadcast
     found = wait_for(

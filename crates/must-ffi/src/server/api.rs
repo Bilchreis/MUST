@@ -263,7 +263,7 @@ pub extern "C" fn SECoP_S_getErrorString(iError: c_int) -> *const c_char {
     guard(c"".as_ptr(), || description(iError).as_ptr())
 }
 
-/// must addition: registers a SECoP error class (a SECoP identifier, e.g. `_Overheated`
+/// MUST addition: registers a SECoP error class (a SECoP identifier, e.g. `_Overheated`
 /// or `HardwareError`) with a text for a context and returns a new code of -1000 or
 /// below, which the application can return from a callback or pass to
 /// `SECoP_S_putCommandAnswer[2]` for requests of that context; the client then gets an
@@ -301,7 +301,7 @@ pub unsafe extern "C" fn SECoP_S_registerUserError(
     })
 }
 
-/// must addition: unregisters a code that the context registered with
+/// MUST addition: unregisters a code that the context registered with
 /// [`SECoP_S_registerUserError`]; it is never reused. `SECoP_S_ERROR_INVALID_VALUE` for
 /// any other code.
 ///
@@ -705,7 +705,7 @@ pub unsafe extern "C" fn SECoP_S_setAddFocus(szKey: *const c_char) -> c_int {
     })
 }
 
-/// A must addition, not in SHALL: sets the check function of the focused parameter or
+/// A MUST addition, not in SHALL: sets the check function of the focused parameter or
 /// command and publishes `checkable: true` for it; NULL clears both.
 ///
 /// # Safety
@@ -872,7 +872,7 @@ pub unsafe extern "C" fn SECoP_S_updateParameter2(
     })
 }
 
-/// must addition: pushes a new matrix value of a parameter (`node:module:parameter`)
+/// MUST addition: pushes a new matrix value of a parameter (`node:module:parameter`)
 /// from plain arguments, see [`SECoP_S_updateParameter`]: `iDims` lengths at `puLen` and
 /// `iDataSize` raw element bytes at `pData`, which are copied once and not kept. Name
 /// errors give the codes of `SECoP_S_updateParameter2`; a parameter that is not a matrix,
@@ -974,7 +974,7 @@ fn update(
         .map_err(|_| err::INVALID_VALUE)
 }
 
-/// must addition, not in SHALL: logs `szMessage` for the module `szModule`
+/// MUST addition, not in SHALL: logs `szMessage` for the module `szModule`
 /// (`node:module`) of a running node at `SECoP_S_LOG_ERROR` (1), `SECoP_S_LOG_WARNING`
 /// (2), `SECoP_S_LOG_INFO` (3) or `SECoP_S_LOG_DEBUG` (4). Clients that asked for the
 /// module's log messages with SECoP's `logging` receive it as a `log` event; error,
@@ -1214,7 +1214,7 @@ unsafe fn filter(accessibles: *const c_char, action: c_int) -> Result<Filter, c_
     Filter::parse(accessibles.as_deref(), action)
 }
 
-/// must addition: hands out the oldest polled request of a context that the filter
+/// MUST addition: hands out the oldest polled request of a context that the filter
 /// selects, like [`SECoP_S_getStoredCommand`]. The filter comes first, as SHALL-LabVIEW's
 /// `SECoP-filterStoredCommand.vi` passes it, and the context ID last.
 ///
@@ -1257,7 +1257,7 @@ pub unsafe extern "C" fn SECoP_S_filterStoredCommand(
     })
 }
 
-/// must addition: hands out the oldest polled request of a context that the filter
+/// MUST addition: hands out the oldest polled request of a context that the filter
 /// selects, like [`SECoP_S_getStoredCommand2`]; see [`SECoP_S_filterStoredCommand`].
 ///
 /// # Safety
@@ -1355,7 +1355,7 @@ pub unsafe extern "C" fn SECoP_S_putCommandAnswer2(
     })
 }
 
-/// must addition: answers a polled request with a matrix from plain arguments, see
+/// MUST addition: answers a polled request with a matrix from plain arguments, see
 /// [`SECoP_S_putCommandAnswer`]: `iDims` lengths at `puLen` and `iDataSize` raw element
 /// bytes at `pData`, copied once and not kept, as the read value, the value after a
 /// change or the command result. With a negative `iErrorCode` the matrix arguments are

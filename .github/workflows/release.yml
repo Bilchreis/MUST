@@ -100,5 +100,5 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" archives/* --clobber
           else
             gh release create "$GITHUB_REF_NAME" archives/* --draft --verify-tag \
-              --title "must ${{ needs.version.outputs.version }}" --generate-notes
+              --title "MUST ${{ needs.version.outputs.version }}" --generate-notes
           fi

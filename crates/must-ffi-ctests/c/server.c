@@ -936,7 +936,7 @@ int ctest_server_abandoned(int step, unsigned short port)
     return 0;
 }
 
-/* --- user error codes (must addition): the Rust side sends the requests */
+/* --- user error codes (MUST addition): the Rust side sends the requests */
 
 /* of context "uerr": _Overheated and HardwareError; of "uerr_cb": _CbFault and another
    _Overheated */
@@ -1077,7 +1077,7 @@ int ctest_user_error_done(void)
     return 0;
 }
 
-/* --- filtered requests (must addition): the Rust side sends the requests */
+/* --- filtered requests (MUST addition): the Rust side sends the requests */
 
 static unsigned long long g_filter_id = 0;
 
@@ -1179,7 +1179,7 @@ int ctest_filter_answer(const char* value)
     return 0;
 }
 
-/* --- checks (must addition): the Rust side sends the requests */
+/* --- checks (MUST addition): the Rust side sends the requests */
 
 static char g_check_name[64];
 static double g_check_value = 0.0;
@@ -1569,7 +1569,7 @@ int ctest_server_matrix_step(int step)
     }
 }
 
-/* --- application log messages (must addition): node "my_node", module mod1 in callback
+/* --- application log messages (MUST addition): node "my_node", module mod1 in callback
    mode, whose getter logs for its own module while the node answers the read */
 
 static volatile int g_log_getter_rc = 1;

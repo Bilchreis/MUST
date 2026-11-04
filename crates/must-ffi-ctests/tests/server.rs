@@ -739,7 +739,7 @@ fn repeated_read_from_one_client_in_callback_mode() {
     done(c"cbc");
 }
 
-// --- user error codes (must addition)
+// --- user error codes (MUST addition)
 
 /// Sends `request` and lets the C host answer it with a user error; returns the error
 /// report.
@@ -798,7 +798,7 @@ fn user_error_codes() {
     assert!(closed(poll_port) && closed(cb_port));
 }
 
-// --- filtered requests (must addition)
+// --- filtered requests (MUST addition)
 
 /// `SECoP_S_ERROR_*` codes.
 const INVALID_NAME: c_int = -2;
@@ -1099,7 +1099,7 @@ fn matrix_in_polling_mode() {
     assert!(closed(port));
 }
 
-// --- checks (must addition)
+// --- checks (MUST addition)
 
 /// `SECoP_S_ACTION_CHECK`.
 const ACTION_CHECK: c_int = 4;

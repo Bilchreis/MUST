@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! C conformance tests of must's SHALL-compatible C ABI. The C sources in `c/` are
+//! C conformance tests of MUST's SHALL-compatible C ABI. The C sources in `c/` are
 //! compiled by the build script and call the C functions of `must-ffi`, which is linked
 //! in as a library; the tests in `tests/` run them.
 
@@ -27,7 +27,7 @@ unsafe extern "C" {
 /// For an unknown test name.
 #[must_use]
 pub fn run(test: &str) -> c_int {
-    // SAFETY: the C tests take no arguments and only call must's C functions
+    // SAFETY: the C tests take no arguments and only call MUST's C functions
     unsafe {
         match test {
             "variant_create" => ctest_variant_create(),

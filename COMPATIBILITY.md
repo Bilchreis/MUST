@@ -1,6 +1,6 @@
 # Compatibility with SHALL
 
-must replaces SHALL's `SHALLserver` and `SHALLvariant` libraries. C and LabVIEW
+MUST replaces SHALL's `SHALLserver` and `SHALLvariant` libraries. C and LabVIEW
 programs written for SHALL use the same file names, the same function names and
 signatures, and the same `SECoP_S_error`, `SECoP_S_action` and `SECoP_V_type` values,
 and normally run unchanged. This page lists where must behaves differently.
@@ -21,7 +21,7 @@ and normally run unchanged. This page lists where must behaves differently.
 
 2. Replace SHALL's files with these, keeping both libraries in the same folder:
    `SHALLvariant` loads `SHALLserver` from its own folder. Remove the Qt libraries that
-   SHALL needed; must has no dependency besides the operating system (the Windows
+   SHALL needed; MUST has no dependency besides the operating system (the Windows
    libraries link the C runtime statically).
 3. C programs: compile against the headers in `include/` (or `dist/<triple>/include/`)
    and link `SHALLserver64.lib` / `-lSHALLserver64` (and `SHALLvariant` if you used it).
@@ -33,8 +33,8 @@ describes a quick check of the replaced libraries.
 
 ## Protocol: SECoP 2.0
 
-must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP 2.0
-(e.g. current Frappy) work with must nodes. Differences a client may notice:
+MUST speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP 2.0
+(e.g. current Frappy) work with MUST nodes. Differences a client may notice:
 
 - **Error classes** follow SECoP 2.0. Error codes returned by the application (from a
   callback or `SECoP_S_putCommandAnswer`) are sent as:
@@ -88,13 +88,13 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   names only the module. Every module starts at `"off"` for every connection.
   - **What is sent.** What the node logs about a module (failed polls and reads, values
     that do not fit their datainfo) and what the application logs with
-    `SECoP_S_logMessage` (see below). must's error and warning records are sent as
+    `SECoP_S_logMessage` (see below). MUST's error and warning records are sent as
     `error`, info as `info`, debug as `debug`. Records not tied to a module (a failed
     accept, a panicking handler) are not sent: a `log` event must name a module.
   - **Slow clients.** Log events are best effort: while a client's unread updates and log
     events exceed the slow-client limit, its log events are dropped instead of closing
     the connection.
-- **Matrices.** must supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
+- **Matrices.** MUST supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
   [Matrix values](#matrix-values). Its optional `compression` property is rejected,
   since SECoP defines no compression yet.
 
@@ -103,7 +103,7 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 A `matrix` datainfo describes homogeneous, multi-dimensional numbers, such as detector
 images or spectra, e.g. `{"type": "matrix", "elementtype": "<f4", "names": ["x", "y"],
 "maxlen": [100, 100]}`. The value travels as the lengths and the raw element bytes in
-base64, first dimension varying fastest: `{"len": [2, 3], "blob": "AACAPwAA..."}`. must
+base64, first dimension varying fastest: `{"len": [2, 3], "blob": "AACAPwAA..."}`. MUST
 passes the bytes through unchanged; it does not interpret the elements.
 
 - **As a variant.** No `SECoP_V_type` is added. A matrix value is a `SECoP_VT_STRUCT`
@@ -129,7 +129,7 @@ passes the bytes through unchanged; it does not interpret the elements.
   A value from a getter, a command or `SECoP_S_putCommandAnswer` that does not fit gives
   the client an `InternalError`; `SECoP_S_updateParameter` returns
   `SECoP_S_ERROR_INVALID_VALUE` and sends nothing.
-- **Without JSON.** Inside must, a matrix handle moves between the host and the node
+- **Without JSON.** Inside MUST, a matrix handle moves between the host and the node
   without JSON: a getter's result or a pushed handle is base64-encoded once, for the
   clients. `SECoP_S_updateParameter2` and `SECoP_S_putCommandAnswer2` take the transport
   JSON and decode its base64 once.
@@ -199,7 +199,7 @@ passes the bytes through unchanged; it does not interpret the elements.
 - **Errors and warnings** of the building functions are kept for `SECoP_S_showErrors`,
   which prints them to stderr and clears them.
 - **Status window**: SHALL's Qt status window is replaced by the terminal UI `must-tui`
-  (shipped next to the libraries), which shows the nodes of all must programs of the user
+  (shipped next to the libraries), which shows the nodes of all MUST programs of the user
   at once and only reads. `bGUI` in `SECoP_S_initLibrary` and
   `SECoP_S_showStatusWindow(1)` open it in a window of its own (a console window on
   Windows; a terminal emulator on Linux with a graphical session), unless it runs
@@ -253,16 +253,16 @@ passes the bytes through unchanged; it does not interpret the elements.
 
 ## Additions to SHALL
 
-must exports functions that SHALL lacks, and one action code more. A program that uses
+MUST exports functions that SHALL lacks, and one action code more. A program that uses
 them does not run with SHALL. `SECoP-exports.h` and `SECoP-types.h` declare them, marked
-as must additions.
+as MUST additions.
 
 SHALL-LabVIEW's VIs refer to the first four (`SECoP_S_filterStoredCommand[2]` and
 `SECoP_S_[un]registerUserError`), but no SHALL library ever exported them. They take the
 arguments the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass
 no context ID yet: each of them must be updated to pass `Context_ID` as one more
-argument at the end before it works with must.
-`SECoP_S_logMessage` and the matrix and check functions are must's own.
+argument at the end before it works with MUST.
+`SECoP_S_logMessage` and the matrix and check functions are MUST's own.
 
 - **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
   out only the oldest stored request of the context that matches a filter. The other
@@ -345,7 +345,7 @@ argument at the end before it works with must.
 - **Checks.** A client's `check <module>:<accessible> [<value>]` asks whether a value
   would be accepted, without changing anything (see
   [Protocol](#protocol-secop-20)). An accessible offers checks with
-  `"checkable": true`; must validates the value against the datainfo (and the dynamic
+  `"checkable": true`; MUST validates the value against the datainfo (and the dynamic
   limits of `<parameter>_min`, `_max`, `_limits`) before the application is asked, and
   sends the validated value back in `checked`. The application must not change anything
   for a check, and should answer independently of the module's status.

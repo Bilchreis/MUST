@@ -1,6 +1,6 @@
 ---
 name: release
-description: Make a new must release, from choosing the version to the draft GitHub release. Use when the user asks to make, cut or prepare a release, or to bump the version. Opens the release pull request with `cargo xtask release`; once it is merged, continues with the release-tag skill.
+description: Make a new MUST release, from choosing the version to the draft GitHub release. Use when the user asks to make, cut or prepare a release, or to bump the version. Opens the release pull request with `cargo xtask release`; once it is merged, continues with the release-tag skill.
 compatibility: Requires git, cargo and the GitHub CLI (gh) logged in.
 ---
 
@@ -38,9 +38,9 @@ failed (GitHub's SSH auth fails now and then), retry `git push -u origin
 release-v<version>` a few times, then open the pull request with `gh pr create --base main
 --title "Release <version>"`.
 
-## 3. Update the README's status list
+## 3. Update the roadmap
 
-The `## Status` list in `README.md` names the OpenSpec changes and whether each is done.
+The list in `docs/roadmap.md` names the OpenSpec changes and whether each is done.
 Compare it with `openspec/changes/` (open) and `openspec/changes/archive/` (done), and
 with the open changes' `tasks.md` (all boxes ticked: done). If it is out of date, fix it
 on the release branch, amend or add a commit, and push.

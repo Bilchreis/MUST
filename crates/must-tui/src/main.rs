@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! `must-tui`: shows all must SEC nodes running for the user. See the library crate.
+//! `must-tui`: shows all MUST SEC nodes running for the user. See the library crate.
 
 use std::io::IsTerminal;
 use std::process::ExitCode;
@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 const USAGE: &str = "\
 usage: must-tui [--focus-pid <pid>]
 
-Shows all must SEC nodes running for this user. Press ? for help, q to quit.
+Shows all MUST SEC nodes running for this user. Press ? for help, q to quit.
 
   --focus-pid <pid>  select the first node of this process once it appears
   --version          print the version

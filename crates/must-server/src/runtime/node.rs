@@ -71,7 +71,7 @@ fn shared_runtime() -> &'static Runtime {
             .enable_all()
             .thread_name("must-node")
             .build()
-            .expect("cannot create the must runtime")
+            .expect("cannot create the MUST runtime")
     })
 }
 

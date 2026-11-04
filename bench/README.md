@@ -1,6 +1,6 @@
 # Benchmarks
 
-Latency and throughput measurements of must nodes, mainly through SHALL's C ABI used the way a C or LabVIEW program uses it. They are not part of CI.
+Latency and throughput measurements of MUST nodes, mainly through SHALL's C ABI used the way a C or LabVIEW program uses it. They are not part of CI.
 
 - `bench_host.c`: a program that builds one node `bench` (module `m`, readable doubles `p0`…`p9` and `value`, `status`, writable `w`, and for the matrix modes a 512×512 `<f4` matrix `image`) through `SECoP_S_*`, in callback mode, in polling mode with a LabVIEW-style loop, or pushing values in a tight loop. See the comment at its top.
 - `loadgen/`: a SECoP load client (its own Cargo project, not a workspace member).
@@ -75,4 +75,4 @@ The fixes also help a node with both off, so on stays at about 60% of off under 
 | `SECoP_S_updateParameter2`, JSON made once | 5.48 ms | 1 decode, 1 encode |
 | `SECoP_S_updateParameterMatrix` | 2.34 ms | 1 encode |
 
-The second row is the route a handle took before matrices bypassed JSON inside must: the handle was exported to JSON, which encodes the bytes, and decoded again against the datainfo. Taking the differences, encoding and serializing the JSON costs about 2.3 ms and parsing and decoding it about 3.1 ms, so a path that encoded twice could not stay below about 4 ms. A handle now costs one copy of its bytes more than `SECoP_S_updateParameterMatrix`, which copies the host's buffer once.
+The second row is the route a handle took before matrices bypassed JSON inside MUST: the handle was exported to JSON, which encodes the bytes, and decoded again against the datainfo. Taking the differences, encoding and serializing the JSON costs about 2.3 ms and parsing and decoding it about 3.1 ms, so a path that encoded twice could not stay below about 4 ms. A handle now costs one copy of its bytes more than `SECoP_S_updateParameterMatrix`, which copies the host's buffer once.

@@ -1,6 +1,6 @@
 # Status TUI (`must-tui`)
 
-`must-tui` shows, in one terminal window, all must SEC nodes running for your user on
+`must-tui` shows, in one terminal window, all MUST SEC nodes running for your user on
 this machine: in Rust programs, C programs and LabVIEW, 32- or 64-bit. It replaces
 SHALL's Qt status window. It only reads: nothing in it changes a node, a parameter or a
 connection.
@@ -35,7 +35,7 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
   program's first node selected. `SECoP_S_showStatusWindow(0)` leaves it open, since it
   may show other programs' nodes too; close it with `q`.
 
-  `must-tui` is looked for next to the must library (`SHALLserver64.dll` and so on, or
+  `must-tui` is looked for next to the MUST library (`SHALLserver64.dll` and so on, or
   the program for Rust), then at `MUST_TUI`, then on `PATH`. If it is not found, a
   warning log record names the places searched.
 
@@ -45,7 +45,7 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
 
 | View | Shows |
 |---|---|
-| 1 Overview | every process (name, pid, must version) with its nodes: context ID, address (wide terminals), state (`building`, `failed`, `running`, `stopped`, `gone`), clients, messages per second, the most severe module status |
+| 1 Overview | every process (name, pid, MUST version) with its nodes: context ID, address (wide terminals), state (`building`, `failed`, `running`, `stopped`, `gone`), clients, messages per second, the most severe module status |
 | 2 Detail | the selected node: state, address, context ID, the log file it writes (or that it writes none), build errors and warnings, every module with its status and every parameter's value (formatted with its unit), age or error, and the connected clients |
 | 3 Traffic | the selected node's messages, live: time, `>` received or `<` sent, client, text; `…[cut]` marks messages shortened to 4 KiB. The node sends them only while this view is open. Remote logging's `log` events are not shown: their records are in the Logs view. |
 | 4 Logs | log records of all processes, merged by time: what the nodes log about themselves and what applications log for a module (`Ctx::log`, `SECoP_S_logMessage`) at error, warning or info; application debug records are not shown. Filters by level, node, process and text |

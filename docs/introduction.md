@@ -1,13 +1,13 @@
-# must
+# MUST
 
-must is a Rust rewrite of [SHALL](https://github.com/SampleEnvironment/SHALL), the
+MUST is a Rust rewrite of [SHALL](https://github.com/SampleEnvironment/SHALL), the
 SECoP hardware abstraction layer. It lets existing programs, drivers and LabVIEW code
 offer their hardware as a SEC node speaking [SECoP](https://github.com/SampleEnvironment/SECoP),
 the Sample Environment Communication Protocol. Installation and a first overview are in
 the [README](https://github.com/Bilchreis/MUST#readme).
 
-This guide describes monitoring, the status TUI and log files, and how must is tested and
-released.
+This guide describes monitoring, the status TUI, log files, polling and discovery, the
+roadmap, and how MUST is tested and released.
 
 ## API docs
 

@@ -79,7 +79,7 @@ pub fn release(args: &[String]) -> Result<()> {
              tags main `{tag}`, which builds the draft release (docs/releasing.md)."
         ))
         .current_dir(root()))?;
-    println!("Check the README's status list, merge the pull request, then run `cargo xtask tag`.");
+    println!("Check docs/roadmap.md, merge the pull request, then run `cargo xtask tag`.");
     Ok(())
 }
 

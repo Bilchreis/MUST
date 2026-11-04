@@ -35,7 +35,7 @@ fn function<T: Copy>(lib: &Library, name: &str) -> T {
 fn main() {
     let dir = PathBuf::from(std::env::args().nth(1).expect("usage: c_host <dist dir>"));
     let file = dir.join(library_filename(format!("SHALLserver{}", usize::BITS)));
-    // SAFETY: must's libraries have no initialisation code with preconditions
+    // SAFETY: MUST's libraries have no initialisation code with preconditions
     let lib = unsafe { Library::new(&file) }.unwrap_or_else(|e| panic!("{}: {e}", file.display()));
     let init: Init = function(&lib, "SECoP_S_initLibrary");
     let done: Done = function(&lib, "SECoP_S_doneLibrary");

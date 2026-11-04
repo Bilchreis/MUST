@@ -248,7 +248,7 @@ fn draw_overview(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     }
     if app.processes.is_empty() {
         lines.push(Line::styled(
-            "No must nodes are running for this user.",
+            "No MUST nodes are running for this user.",
             theme.dim(),
         ));
     }
@@ -273,7 +273,7 @@ fn process_line(process: &Process, now: f64, theme: Theme) -> Line<'static> {
     )];
     if !process.library_version.is_empty() {
         spans.push(Span::styled(
-            format!("  must {}", process.library_version),
+            format!("  MUST {}", process.library_version),
             theme.dim(),
         ));
     }

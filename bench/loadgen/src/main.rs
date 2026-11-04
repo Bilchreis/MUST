@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! SECoP load client for must's benchmarks (see `bench/README.md`).
+//! SECoP load client for MUST's benchmarks (see `bench/README.md`).
 //!
 //! ```text
 //! loadgen read ADDR CONNECTIONS IN_FLIGHT SECONDS REQUEST...

@@ -1,6 +1,6 @@
 ---
 name: release-tag
-description: Tag a merged must release pull request and see the Release workflow through to the draft GitHub release. Use after a "Release X.Y.Z" pull request is merged, when the user asks to tag a release, or to continue the release skill.
+description: Tag a merged MUST release pull request and see the Release workflow through to the draft GitHub release. Use after a "Release X.Y.Z" pull request is merged, when the user asks to tag a release, or to continue the release skill.
 compatibility: Requires git, cargo and the GitHub CLI (gh) logged in.
 ---
 

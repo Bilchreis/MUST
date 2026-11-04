@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-description = "Build and release tasks for must: cargo xtask dist, release, tag"
+description = "Build and release tasks for MUST: cargo xtask dist, release, tag"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

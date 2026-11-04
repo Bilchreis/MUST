@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
-/* A program that uses must's SHALL C ABI the way a C or LabVIEW program would, for
+/* A program that uses MUST's SHALL C ABI the way a C or LabVIEW program would, for
    benchmarks (see README.md). One node "bench" with one module "m": readable double
    parameters p0..p9 and value, status, and a writable double w. POSIX only.
 
@@ -15,7 +15,7 @@
                                     SECoP_S_updateParameter and a handle
      pushmt PORT SECONDS            the same through SECoP_V_toJSON and
                                     SECoP_S_updateParameter2, the path a handle took
-                                    before matrices bypassed JSON inside must
+                                    before matrices bypassed JSON inside MUST
      pushmj PORT SECONDS            the same with SECoP_S_updateParameter2 and transport
                                     JSON made once
      pushmx PORT SECONDS            the same with SECoP_S_updateParameterMatrix

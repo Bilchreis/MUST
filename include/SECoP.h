@@ -1,7 +1,7 @@
 /*
 SPDX-License-Identifier: LGPL-3.0-or-later
 Copyright (c) 2017-2019 Helmholtz-Zentrum Berlin fuer Materialien und Energie GmbH <https://www.helmholtz-berlin.de>
-Modified for must (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
+Modified for MUST (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
 the C++ class interface of CSECoPbaseType is not provided.
 */
 #ifndef __SECOP_H__D8182F65_C81B_4D87_BA7C_366EEA1709C1__

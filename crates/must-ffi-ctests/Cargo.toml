@@ -1,6 +1,6 @@
 [package]
 name = "must-ffi-ctests"
-description = "C conformance tests of must's SHALL-compatible C ABI"
+description = "C conformance tests of MUST's SHALL-compatible C ABI"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

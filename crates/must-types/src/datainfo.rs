@@ -1167,7 +1167,7 @@ impl ScaledInfo {
     /// Effective format string; default `%.<n>f` with `n = max(0, -floor(log10(scale)))`.
     ///
     /// The SECoP prose defines this default; `schema/datatypes.yaml` of the
-    /// specification says `%.6g` instead. must follows the prose.
+    /// specification says `%.6g` instead. MUST follows the prose.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn fmtstr(&self) -> String {
         if let Some(f) = &self.fmtstr {

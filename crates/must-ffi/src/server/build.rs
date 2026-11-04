@@ -39,7 +39,7 @@ pub(crate) type CallFunction = unsafe extern "C" fn(
     *mut f64,
 );
 
-/// `SECoP_S_checkFunction` (a must addition): decides a `check` of a parameter or
+/// `SECoP_S_checkFunction` (a MUST addition): decides a `check` of a parameter or
 /// command.
 pub(crate) type CheckFunction =
     unsafe extern "C" fn(*const c_char, *const CSECoPbaseType, *mut c_int);

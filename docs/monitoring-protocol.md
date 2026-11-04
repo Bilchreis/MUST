@@ -1,6 +1,6 @@
 # Monitoring
 
-Every process that runs must SEC nodes (a Rust program using `must-server`, or a C or
+Every process that runs MUST SEC nodes (a Rust program using `must-server`, or a C or
 LabVIEW program using the SHALL C ABI) offers one local **monitoring endpoint**. Through
 it, tools such as `must-tui` see the process's nodes, their clients, the messages on the
 wire, parameter values and log records. The endpoint is read-only and a slow monitor never
@@ -181,7 +181,7 @@ tracing_subscriber::registry()
 ```
 
 and hosts without a subscriber call `must_server::monitor::install_log_capture()`, as the
-SHALL C ABI does in `SECoP_S_initLibrary`. must never replaces a subscriber the host set.
+SHALL C ABI does in `SECoP_S_initLibrary`. MUST never replaces a subscriber the host set.
 
 ## Reading endpoints from Rust
 

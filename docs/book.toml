@@ -1,7 +1,7 @@
-# The must guide, built with mdBook (`mdbook build docs`) and published to GitHub Pages
+# The MUST guide, built with mdBook (`mdbook build docs`) and published to GitHub Pages
 # together with the API docs from `cargo doc` (see .github/workflows/pages.yml).
 [book]
-title = "must"
+title = "MUST"
 authors = ["Peter Braun"]
 language = "en"
 src = "."

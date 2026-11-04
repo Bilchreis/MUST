@@ -19,8 +19,8 @@ remote, so the release is always made from upstream's latest `main`.
    This creates the branch `release-v<version>` from upstream's `main`, sets the version
    in `[workspace.package]` of the root `Cargo.toml`, updates `Cargo.lock`, commits,
    pushes the branch to `origin` and opens the pull request. It refuses versions that are
-   not newer than `main`'s or that are already tagged. Update the README's status list
-   on that branch if needed.
+   not newer than `main`'s or that are already tagged. Update the roadmap in
+   `docs/roadmap.md` on that branch if needed.
 2. Once CI passes, merge the pull request, then tag the merge commit:
 
    ```bash

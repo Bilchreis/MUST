@@ -108,7 +108,7 @@ impl RemoteLevel {
 }
 
 impl From<LogLevel> for RemoteLevel {
-    /// SECoP has no warning level; must's warnings (failed polls and reads) are what a
+    /// SECoP has no warning level; MUST's warnings (failed polls and reads) are what a
     /// client asking for errors wants to see.
     fn from(level: LogLevel) -> Self {
         match level {

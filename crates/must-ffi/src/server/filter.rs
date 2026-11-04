@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! The filter of `SECoP_S_filterStoredCommand[2]` (a must addition): which stored
+//! The filter of `SECoP_S_filterStoredCommand[2]` (a MUST addition): which stored
 //! requests a host loop takes.
 
 use std::ffi::c_int;
