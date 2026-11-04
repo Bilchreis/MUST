@@ -1,0 +1,15 @@
+# The must guide, built with mdBook (`mdbook build docs`) and published to GitHub Pages
+# together with the API docs from `cargo doc` (see .github/workflows/pages.yml).
+[book]
+title = "must"
+authors = ["Peter Braun"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/Bilchreis/MUST"
+edit-url-template = "https://github.com/Bilchreis/MUST/edit/main/docs/{path}"
