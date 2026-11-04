@@ -1,7 +1,7 @@
 /*
 SPDX-License-Identifier: LGPL-3.0-or-later
 Copyright (c) 2017-2019 Helmholtz-Zentrum Berlin fuer Materialien und Energie GmbH <https://www.helmholtz-berlin.de>
-Modified for must (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
+Modified for MUST (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
 the C++ class interface of CSECoPbaseType is not provided.
 */
 #ifndef __SECOP_ERROR_H__3BB08092_2314_4A0B_B6CE_4D243DB4223080__
@@ -137,14 +137,14 @@ enum SECoP_S_action
     /** SECoP do command */
     SECoP_S_ACTION_DO     = 3,
 
-    /** must addition, not in SHALL: SECoP check command, the dry run of a change or do
+    /** MUST addition, not in SHALL: SECoP check command, the dry run of a change or do
      *  of an accessible with "checkable": true; answer it with SECoP_S_SUCCESS or an
      *  error, any value is ignored */
     SECoP_S_ACTION_CHECK  = 4,
 };
 
 /**
- * \brief must addition, not in SHALL: levels of \ref SECoP_S_logMessage
+ * \brief MUST addition, not in SHALL: levels of \ref SECoP_S_logMessage
  * \ingroup exptype
  */
 enum SECoP_S_logLevel
@@ -185,7 +185,7 @@ typedef void (*SECoP_S_getsetFunction)(const char* name, enum SECoP_S_error* piE
 typedef void (*SECoP_S_callFunction)(const char* name, const CSECoPbaseType* pArgument, enum SECoP_S_error* piError, CSECoPbaseType** ppReturn, double* timestamp);
 
 /**
- * \brief must addition, not in SHALL: prototype of check functions, which decide whether a
+ * \brief MUST addition, not in SHALL: prototype of check functions, which decide whether a
  *        SECoP check (the dry run of a change or do) would be accepted, see
  *        \ref SECoP_S_setCheckFunction. A check function must not change anything and
  *        should not depend on the module's status.

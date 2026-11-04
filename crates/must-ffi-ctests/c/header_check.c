@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
-/* Compiles SHALL's documentation example against must's headers, as C99 and C++11.
+/* Compiles SHALL's documentation example against MUST's headers, as C99 and C++11.
    Only checked for compiling here; the C conformance tests run it. */
 
 #include "SECoP.h"
 
 #include <string.h>
 
-/* must addition: a check function that accepts everything */
+/* MUST addition: a check function that accepts everything */
 static void header_check_accept(const char* name, const CSECoPbaseType* pValue, enum SECoP_S_error* piError)
 {
     (void)name;
@@ -40,7 +40,7 @@ int run_header_example(int allowed_to_loop)
     }
     SECoP_S_doneLibrary(0, "example");
 
-    /* must additions */
+    /* MUST additions */
     {
         unsigned long long id;
         enum SECoP_S_action action;
@@ -65,7 +65,7 @@ int run_header_example(int allowed_to_loop)
         SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_DEBUG, "d");
     }
 
-    /* must additions for matrices */
+    /* MUST additions for matrices */
     {
         const unsigned int len[2] = {1, 1};
         const float data[1] = {1.0f};

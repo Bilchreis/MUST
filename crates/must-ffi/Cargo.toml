@@ -1,6 +1,6 @@
 [package]
 name = "must-ffi"
-description = "SHALL-compatible C ABI of must (built as SHALLserver32/64)"
+description = "SHALL-compatible C ABI of MUST (built as SHALLserver32/64)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -104,7 +104,7 @@ pub struct Process {
     pub pid: u32,
     /// Executable name.
     pub name: String,
-    /// Version of its must library, once connected.
+    /// Version of its MUST library, once connected.
     pub library_version: String,
     /// The connection.
     pub link: Link,

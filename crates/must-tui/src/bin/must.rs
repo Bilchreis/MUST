@@ -21,7 +21,7 @@ const USAGE: &str = "\
 usage: must <command> [arguments]
 
 commands:
-  monitor [--focus-pid <pid>]  show all must nodes of this user (the status TUI)
+  monitor [--focus-pid <pid>]  show all MUST nodes of this user (the status TUI)
   update [--tag <tag>]         install the latest release, if newer than this one;
                                with --tag: that release (e.g. v0.2.0), `latest` or
                                `main` (the latest commit on main)
@@ -135,7 +135,7 @@ fn update(tag: Option<&str>) -> ExitCode {
     };
     if !root.join(".git").exists() {
         eprintln!(
-            "must: {} is no longer a git checkout of must; clone it again and run \
+            "must: {} is no longer a git checkout of MUST; clone it again and run \
              install.sh (install.ps1 on Windows) there",
             root.display()
         );
@@ -172,7 +172,7 @@ fn update(tag: Option<&str>) -> ExitCode {
                 return ExitCode::FAILURE;
             };
             if parse_version(installed).is_some_and(|i| i >= version) {
-                println!("must {installed} is up to date (latest release: {tag}).");
+                println!("MUST {installed} is up to date (latest release: {tag}).");
                 return ExitCode::SUCCESS;
             }
             (tag.clone(), tag)

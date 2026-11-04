@@ -1,7 +1,7 @@
 /*
 SPDX-License-Identifier: LGPL-3.0-or-later
 Copyright (c) 2017-2019 Helmholtz-Zentrum Berlin fuer Materialien und Energie GmbH <https://www.helmholtz-berlin.de>
-Modified for must (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
+Modified for MUST (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
 the C++ class interface of CSECoPbaseType is not provided.
 */
 #ifndef __SECOP_EXPORTS_H__81F95F4C_9E08_494D_8073_A68C018A83D1__
@@ -204,7 +204,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_addPropertyJSON(const char* szKey, const
 enum SECoP_S_error SHALL_EXPORT SECoP_S_setAddFocus(const char* szKey);
 
 /**
- * \brief must addition, not in SHALL: sets the check function of the focused parameter
+ * \brief MUST addition, not in SHALL: sets the check function of the focused parameter
  *        or command and publishes "checkable": true for it, so that clients may send
  *        SECoP check requests. NULL clears the function and the property. In callback
  *        mode, \ref SECoP_S_nodeComplete fails with SECoP_S_ERROR_MISSING_MANDATORY for
@@ -265,7 +265,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_updateParameter2(const char* szParameter
                                                            const char* szSigma, int iSigmaSize, double dblTimestamp);
 
 /**
- * \brief must addition, not in SHALL: like \ref SECoP_S_updateParameter2, for a
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_updateParameter2, for a
  *        parameter of type matrix, with the matrix as plain arguments instead of a
  *        variant or JSON: the length of each dimension and the raw element bytes (first
  *        dimension varying fastest, in the byte order of the "elementtype"). The bytes
@@ -363,7 +363,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswer2(unsigned long long llI
                 const char* szValue, int iValueSize, const char* szSigma, int iSigmaSize, double dblTimestamp);
 
 /**
- * \brief must addition, not in SHALL: like \ref SECoP_S_putCommandAnswer2, answers a
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_putCommandAnswer2, answers a
  *        request handed out by \ref SECoP_S_getStoredCommand or
  *        \ref SECoP_S_getStoredCommand2 with a matrix as plain arguments: the read
  *        value, the value after a change or the command result. See
@@ -388,7 +388,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswerMatrix(unsigned long lon
                                                                  int iDataSize, double dblTimestamp);
 
 /**
- * \brief must addition, not in SHALL: like \ref SECoP_S_getStoredCommand, but hands out
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_getStoredCommand, but hands out
  *        only the oldest stored request of the context that matches the filter, and
  *        leaves the others stored. Answer it with \ref SECoP_S_putCommandAnswer.
  *        Note the argument order: the filter comes first, as in SHALL-LabVIEW's
@@ -415,7 +415,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_filterStoredCommand(const char* szFilter
                                                             CSECoPbaseType** ppValue, const char* szContextID);
 
 /**
- * \brief must addition, not in SHALL: like \ref SECoP_S_getStoredCommand2, but hands out
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_getStoredCommand2, but hands out
  *        only the oldest stored request of the context that matches the filter, see
  *        \ref SECoP_S_filterStoredCommand. Answer it with \ref SECoP_S_putCommandAnswer2.
  * \ingroup expfunc
@@ -436,7 +436,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_filterStoredCommand2(const char* szFilte
                                                              char* szValue, int* piValueSize, const char* szContextID);
 
 /**
- * \brief must addition, not in SHALL: registers an own SECoP error class with a text
+ * \brief MUST addition, not in SHALL: registers an own SECoP error class with a text
  *        for a context and returns a new code (-1000 or below). For requests of that
  *        context, the application can return it from a getter, setter or command
  *        function, or pass it to \ref SECoP_S_putCommandAnswer or
@@ -460,7 +460,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_registerUserError(const char* szSECoPerr
                                                           const char* szContextID);
 
 /**
- * \brief must addition, not in SHALL: unregisters a code that the context registered
+ * \brief MUST addition, not in SHALL: unregisters a code that the context registered
  *        with \ref SECoP_S_registerUserError.
  *        Note: szContextID is an argument SHALL-LabVIEW's SECoP-unregisterUserError.vi
  *        has to add at the end.
@@ -473,7 +473,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_registerUserError(const char* szSECoPerr
 enum SECoP_S_error SHALL_EXPORT SECoP_S_unregisterUserError(int iError, const char* szContextID);
 
 /**
- * \brief must addition, not in SHALL: logs a message for a module of a running node.
+ * \brief MUST addition, not in SHALL: logs a message for a module of a running node.
  *        SECoP clients that asked for the module's log messages with the "logging"
  *        request receive it as a "log" event if their level admits it
  *        (SECoP_S_LOG_ERROR and SECoP_S_LOG_WARNING as "error", SECoP_S_LOG_INFO as
@@ -504,7 +504,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_logMessage(const char* szModule, enum SE
  * \ingroup expfunc
  * \param[in] iError SECoP_S_error to convert
  * \return a constant static string pointer to the description; for a code of
- *         \ref SECoP_S_registerUserError (must addition) "<class>: <text>"
+ *         \ref SECoP_S_registerUserError (MUST addition) "<class>: <text>"
  */
 const char SHALL_EXPORT * SECoP_S_getErrorString(enum SECoP_S_error iError);
 

@@ -183,7 +183,7 @@ fn build(
 
     let node = NodeBuilder::new(
         "must-example",
-        "must example node\n\nOne simulated cryostat.",
+        "MUST example node\n\nOne simulated cryostat.",
     )
     .firmware(concat!("must-", env!("CARGO_PKG_VERSION")))
     .bind(addr)

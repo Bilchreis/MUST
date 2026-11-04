@@ -26,7 +26,7 @@ use crate::variant;
 const DEFAULT_POLL_TIMEOUT_MS: u64 = 60_000;
 
 /// The node `timeout` of nodes built through the C ABI, in seconds: SHALL's 60 s, for
-/// polled requests and callbacks alike, instead of must's default of 10 s.
+/// polled requests and callbacks alike, instead of MUST's default of 10 s.
 pub(crate) const NODE_TIMEOUT: f64 = 60.0;
 
 static POLL_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_POLL_TIMEOUT_MS);

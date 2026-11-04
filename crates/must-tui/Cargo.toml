@@ -1,6 +1,6 @@
 [package]
 name = "must-tui"
-description = "Terminal UI showing all running must SEC nodes of the user"
+description = "Terminal UI showing all running MUST SEC nodes of the user"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

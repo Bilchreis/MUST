@@ -1,6 +1,6 @@
 # Log files
 
-Every running must SEC node (a Rust program using `must-server`, or a C or LabVIEW program
+Every running MUST SEC node (a Rust program using `must-server`, or a C or LabVIEW program
 using the SHALL C ABI) writes a rolling log of what it exchanged with its clients and what
 it reported, so that problems can be investigated afterwards. File logging is on by
 default and needs no setup.
@@ -32,7 +32,7 @@ Each node writes one file per day:
 One line per event, in UTF-8:
 
 ```text
-2026-10-27T16:42:10.120+01:00 * node started on 0.0.0.0:2055 (must 0.1.0)
+2026-10-27T16:42:10.120+01:00 * node started on 0.0.0.0:2055 (MUST 0.1.0)
 2026-10-27T16:42:10.122+01:00 * [3 192.168.1.20:51234] connected
 2026-10-27T16:42:10.123+01:00 > [3 192.168.1.20:51234] change t1:target 300
 2026-10-27T16:42:10.125+01:00 U update t1:status [[300,"ramping"],{"t":1793118130.124}]

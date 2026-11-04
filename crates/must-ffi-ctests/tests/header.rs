@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! The header checks (`c/header_check.c`, compiled as C99 and as C++11) link against
-//! must-ffi: every function they call, the must additions included, is exported.
+//! must-ffi: every function they call, the MUST additions included, is exported.
 
 use std::ffi::c_int;
 

@@ -140,7 +140,7 @@
 //!
 //! The records sent are those the node logs about a module (failed polls and reads,
 //! values that do not fit their datainfo) and what the application logs with
-//! [`Ctx::log`], [`Publisher::log`] or [`RunningNode::log`]. must's error and warning
+//! [`Ctx::log`], [`Publisher::log`] or [`RunningNode::log`]. MUST's error and warning
 //! records are sent as `error`, info records as `info`, the application's debug records
 //! as `debug`. Records not tied to a module are not sent, as a `log` event names one.
 //!

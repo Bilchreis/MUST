@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Build tasks for must.
+//! Build tasks for MUST.
 //!
 //! ```text
 //! cargo xtask dist  [--target TRIPLE] [--debug]   build the SHALL-named libraries, must and must-tui into dist/TRIPLE
@@ -643,7 +643,7 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_initLibrary(QApplication *pApplication, 
     fn header_function_counts() {
         let (server, variant) = exports().unwrap();
         // the exports of SHALL's own DLLs: 41 variant functions, minus the Qt-only
-        // SECoP_V_printStream; 27 server functions, plus must's 8 additions
+        // SECoP_V_printStream; 27 server functions, plus MUST's 8 additions
         // (SECoP_S_filterStoredCommand[2], SECoP_S_[un]registerUserError,
         // SECoP_S_setCheckFunction, SECoP_S_updateParameterMatrix,
         // SECoP_S_putCommandAnswerMatrix, SECoP_S_logMessage)

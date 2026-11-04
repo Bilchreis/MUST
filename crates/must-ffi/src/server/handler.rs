@@ -357,7 +357,7 @@ impl ShallModule {
 #[async_trait]
 impl ModuleHandler for ShallModule {
     fn implementation(&self) -> String {
-        "must SHALL-compatible C API".to_owned()
+        "MUST SHALL-compatible C API".to_owned()
     }
 
     async fn read(&self, _ctx: &Ctx, parameter: &str) -> HandlerResult {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! The SHALL-compatible C ABI of must: SHALL's `SECoP_S_*` and `SECoP_V_*` functions,
+//! The SHALL-compatible C ABI of MUST: SHALL's `SECoP_S_*` and `SECoP_V_*` functions,
 //! built as `SHALLserver32`/`SHALLserver64`.
 
 mod ffi_util;

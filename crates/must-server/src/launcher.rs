@@ -6,7 +6,7 @@
 //! [`show_status_tui`] returns at once; a short-lived thread does the work. It starts
 //! nothing if a TUI already runs for the user (the TUI holds a lock in the monitoring
 //! registry directory). The executable is looked for next to the library (or program)
-//! containing must, then at `MUST_TUI`, then on `PATH`. `MUST_TUI=0` turns launching off.
+//! containing MUST, then at `MUST_TUI`, then on `PATH`. `MUST_TUI=0` turns launching off.
 //!
 //! - **Windows:** the TUI gets a console window of its own; closing it ends only the TUI.
 //! - **Linux:** with a graphical session (`DISPLAY` or `WAYLAND_DISPLAY`), the TUI runs in

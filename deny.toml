@@ -1,5 +1,5 @@
 # cargo-deny configuration: only dependency licenses that can be combined
-# with must's LGPL-3.0-or-later license are allowed.
+# with MUST's LGPL-3.0-or-later license are allowed.
 
 [graph]
 targets = [

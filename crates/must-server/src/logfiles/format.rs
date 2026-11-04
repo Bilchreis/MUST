@@ -128,7 +128,7 @@ impl LineFormatter {
     pub(crate) fn format(&mut self, event: &NodeEvent) -> Option<String> {
         match event {
             NodeEvent::Started { addr } => Some(format!(
-                "* node started on {addr} (must {})",
+                "* node started on {addr} (MUST {})",
                 env!("CARGO_PKG_VERSION")
             )),
             NodeEvent::Stopped => Some("* node stopped".to_owned()),

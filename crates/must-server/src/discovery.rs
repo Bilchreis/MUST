@@ -6,7 +6,7 @@
 //! interfaces and answers `{"SECoP":"discover"}` with a packet naming its TCP port,
 //! `equipment_id`, `firmware` and `description`. At startup it broadcasts the same packet
 //! once to every interface. The port is shared (`SO_REUSEPORT` on Linux, `SO_REUSEADDR`
-//! on Windows, as Frappy does), so several must and Frappy nodes can run on one host.
+//! on Windows, as Frappy does), so several MUST and Frappy nodes can run on one host.
 //! On Linux a unicast request reaches only one of them, so clients broadcast.
 //!
 //! - A packet never exceeds 508 bytes; the description is shortened to fit. A node

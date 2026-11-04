@@ -26,7 +26,7 @@ fn library(name: &str) -> Library {
     let dir = PathBuf::from(std::env::var_os("MUST_DIST_DIR").expect("MUST_DIST_DIR is set"));
     let bits = usize::BITS;
     let file = dir.join(library_filename(format!("{name}{bits}")));
-    // SAFETY: must's libraries have no initialisation code with preconditions
+    // SAFETY: MUST's libraries have no initialisation code with preconditions
     unsafe { Library::new(&file) }.unwrap_or_else(|e| panic!("{}: {e}", file.display()))
 }
 
