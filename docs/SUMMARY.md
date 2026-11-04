@@ -8,6 +8,7 @@
 - [Status TUI](status-tui.md)
 - [Log files](log-files.md)
 - [Writing modules](writing-modules.md)
+- [Node config files](node-config.md)
 - [Polling](polling.md)
 - [Discovery](discovery.md)
 

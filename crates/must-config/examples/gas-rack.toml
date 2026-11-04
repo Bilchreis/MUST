@@ -1,0 +1,25 @@
+# A gas rack with five mass flow controllers, declared with one template.
+#
+#     must serve crates/must-config/examples/gas-rack.toml
+#
+# The template key "mfc{i}" makes the modules mfc1 to mfc5; each instance table holds what
+# differs between them. `{gas}` is replaced in the description and the `_gas` property.
+
+[node]
+equipment_id = "gasrack-1"
+description = "gas mixing rack with five mass flow controllers"
+interface = "tcp://2056"
+_facility = "example lab"
+
+[modules."mfc{i}"]
+type = "must::sim::FlowController"
+description = "{gas} mass flow controller"
+_gas = "{gas}"
+pollinterval = 0.5
+instances = [
+    { gas = "N2", range = 500.0, _serial_number = "M1201" },
+    { gas = "Ar", range = 200.0, _serial_number = "M1202" },
+    { gas = "O2", range = 100.0, _serial_number = "M1203" },
+    { gas = "He", range = 100.0, _serial_number = "M1204" },
+    { gas = "H2", range = 50.0, _serial_number = "M1205", unit = "ml/min" },
+]

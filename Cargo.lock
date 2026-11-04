@@ -688,6 +688,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "must-config"
+version = "0.2.2"
+dependencies = [
+ "indexmap",
+ "insta",
+ "must-server",
+ "must-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml_edit",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "must-ffi"
 version = "0.2.2"
 dependencies = [
@@ -770,6 +785,7 @@ dependencies = [
  "chrono",
  "indexmap",
  "insta",
+ "must-config",
  "must-monitor",
  "must-server",
  "must-types",

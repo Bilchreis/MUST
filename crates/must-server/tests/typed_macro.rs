@@ -307,8 +307,15 @@ async fn writable_parameter_without_methods() {
             .any(|l| l.starts_with("update T:tolerance [0.2")),
         "{lines:?}"
     );
-    let (_, _, data) = parse(&c.request("read T:tolerance").await);
-    assert_eq!(data[0], 0.2);
+    // the client is still activated: skip updates until the reply
+    c.send("read T:tolerance").await;
+    let reply = loop {
+        let line = c.line().await;
+        if line.starts_with("reply T:tolerance") {
+            break line;
+        }
+    };
+    assert_eq!(parse(&reply).2[0], 0.2);
     n.stop().await;
 }
 
@@ -334,8 +341,15 @@ async fn parameter_without_read_method_is_not_polled() {
     }
     assert!(value_updates >= 3, "value polled {value_updates} times");
     assert_eq!(setpoint_updates, 1, "only the initial update of activate");
-    let (_, _, data) = parse(&c.request("read T:setpoint").await);
-    assert_eq!(data[0], 12.5);
+    // the client is still activated: skip updates until the reply
+    c.send("read T:setpoint").await;
+    let reply = loop {
+        let line = c.line().await;
+        if line.starts_with("reply T:setpoint") {
+            break line;
+        }
+    };
+    assert_eq!(parse(&reply).2[0], 12.5);
     n.stop().await;
 }
 

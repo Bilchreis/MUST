@@ -160,6 +160,9 @@ Both also ship next to the libraries in the release archives. See
   records, kept for 2 days. [Guide](docs/log-files.md)
 - **Discovery.** Every node answers SECoP's UDP discovery on port 10767 and announces
   itself at startup. [Guide](docs/discovery.md)
+- **Node config files.** A node can be declared in a TOML file, with many modules of one
+  type through templates (`[modules."mfc{i}"]` with `count = 5`), and served with
+  `must serve node.toml`. [Guide](docs/node-config.md)
 
 ## Platforms
 
@@ -178,6 +181,7 @@ CI builds and tests on all three.
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
 | `crates/must-macros` | `#[must_server::module]`, `#[must_server::methods]` and the SECoP type derives |
+| `crates/must-config` | Node config files: module type registry, TOML loader with templates, `serve`/`check`/`types` |
 | `crates/must-monitor` | Monitoring protocol, per-user registry of endpoints, local transport and client library |
 | `crates/must-tui` | `must-tui`, the terminal UI showing all MUST nodes of the user, and the `must` command |
 | `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |

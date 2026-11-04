@@ -116,6 +116,14 @@ jobs:
           assert described["simple_node"] == described["typed_node"], described
           print("typed_node describes and ramps like simple_node")
           EOF
+      # the example node configs load with the built-in module types
+      - name: must check on the example configs
+        shell: bash
+        run: |
+          cargo build --bin must --target ${{ matrix.target }}
+          for config in cryostat gas-rack; do
+            target/${{ matrix.target }}/debug/must check crates/must-config/examples/$config.toml
+          done
       # the manual monitoring session documented in docs/monitoring-protocol.md
       - name: monitoring session with PowerShell
         if: runner.os == 'Windows'

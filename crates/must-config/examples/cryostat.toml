@@ -1,0 +1,17 @@
+# A cryostat with one simulated temperature controller.
+#
+#     must serve crates/must-config/examples/cryostat.toml
+#
+# then connect any SECoP client to port 2055 (or `nc localhost 2055`, `describe`).
+
+[node]
+equipment_id = "cryo-1"
+description = "a simulated cryostat"
+interface = "tcp://2055"
+
+[modules.T]
+type = "must::sim::Temperature"
+description = "sample temperature"
+temperature = 290.0   # a property: the temperature at start
+ramp = 10.0           # a parameter: its initial value
+pollinterval = 2.0

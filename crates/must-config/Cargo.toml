@@ -1,0 +1,25 @@
+[package]
+name = "must-config"
+description = "Node config files for MUST: module types, a registry, TOML node declarations with module templates, and the serve/check/types runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+must-server.workspace = true
+must-types.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+toml_edit.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+insta = "1.49.0"
+
+[lints]
+workspace = true
