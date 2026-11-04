@@ -43,6 +43,17 @@ A datainfo SHALL be written as a SECoP datainfo type name with SECoP's keys as n
 - **WHEN** a parameter has datainfo `status(IDLE, BUSY, ERROR)`
 - **THEN** its datainfo is a tuple of an enum with members `IDLE` 100, `BUSY` 300 and `ERROR` 400, and a string
 
+### Requirement: Datainfos from properties
+A datainfo value of a parameter or command SHALL be able to name a property of the same module, which stands for that property's value. Such datainfos SHALL be built when the module is constructed, after its properties are set, so that each module instance gets its own datainfos. A datainfo of a property naming another property SHALL be a compile error.
+
+#### Scenario: Limit and unit from properties
+- **WHEN** a module declares `range: property!("full scale", double(min = 0.0))`, `unit: property!("unit", string(), default = "ln/min")` and `target: param!("setpoint", double(min = 0.0, max = range, unit = unit), writable)`, and two instances are constructed with `range` 200.0 and 500.0
+- **THEN** `describe` shows a `target` `max` of 200.0 for the first and 500.0 for the second, both with unit `ln/min`
+
+#### Scenario: Property naming a property
+- **WHEN** a property's datainfo is `double(max = range)` and `range` is another property
+- **THEN** compilation fails with an error at `range`
+
 ### Requirement: Rust types of declared accessibles
 The Rust type of a parameter or property SHALL follow from its datainfo: `double` and `scaled` give `f64`, `int` gives `i64`, `bool` gives `bool`, `string` gives `String`, `blob` gives `Vec<u8>`, `array` a `Vec` of its element type, `tuple` a tuple of its members, `enum(T)` and `struct(T)` give `T`, and `status` gives `Status`.
 

@@ -69,6 +69,8 @@ The macro translates each datainfo to `must_types` builder calls: `double(min = 
 - **`enum(T)` and `struct(T)`** call `T::datainfo()` from the derives.
 - **`datainfo(expr)`** passes a `DataInfo` through, and requires `as T`.
 
+**Properties in datainfo values:** a datainfo value may be the name of a property of the module, e.g. `double(max = range, unit = unit)` (spec: *Datainfos from properties*). The macro sees which identifiers are property names. When any datainfo uses one, it moves building the declaration from a static into the generated `from_settings`: there, after the properties are read and checked, each property is bound as a local (`let range: f64 = …;`) before the datainfos are built. A property's own datainfo naming a property is rejected, because properties are read first and in no particular dependency order. This gives each instance its own limits and unit without SECoP dynamic limits, which is what `must::sim::FlowController` in `add-node-config-files` needs.
+
 Datainfo values that are runtime expressions are checked by `DataInfo` building when the module is constructed. Errors such as `min > max` therefore surface as construction errors naming the accessible, not as compile errors.
 
 ### Rust types: `SecopType`

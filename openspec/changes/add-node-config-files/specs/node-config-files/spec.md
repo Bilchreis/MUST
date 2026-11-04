@@ -73,7 +73,7 @@ The node SHALL publish the modules in the order their tables appear in the confi
 - **THEN** `describe` lists the modules as `p`, `mfc1`, `mfc2`, `mfc3`, `a`
 
 ### Requirement: Parameter initial values in the config
-A module setting that the type does not read and that names a cached parameter of the module, including a `pollinterval` parameter, SHALL set that parameter's initial value. The value SHALL be checked against the parameter's datainfo with all limits. A setting that names a parameter that is not cached SHALL be a config error saying that the parameter is read from the hardware.
+For a macro-declared module type, a setting that names a parameter SHALL be its configured initial value, checked against its datainfo with all limits. A cached parameter (including `pollinterval`) SHALL start with it, a writable non-cached one SHALL be written with it at node start, and a readonly non-cached or constant one SHALL be a config error saying it cannot be configured. For a factory type, such a key SHALL be an ordinary setting.
 
 #### Scenario: Poll interval from the config
 - **WHEN** a module of type `must::sim::Temperature` has `pollinterval = 2.0`
@@ -83,12 +83,16 @@ A module setting that the type does not read and that names a cached parameter o
 - **WHEN** a module sets `pollinterval = -1.0` and the parameter's datainfo has `min` 0
 - **THEN** loading fails with an error naming the module, `pollinterval` and the line, with the range violation
 
+#### Scenario: Target written at start
+- **WHEN** a module of type `must::sim::Temperature` has `target = 10.0` and the node starts
+- **THEN** the module's target is written once with 10.0 before clients see the first `value`, and a `read` of `target` returns 10.0
+
 #### Scenario: Value of a hardware parameter
 - **WHEN** a module of type `must::sim::Temperature` sets `value = 4.2`
-- **THEN** loading fails with an error saying that `value` is read from the hardware and cannot be set in the config
+- **THEN** loading fails with an error naming the module, `value` and the line, saying that `value` cannot be configured
 
 ### Requirement: Unknown module settings
-A module setting that is not one of the keys of the module declaration, is not read by the type, does not name a cached parameter and is not a template variable SHALL be a config error. The error SHALL name the module, the type and the key, with its location.
+A module setting that is not one of the keys of the module declaration, is not a template variable, and is neither a property nor a parameter of a macro-declared type nor read by a factory SHALL be a config error. The error SHALL name the module, the type and the key, with its location.
 
 #### Scenario: Misspelled setting
 - **WHEN** a `must::sim::FlowController` module has `rnage = 200.0` next to `range = 200.0`

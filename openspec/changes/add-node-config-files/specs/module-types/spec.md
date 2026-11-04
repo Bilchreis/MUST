@@ -7,7 +7,7 @@ Lets driver code declare reusable module types that turn one module's config set
 ## ADDED Requirements
 
 ### Requirement: Module type contract
-The library SHALL let an application define a module type that, given one module instance's name, description and settings, returns a complete module declaration (interface classes, parameters, commands, handler) or a config error. A module type SHALL be usable many times in one node, and each use SHALL get its own module and handler.
+The library SHALL let an application define a module type that, given one module instance's name, description and settings, returns a complete module (interface classes, parameters, commands, handler) or config errors. A module type SHALL be usable many times in one node, and each use SHALL get its own module and handler.
 
 #### Scenario: Two instances of one type
 - **WHEN** a node config declares modules `mfc1` and `mfc2` with the same type
@@ -17,20 +17,31 @@ The library SHALL let an application define a module type that, given one module
 - **WHEN** a module type reports that the setting `range` must be positive and the config gives `range = -1`
 - **THEN** loading fails with an error naming the module, the setting `range`, its file location and the type's message
 
-### Requirement: Settings access for module types
-A module type SHALL read its settings by key as typed values (integers, floats, booleans, strings, arrays, tables), required or optional with a default. A missing required setting or a value of the wrong type SHALL be a config error naming the module, the key, the expected type and the location of the value, or of the module if the key is missing.
+### Requirement: Macro-declared module types
+A struct declared with the module declaration macro SHALL be registrable as a module type. Its settings SHALL be its properties and the initial values of its parameters, checked against their datainfos as the typed-module construction rules say. Its declared description SHALL be the default description. Errors SHALL carry the config file location of the offending value.
+
+#### Scenario: Property from the config
+- **WHEN** a macro-declared type with `channel: property!("sensor channel", string(maxchars = 1))` is used with `channel = "A"`
+- **THEN** the module is built with `channel` `"A"`
+
+#### Scenario: Property value too long
+- **WHEN** the same type is used with `channel = "AB"` on line 12
+- **THEN** loading fails with an error naming the module and `channel`, at line 12, saying that at most 1 character is allowed
+
+### Requirement: Settings access for module type factories
+A module type written as a factory SHALL read its settings by key as typed values (integers, floats, booleans, strings, arrays, tables), required or optional with a default. A missing required setting or a value of the wrong type SHALL be a config error naming the module, the key, the expected type and the location of the value, or of the module if the key is missing.
 
 #### Scenario: Missing required setting
-- **WHEN** a type requires the setting `range` and the module's table has no `range`
+- **WHEN** a factory requires the setting `range` and the module's table has no `range`
 - **THEN** loading fails with an error naming the module and the missing setting `range`
 
 #### Scenario: Wrong value type
-- **WHEN** a type reads `range` as a float and the config gives `range = "high"`
+- **WHEN** a factory reads `range` as a float and the config gives `range = "high"`
 - **THEN** loading fails with an error naming `range`, saying a number was expected, with the line of the value
 
 #### Scenario: Integer for a float
-- **WHEN** a type reads `range` as a float and the config gives `range = 500`
-- **THEN** the type receives 500.0
+- **WHEN** a factory reads `range` as a float and the config gives `range = 500`
+- **THEN** the factory receives 500.0
 
 ### Requirement: Module type registry
 The library SHALL keep module types in a registry under names made of identifiers joined by `::` (e.g. `must::sim::FlowController`). Registering a name twice, or a name of another form, SHALL be rejected. A driver collection SHALL be able to register all its types with one call. A registry SHALL be able to list its type names.

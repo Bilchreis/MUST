@@ -3,7 +3,7 @@
 ## Context
 
 - A node is declared in code (`must-server/src/model.rs`). `NodeBuilder::new(equipment_id, description)` takes `.bind`, `.firmware`, `.discovery(Discovery)`, `.log_files(LogFiles)` and `.module(Module)`. `Module::new(name, description)` takes `.interface_classes`, `.parameter`, `.command`, `.handler` and the poll settings. `NodeBuilder::build` checks everything and returns a `BuildError` with a list of `ModelError`s, plus warnings on the `Node`.
-- A `Module` can only be built up. It has no accessor for a declared parameter's datainfo, and no way to change a parameter after `.parameter(...)`.
+- `add-module-macro` (implemented first) provides `#[must_server::module]` structs implementing `typed::TypedModule`, constructed from a `typed::Settings` source (`take`, `remaining`, `error`) with property checks, configured initial values and initial writes at start. It also provides `typed::module::<X>(name, description, settings)`, which returns a `Module`.
 - `DataInfo::decode(&json, Mode::Request)` (`must-types`) checks a JSON value against a datainfo with all limits. `validate_identifier` and the case-insensitive identifier set are in `must-types/src/identifier.rs`.
 - The `must` binary lives in `must-tui` (`src/bin/must.rs`) and has `monitor` and `update`. `examples/simple_node.rs` shows a simulated cryostat and the logging setup (fmt layer plus `must_server::monitor::log_layer()`).
 - `toml_edit` 0.25 (with `toml_parser` and `toml_datetime`) is already in `Cargo.lock` as a build dependency, so its licenses have passed `cargo deny`.
@@ -13,11 +13,11 @@
 **Goals:**
 - Declaring N modules of one type in a few lines, with per-instance differences, in a format that stays static data.
 - Error messages good enough that a user who has never seen the module type's code can fix the config: location, module, template and instance, expected type.
-- Writing a module type as plain Rust on top of the existing `Module`/`ModuleHandler` API, with no new runtime machinery.
+- A module type is a macro-declared struct, with no config-specific code in the driver. Hand-written factories on the builder API remain possible for modules whose shape depends on the config.
 
 **Non-Goals:**
-- Changing the runtime, the protocol, or the C ABI.
-- A settings schema that a type declares up front (for documentation or `must types --verbose`). Types read their settings imperatively. A schema can be added later without changing configs.
+- Changing the runtime, the protocol, or the C ABI. Everything the runtime needs (start hook, initial writes) comes from `add-module-macro`.
+- Listing a type's settings (`must types --verbose`). Macro-declared types have a declaration it could be generated from. It is left for later and needs no config changes.
 - Hot reload. The config is read once, before the node starts, because a SECoP description is fixed while the node is up.
 
 ## Decisions
@@ -46,39 +46,33 @@ How expansion works, in the loader and before any module type runs:
 
 Every setting remembers its *origin*: the span of its value in the file (in the instance table or the base) and, for expanded modules, the template key and instance number. All later errors use the origin, so an error in `mfc3` points at the right line even if the value came from the template.
 
-The format leaves room for the deferred **expanding types** (hardware discovery). A later `ModuleType::expand` would return instance tables at load time (e.g. one per MFC found on the bus), and they would go through steps 3–5 and the same checks. Configs written now stay valid. Discovery code lives in the driver, not in the config, so the config still does not run code.
+The format leaves room for the deferred **expanding types** (hardware discovery). A later expansion hook on module types (e.g. a `#[module(..., expand)]` hook) would return instance tables at load time (e.g. one per MFC found on the bus), and they would go through steps 3–5 and the same checks. Configs written now stay valid. Discovery code lives in the driver, not in the config, so the config still does not run code.
 
 ### Parsing: `toml_edit` with spans
 
 The `toml_edit` immutable document API (`ImDocument`/`Document::parse`) keeps the key order, which is needed for module order, and gives byte spans for keys and values. It is already in the dependency tree. The loader converts it into its own tree (`Setting { value: toml::Value-like enum, span, origin }`) and maps spans to line and column once. A plain `toml::from_str` into serde structs was rejected because it loses spans and order (`preserve_order` restores order but not spans for nested values). If `toml_edit`'s span API turns out to be insufficient, the fallback is `toml` 0.9's `de::DeTable` with `Spanned` values.
 
-### Module type API (`must-config`)
+### Module types (`must-config`)
 
 ```rust
-pub trait ModuleType: Send + Sync + 'static {
-    fn build(&self, cfg: &mut ModuleConfig<'_>) -> Result<Module, ConfigError>;
-    fn default_description(&self) -> Option<&str> { None }
-}
-impl<F> ModuleType for F where F: Fn(&mut ModuleConfig<'_>) -> Result<Module, ConfigError> + Send + Sync + 'static { … }
-
-impl ModuleConfig<'_> {
-    pub fn name(&self) -> &str;
-    pub fn new_module(&self) -> Module;                 // Module::new(name, description)
-    pub fn get<T: DeserializeOwned>(&mut self, key: &str) -> Result<T, ConfigError>;
-    pub fn get_or<T: DeserializeOwned>(&mut self, key: &str, default: T) -> Result<T, ConfigError>;
-    pub fn get_opt<T: DeserializeOwned>(&mut self, key: &str) -> Result<Option<T>, ConfigError>;
-    pub fn error(&self, key: &str, message: impl Display) -> ConfigError; // located at the key
+impl Registry {
+    pub fn new() -> Self;                                     // empty
+    pub fn default() -> Self;                                 // the must::sim types
+    pub fn register<T: TypedModule>(&mut self, name: &str) -> Result<(), RegistryError>;
+    pub fn register_fn<F>(&mut self, name: &str, factory: F) -> Result<(), RegistryError>
+        where F: Fn(&mut ModuleConfig<'_>) -> Result<Module, ConfigError> + Send + Sync + 'static;
+    pub fn names(&self) -> Vec<&str>;                         // sorted
 }
 ```
 
-- Settings are read through serde (`T: DeserializeOwned`) from the loader's value tree, so a type can read a whole `#[derive(Deserialize)]` struct from a sub-table. Reading a key marks it consumed. An integer is accepted where a float is expected (spec: *Integer for a float*).
-- The loader passes the type only the type's own settings. `type`, `description`, `group`, `visibility`, `_*` and the template keys are taken out first and applied by the loader on the returned `Module` (`.group`, `.visibility`, `.property`). The type cannot misread them, and they work the same for every type.
-- After `build`, each remaining key is handled in order: template variables are dropped; keys naming a parameter go through `Module::parameter_datainfo` → `DataInfo::decode(Mode::Request)` → `Module::set_initial_value`; anything else is an unknown setting. A type that reads `pollinterval` itself has consumed it, so the type wins.
-- `build` runs inside `catch_unwind`. A panicking type becomes a config error for that module instead of aborting the whole check.
-- The returned `Module`'s name must equal `cfg.name()`. This needs a `Module::name()` accessor, and a mismatch is reported as a bug in the type.
-- `Registry::default()` holds the `must::sim` types and `Registry::new()` is empty. A driver collection exposes `pub fn register(r: &mut Registry) -> Result<(), RegistryError>` by convention.
+- **One config view for both kinds.** `ModuleConfig` is the loader's view of one module instance's settings. It implements `typed::Settings`, mapping `take` to its consumed-key tracking and `error` to a `ConfigError` at the key's span, or at the module table's span for a missing key.
+  - A macro-declared type is built with `typed::module::<T>(name, description, cfg)`. Property checks, the rules for configured initial values, unknown-setting errors and the initial writes at start all come from `add-module-macro`. The loader only turns its `SettingsErrors` into located `ConfigError`s.
+  - A factory reads settings through `get`/`get_or`/`get_opt` (serde `DeserializeOwned`, an integer accepted for a float) and returns a `Module`. Keys it doesn't read are unknown settings.
+- **Loader keys.** Before either kind runs, the loader takes out `type`, `description` (a macro type's declared description is the default), `group`, `visibility`, `_*` and the template keys, and applies them on the returned `Module`. Template variables (see templates) are removed from the view, so neither kind sees them.
+- **Panics.** Construction runs inside `catch_unwind`. A panicking type becomes a config error for that module instead of aborting the whole check.
+- **Driver convention.** A driver collection exposes `pub fn register(r: &mut Registry) -> Result<(), RegistryError>`.
 
-*Alternative considered:* a trait with associated `Settings: Deserialize` and a `build(name, settings)` call. It is cleaner for simple types, but serde's errors for unknown fields and the field's location would have to be wired through `deny_unknown_fields` and spans per type, and it cannot express "unread key that is a parameter". The imperative `ModuleConfig` keeps all of that in the loader. A derive macro on top of it is a follow-up.
+*Alternative considered:* factories only, with a derive on top later. This was the first version of this design. It was dropped once `add-module-macro` gave types a declaration: with that, the config needs no type-specific code at all, and configured initial values and initial writes work the same for every macro type.
 
 ### Errors
 
@@ -102,14 +96,18 @@ Warnings use the same form.
 
 ### Simulation types
 
-`must::sim::Temperature` is the example cryostat moved into `must-config` (settings: `temperature` initial value, `ramp`). `must::sim::FlowController` is a first-order flow towards `target` (settings: `range` required, `unit`, `settling_time` default 2 s). Each module gets its own state behind a `Mutex`, advanced by the elapsed time whenever the handler reads or changes it, so there are no background tasks and no hook is needed to run code after the node starts. Polling keeps clients up to date. Both use `.poll_interval` and a cached `pollinterval` parameter, so `pollinterval = …` in a config works.
+Both are `#[must_server::module(Drivable)]` structs in `must-config::sim`, and the first in-tree users of the macro.
+- **`must::sim::Temperature`** is the example cryostat (properties `temperature`, the initial temperature, and `ramp`).
+- **`must::sim::FlowController`** is a first-order flow towards `target`, with properties `range` (required), `unit` (default `ln/min`) and `settling_time` (default 2 s). Its datainfos name these properties (`target: param!("setpoint", double(min = 0.0, max = range, unit = unit), writable)`), so each instance gets its own limit and unit.
+- **State:** each module keeps its state in plain fields, advanced by the elapsed time in every read or write method, so there are no background tasks.
+- **Polling:** both declare a writable, cached `pollinterval`, so `pollinterval = …` in a config works, and `target = …` exercises the initial write.
 
 ## Risks / Trade-offs
 
 - [Placeholder syntax clashes with values that contain braces, e.g. a C format string] → `{{`/`}}` escapes, and placeholders are only active in template tables. A plain `[modules.x]` never substitutes.
 - [Typed "exactly one placeholder" substitution is implicit] → It is documented with the bus-address example, and the alternative (a string `"3"` where an integer is needed) would be a type error anyway.
-- [Imperative settings reading gives no up-front list of a type's settings] → Unknown-setting errors still catch typos after `build`. A declared schema is a non-goal now, and can be added as an optional `ModuleType::settings()` later.
-- [Module type code runs during `check`] → Types must not touch hardware in `build`. They connect on first use or in their own task. This is documented as the module type contract, and the sim types follow it.
+- [Factories read settings imperatively, with no up-front list of their settings] → Unknown-setting errors still catch typos after construction. Factories are the escape hatch, and macro types are the common case.
+- [Module type code runs during `check`] → Construction must not touch hardware. Macro types connect in their `start` hook, which `check` never runs, and factories connect on first use. This is documented as the module type contract.
 - [`must` grows by the server library] → Accepted (see Runner placement).
 - [The TOML 1.1 features `toml_edit` 0.25 accepts (e.g. newlines in inline tables)] → Fine for users. The docs' examples stick to TOML 1.0.
 

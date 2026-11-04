@@ -21,7 +21,7 @@
 ## 5. Module macro
 
 - [ ] 5.1 Parse the `#[module(…)]` arguments (interface class, `description`, `hooks`, `crate`) and the field kinds (`param!`, `command!`, `property!`, plain), and add the exported `macro_rules!` stubs. Verify with trybuild tests for *Attribute on an enum*, *Unknown flag* (and repeated/conflicting flags) and *Stray param macro*.
-- [ ] 5.2 Translate datainfos (key tables per SECoP type, `status(…)`, `enum(T)`/`struct(T)`, `datainfo(expr)`, `as T` with the `KIND` const assertion and default types). Verify with tests for *Unit is published*, *Status codes*, *Default type of a double* and *Integer as u8*, and trybuild tests for *Key of another type* and *Wrong Rust type*.
+- [ ] 5.2 Translate datainfos (key tables per SECoP type, property names as values (declaration built in `from_settings`), `status(…)`, `enum(T)`/`struct(T)`, `datainfo(expr)`, `as T` with the `KIND` const assertion and default types). Verify with tests for *Unit is published*, *Status codes*, *Default type of a double*, *Integer as u8* and *Limit and unit from properties*, and trybuild tests for *Key of another type*, *Wrong Rust type* and *Property naming a property*.
 - [ ] 5.3 Generate the struct rewrite, `TypedModule` (declaration, `from_settings`, dispatch with `quote_spanned!` at the declarations) and the empty `Hooks` impl without `hooks`. Check the interface-class rules in the macro. Verify with runtime tests for *Drivable module*, *Declared parameter in describe*, *Command with argument and result*, *Property is not published*, *Property out of range*, *State field* and *Cached writable parameter*, and trybuild tests for *Missing read method*, *Drivable without stop* and *Readonly target*.
 
 ## 6. Example and docs
