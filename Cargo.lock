@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "must-ffi"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -695,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "must-ffi-ctests"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cc",
  "must-ffi",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "must-ffi-variant"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "libloading",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "must-monitor"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -728,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "must-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "must-tui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "indexmap",
@@ -764,7 +764,7 @@ dependencies = [
 
 [[package]]
 name = "must-types"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "indexmap",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cc",
 ]
