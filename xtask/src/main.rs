@@ -3,7 +3,7 @@
 //! Build tasks for must.
 //!
 //! ```text
-//! cargo xtask dist  [--target TRIPLE] [--debug]   build the SHALL-named libraries into dist/TRIPLE
+//! cargo xtask dist  [--target TRIPLE] [--debug]   build the SHALL-named libraries, must and must-tui into dist/TRIPLE
 //! cargo xtask check [--target TRIPLE]             check their exports and dependencies
 //! cargo xtask exports                             list the functions declared by include/
 //! ```
@@ -127,6 +127,8 @@ fn dist(o: &Options) -> Result<()> {
             &o.target,
         ])
         .env("RUSTFLAGS", rustflags.trim())
+        // `must update` cannot update a `must` from dist/ (it has no checkout)
+        .env("MUST_CHECKOUT", "")
         .current_dir(root());
     if o.release {
         build.arg("--release");
@@ -160,9 +162,11 @@ fn dist(o: &Options) -> Result<()> {
             )?;
         }
     }
-    // the status TUI, opened by the libraries from their own folder
-    let tui = tui_name(windows);
-    copy(&artifacts.join(tui), &out.join(tui))?;
+    // the status TUI, opened by the libraries from their own folder, and `must`, which
+    // runs it as `must monitor`
+    for exe in executables(windows) {
+        copy(&artifacts.join(exe), &out.join(exe))?;
+    }
     for header in headers()? {
         copy(
             &header,
@@ -182,9 +186,13 @@ fn dist(o: &Options) -> Result<()> {
     Ok(())
 }
 
-/// File name of the status TUI.
-fn tui_name(windows: bool) -> &'static str {
-    if windows { "must-tui.exe" } else { "must-tui" }
+/// File names of the status TUI and of `must`.
+fn executables(windows: bool) -> [&'static str; 2] {
+    if windows {
+        ["must-tui.exe", "must.exe"]
+    } else {
+        ["must-tui", "must"]
+    }
 }
 
 fn dist_dir(target: &str) -> PathBuf {
@@ -290,12 +298,7 @@ fn check(o: &Options) -> Result<()> {
             problems.push(format!("{name} depends on non-system libraries: {bad:?}"));
         }
     }
-    if !out.join(tui_name(windows)).is_file() {
-        problems.push(format!(
-            "{} missing next to the libraries",
-            tui_name(windows)
-        ));
-    }
+    check_executables(&out, windows, &mut problems);
     if problems.is_empty() {
         // handles cross between the two libraries as built, loaded from the dist folder
         let mut test = Command::new(cargo());
@@ -318,6 +321,35 @@ fn check(o: &Options) -> Result<()> {
         Ok(())
     } else {
         Err(problems.join("\n"))
+    }
+}
+
+/// `must` and `must-tui` are in `out`, and `must monitor` finds the TUI next to it.
+fn check_executables(out: &Path, windows: bool, problems: &mut Vec<String>) {
+    let [tui, must] = executables(windows);
+    for exe in [tui, must] {
+        if !out.join(exe).is_file() {
+            problems.push(format!("{exe} missing next to the libraries"));
+        }
+    }
+    if out.join(must).is_file() {
+        match Command::new(out.join(must))
+            .args(["monitor", "--version"])
+            .output()
+        {
+            Ok(o) if o.status.success() && o.stdout.starts_with(b"must-tui ") => {
+                println!(
+                    "{must} monitor: {}",
+                    String::from_utf8_lossy(&o.stdout).trim()
+                );
+            }
+            Ok(o) => problems.push(format!(
+                "`{must} monitor --version` failed: {}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            )),
+            Err(e) => problems.push(format!("cannot run {must}: {e}")),
+        }
     }
 }
 

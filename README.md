@@ -88,10 +88,20 @@ in [docs/monitoring-protocol.md](docs/monitoring-protocol.md). Turn it off with
 
 `must-tui` shows all must nodes running for your user in one terminal window: their
 state, clients, parameter values and statuses, message traffic, log records and log
-files. It only reads. Run it in a terminal (`cargo run -p must-tui`, or `must-tui` from
-`dist/<target>/`); programs that set SHALL's `bGUI` flag or call
-`SECoP_S_showStatusWindow(1)` open it in a window of their own. Views, keys and settings
-are described in [docs/status-tui.md](docs/status-tui.md).
+files. It only reads. Install it from a checkout with
+
+```bash
+./install.sh      # Linux; on Windows: .\install.ps1
+```
+
+which needs [Rust](https://rustup.rs) and puts `must` and `must-tui` into
+`~/.cargo/bin`. Then run `must monitor` in a terminal (or `cargo run -p must-tui`
+without installing; both also ship in `dist/<target>/` and the release archives).
+`must update` installs the newest release (the highest `vX.Y.Z` tag) from that
+checkout, leaving its branch and local changes alone; `must update --tag v0.2.0`
+installs a given release, `--tag main` the latest commit on `main`. Programs that set
+SHALL's `bGUI` flag or call `SECoP_S_showStatusWindow(1)` open it in a window of their
+own. Views, keys and settings are described in [docs/status-tui.md](docs/status-tui.md).
 
 ## Polling
 
