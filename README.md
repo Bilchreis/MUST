@@ -34,7 +34,16 @@ in this order:
    Windows pending)
 7. `sample-node-polling` – polling in two tiers inferred from the interface class, the
    `pollinterval` parameter and a poll hook for batched hardware access; the example
-   node polls its noisy readback (`must-server`, in progress)
+   node polls its noisy readback (`must-server`, done)
+8. `add-udp-discovery` – SECoP UDP discovery of nodes on the network (`must-server`,
+   done)
+9. `concurrent-polled-requests` – polling-mode requests run concurrently, and running
+   reads of one parameter are shared (`must-server`, `must-ffi`, done)
+10. `user-errors-and-filtered-commands` – `filterStoredCommand` and SHALL's user error
+    codes for SHALL-LabVIEW (`must-ffi`, done)
+11. `add-matrix-datatype` – the SECoP 2.0 matrix data type (`must-types`, done)
+12. `add-check-message` – answers to SECoP `check` requests (`must-server`, done)
+13. `add-logging-messages` – SECoP remote logging (`must-server`, done)
 
 SHALL's client library (`SECoP_C_*`) is out of scope.
 
