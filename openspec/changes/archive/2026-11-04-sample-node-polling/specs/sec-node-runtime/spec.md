@@ -48,6 +48,8 @@ A module configured with a uniform interval SHALL instead poll all non-constant,
 - **WHEN** a module with `value`, `status` and `target` is configured with a uniform interval of 2 s
 - **THEN** all three are polled about every 2 s
 
+## ADDED Requirements
+
 ### Requirement: Poll interval parameter
 The library SHALL drive a module's polling by its `pollinterval` parameter when the module declares one. A `change` of it SHALL go to the module's handler first, and the value the handler returns SHALL be published as usual. Every published value of it (from a change, the initial value or an application push) SHALL re-time the module's polling: its fast tier, or its uniform interval. A value of 0 SHALL stop that polling until a positive value is published. Parameters with an interval of their own and the slow tier SHALL keep their intervals. Without an initial value, the parameter SHALL start with the module's fast or uniform interval (the configured one, else the default 5 s). On a module whose module-level polling is turned off, the parameter SHALL have no effect on polling.
 
