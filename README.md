@@ -189,6 +189,16 @@ the action `SECoP_S_ACTION_CHECK`, described there under "Additions to SHALL".
 The toolchain version is pinned in `rust-toolchain.toml`; rustup installs it on first use.
 How releases are made is described in [docs/releasing.md](docs/releasing.md).
 
+## Documentation
+
+The guide in [docs/](docs/) and the API docs of the crates are published at
+<https://bilchreis.github.io/MUST/>. To build them locally:
+
+```sh
+cargo doc --workspace --no-deps --open
+mdbook build docs  # writes target/book; needs mdbook (cargo install mdbook)
+```
+
 ## License
 
 must is licensed under the GNU Lesser General Public License v3.0 or later

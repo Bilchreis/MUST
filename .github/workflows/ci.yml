@@ -24,6 +24,21 @@ jobs:
         with:
           command: check licenses
 
+  docs:
+    name: API docs and guide
+    runs-on: ubuntu-latest
+    env:
+      # broken intra-doc links and other rustdoc warnings fail the build
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - run: mdbook build docs
+
   test:
     name: test ${{ matrix.target }}
     runs-on: ${{ matrix.os }}

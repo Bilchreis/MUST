@@ -116,9 +116,9 @@ let node = NodeBuilder::new("cryo", "cryostat")
   and the gap is marked with a line `* dropped <n> lines`. Formatting the lines does take
   CPU: a node under full load, far above typical lab rates, handles about 60% of the
   requests per second with log files and monitoring on that it does with both off (see
-  [bench/README.md](../bench/README.md)). The thread runs while any node of
-  the process logs and ends when the last one stops, so a stopped program (e.g. after
-  `SECoP_S_doneLibrary`) has no logging thread left.
+  [bench/README.md](https://github.com/Bilchreis/MUST/blob/main/bench/README.md)). The
+  thread runs while any node of the process logs and ends when the last one stops, so a
+  stopped program (e.g. after `SECoP_S_doneLibrary`) has no logging thread left.
 - **Flushing.** Files are flushed at least once per second and when a node stops, so a log
   is complete up to about one second before a crash of the program, and up to the
   `* node stopped` line after a normal stop.
