@@ -32,7 +32,7 @@
 
 ## 7. Integration
 
-- [ ] 7.1 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace` (including the trybuild UI tests), and cross-check the `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc` builds as CI does. Verify that CI is green on all three targets.
+- [x] 7.1 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace` (including the trybuild UI tests), and cross-check the `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc` builds as CI does. Verify that CI is green on all three targets.
 
 ## Workflow follow-up
 

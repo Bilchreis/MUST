@@ -30,7 +30,7 @@
 
 ## 6. Integration
 
-- [ ] 6.1 In CI (`.github/workflows/ci.yml`), run `must check` on both example configs for each target (Linux x86_64, Windows x86_64, Windows i686) next to the existing `simple_node` smoke test. Verify that the CI run is green on all three targets.
+- [x] 6.1 In CI (`.github/workflows/ci.yml`), run `must check` on both example configs for each target (Linux x86_64, Windows x86_64, Windows i686) next to the existing `simple_node` smoke test. Verify that the CI run is green on all three targets.
 - [x] 6.2 Run `cargo fmt --check`, `cargo clippy --workspace --all-targets` and `cargo test --workspace`, and cross-check the `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc` builds as CI does.
 
 ## Workflow follow-up
