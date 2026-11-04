@@ -6,7 +6,11 @@
 //! cargo xtask dist  [--target TRIPLE] [--debug]   build the SHALL-named libraries, must and must-tui into dist/TRIPLE
 //! cargo xtask check [--target TRIPLE]             check their exports and dependencies
 //! cargo xtask exports                             list the functions declared by include/
+//! cargo xtask release <X.Y.Z|major|minor|patch>    open the pull request setting a new version
+//! cargo xtask tag                                 tag the merged version, starting the release
 //! ```
+
+mod release;
 
 use std::collections::BTreeSet;
 use std::env;
@@ -31,7 +35,13 @@ fn main() -> ExitCode {
                 variant.into_iter().collect::<Vec<_>>().join(" ")
             );
         }),
-        _ => Err("usage: cargo xtask dist|check [--target TRIPLE] [--debug] | exports".into()),
+        Some("release") => release::release(&args[1..]),
+        Some("tag") => release::tag(&args[1..]),
+        _ => Err(
+            "usage: cargo xtask dist|check [--target TRIPLE] [--debug] | exports \
+                  | release <X.Y.Z|major|minor|patch> | tag"
+                .into(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
