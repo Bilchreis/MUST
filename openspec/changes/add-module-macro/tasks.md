@@ -28,7 +28,7 @@
 ## 6. Example and docs
 
 - [x] 6.1 Add `crates/must-server/examples/typed_node.rs`: the simulated cryostat of `simple_node.rs` with the macro, the simulation pushing through `ParamHandle`s and noise on `value`. Verify by running it and checking with `nc`: `describe` matches `simple_node`'s accessibles, and `change cryo:target 20` ramps with `status` going BUSY then IDLE. Add it to the CI smoke test next to `simple_node`.
-- [ ] 6.2 Write `docs/writing-modules.md` (declaration syntax, datainfo table with Rust types, flags, the methods block and implicit callbacks, hooks, `Param` publishing rules, background handles, construction from settings, initial values and writes, compile errors you may see) and link it in `docs/SUMMARY.md`, the README and the `must-server` crate docs. Verify with `mdbook build docs` and `cargo test --doc -p must-server`.
+- [x] 6.2 Write `docs/writing-modules.md` (declaration syntax, datainfo table with Rust types, flags, the methods block and implicit callbacks, hooks, `Param` publishing rules, background handles, construction from settings, initial values and writes, compile errors you may see) and link it in `docs/SUMMARY.md`, the README and the `must-server` crate docs. Verify with `mdbook build docs` and `cargo test --doc -p must-server`.
 
 ## 7. Integration
 

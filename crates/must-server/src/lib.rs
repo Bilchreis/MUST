@@ -72,6 +72,42 @@
 //!
 //! See `examples/simple_node.rs` for a complete simulated temperature controller.
 //!
+//! # Typed modules
+//!
+//! [`module`] and [`methods`] declare a module as one struct, with one line per
+//! accessible and datainfos in SECoP's own names, and its behaviour as `read_<p>`,
+//! `write_<p>` and `do_<c>` methods. A parameter without a read method is served from its
+//! stored value; a writable one without a write method stores changes. See
+//! `docs/writing-modules.md` and [`typed`].
+//!
+//! ```
+//! use must_server::typed::prelude::*;
+//! use must_server::{NodeBuilder, typed};
+//!
+//! #[module(Readable, description = "sample thermometer")]
+//! struct Thermometer {
+//!     value: param!("temperature", double(min = 0.0, unit = "K")),
+//!     status: param!("status", status(IDLE, ERROR)),
+//!     offset: param!("calibration offset", double(unit = "K"), writable, default = 0.0),
+//! }
+//!
+//! #[methods]
+//! impl Thermometer {
+//!     async fn read_value(&mut self) -> Result<f64> {
+//!         Ok(4.2 + self.offset.get()) // ask the hardware here
+//!     }
+//! }
+//!
+//! # fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+//! let t1 = typed::module::<Thermometer>("t1", None, serde_json::json!({"offset": 0.1}))?;
+//! let node = NodeBuilder::new("HZB-example", "an example node")
+//!     .bind("127.0.0.1:0".parse()?)
+//!     .module(t1)?
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Polling
 //!
 //! A node polls its modules and sends every result to activated clients as an update,

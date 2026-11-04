@@ -7,6 +7,7 @@
 - [Monitoring](monitoring-protocol.md)
 - [Status TUI](status-tui.md)
 - [Log files](log-files.md)
+- [Writing modules](writing-modules.md)
 - [Polling](polling.md)
 - [Discovery](discovery.md)
 

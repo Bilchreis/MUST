@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! Typed modules: Rust values instead of SECoP [`Value`](must_types::Value)s, parameters
+//! Typed modules: Rust values instead of SECoP [`Value`]s, parameters
 //! as typed fields that publish when set, and construction from settings.
 //!
 //! This is the layer under the module declaration macros

@@ -95,6 +95,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Modules can also be declared with `#[must_server::module]`: one line per parameter with
+its datainfo, and `read_<p>`/`write_<p>`/`do_<c>` methods, Frappy-style, with mistakes
+caught at compile time:
+
+```rust
+use must_server::typed::prelude::*;
+
+#[module(Readable, description = "sample thermometer")]
+struct Thermometer {
+    value: param!("temperature", double(min = 0.0, unit = "K")),
+    status: param!("status", status(IDLE, ERROR)),
+}
+
+#[methods]
+impl Thermometer {
+    async fn read_value(&mut self) -> Result<f64> {
+        Ok(4.2) // ask the hardware here
+    }
+}
+// ... .module(must_server::typed::module::<Thermometer>("t1", None, serde_json::json!({}))?)
+```
+
+See [docs/writing-modules.md](docs/writing-modules.md) and `examples/typed_node.rs`.
+
 A complete simulated temperature controller is in the repository (port 2055):
 
 ```bash
@@ -153,6 +177,7 @@ CI builds and tests on all three.
 |---|---|
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
+| `crates/must-macros` | `#[must_server::module]`, `#[must_server::methods]` and the SECoP type derives |
 | `crates/must-monitor` | Monitoring protocol, per-user registry of endpoints, local transport and client library |
 | `crates/must-tui` | `must-tui`, the terminal UI showing all MUST nodes of the user, and the `must` command |
 | `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |
