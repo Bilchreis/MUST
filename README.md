@@ -106,9 +106,11 @@ files. It only reads. Install it from a checkout with
 which needs [Rust](https://rustup.rs) and puts `must` and `must-tui` into
 `~/.cargo/bin`. Then run `must monitor` in a terminal (or `cargo run -p must-tui`
 without installing; both also ship in `dist/<target>/` and the release archives).
-`must update` installs the newest release (the highest `vX.Y.Z` tag) from that
+`must update` installs the newest release (the highest `vX.Y.Z` tag) in that
 checkout, leaving its branch and local changes alone; `must update --tag v0.2.0`
-installs a given release, `--tag main` the latest commit on `main`. Programs that set
+installs a given release, `--tag main` the latest commit on `main`. It fetches them
+from this repository over HTTPS, whatever the checkout's remote, so no SSH key is
+needed. Programs that set
 SHALL's `bGUI` flag or call `SECoP_S_showStatusWindow(1)` open it in a window of their
 own. Views, keys and settings are described in [docs/status-tui.md](docs/status-tui.md).
 
