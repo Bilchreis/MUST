@@ -13,6 +13,7 @@ async-trait.workspace = true
 chrono.workspace = true
 if-addrs.workspace = true
 indexmap.workspace = true
+must-macros.workspace = true
 must-monitor.workspace = true
 must-types.workspace = true
 serde_json.workspace = true
@@ -27,6 +28,7 @@ tracing-subscriber = { workspace = true, default-features = false, features = ["
 fastrand.workspace = true
 tokio = { workspace = true, features = ["test-util", "signal"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+trybuild.workspace = true
 
 [lints]
 workspace = true

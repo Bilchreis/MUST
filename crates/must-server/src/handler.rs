@@ -204,6 +204,18 @@ pub trait ModuleHandler: Send + Sync {
         std::any::type_name::<Self>().to_owned()
     }
 
+    /// Runs once when the node starts, before the module's startup reads and polling and
+    /// before any request reaches the handler, e.g. to open the hardware connection.
+    /// Requests that arrive meanwhile wait for it.
+    ///
+    /// The node logs a failure, or a start that takes longer than ten times the node's
+    /// `timeout`, with the module name, and then goes on as usual: the module stays in the
+    /// node and its requests reach the handler. The default does nothing.
+    async fn start(&self, ctx: &Ctx) -> Result<(), SecopError> {
+        let _ = ctx;
+        Ok(())
+    }
+
     /// Reads `parameter` from the hardware.
     async fn read(&self, ctx: &Ctx, parameter: &str) -> HandlerResult {
         let _ = ctx;

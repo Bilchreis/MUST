@@ -11,6 +11,7 @@ repository = "https://github.com/Bilchreis/MUST"
 authors = ["Peter Braun"]
 
 [workspace.dependencies]
+must-macros = { path = "crates/must-macros" }
 must-monitor = { path = "crates/must-monitor" }
 must-server = { path = "crates/must-server" }
 must-types = { path = "crates/must-types" }
@@ -22,15 +23,19 @@ fastrand = "2"
 if-addrs = "0.15"
 indexmap = "2"
 libloading = "0.9"
+proc-macro2 = "1"
 proptest = "1"
+quote = "1"
 serde = "1"
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 socket2 = { version = "0.6", features = ["all"] }
+syn = { version = "2", features = ["full", "extra-traits"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+trybuild = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

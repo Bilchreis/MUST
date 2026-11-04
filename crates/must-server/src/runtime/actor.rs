@@ -26,6 +26,10 @@ pub(crate) type JobResult = Result<Report, SecopError>;
 /// it has concurrent requests.
 const MAX_JOBS: usize = 64;
 
+/// The start hook may take this many times the node's timeout: connecting to the hardware
+/// may take longer than a request.
+const START_TIMEOUT_FACTOR: u32 = 10;
+
 /// Work for a module actor.
 pub(crate) enum Job {
     Read {
@@ -216,21 +220,30 @@ pub(crate) fn spawn_actor(
     });
     let actor = Arc::clone(&shared);
     tracker.spawn(async move {
-        loop {
-            let (has_waiting, has_room) = actor.load();
-            // biased: take everything received first, so that a job about to start sees
-            // all the requests it can share with
-            tokio::select! {
-                biased;
-                () = stop.cancelled() => break,
-                job = rx.recv(), if has_room => match job {
-                    Some(job) => actor.lock().receive(job),
-                    None => break,
-                },
-                permit = Arc::clone(&actor.permits).acquire_owned(), if has_waiting => {
-                    actor.start_next(permit.expect("the semaphore is never closed"));
+        // the start hook runs before the actor takes any job: requests, startup reads and
+        // polls wait in the channel meanwhile
+        let started = tokio::select! {
+            biased;
+            () = stop.cancelled() => false,
+            () = actor.run_start() => true,
+        };
+        if started {
+            loop {
+                let (has_waiting, has_room) = actor.load();
+                // biased: take everything received first, so that a job about to start sees
+                // all the requests it can share with
+                tokio::select! {
+                    biased;
+                    () = stop.cancelled() => break,
+                    job = rx.recv(), if has_room => match job {
+                        Some(job) => actor.lock().receive(job),
+                        None => break,
+                    },
+                    permit = Arc::clone(&actor.permits).acquire_owned(), if has_waiting => {
+                        actor.start_next(permit.expect("the semaphore is never closed"));
+                    }
+                    () = actor.changed.notified() => {}
                 }
-                () = actor.changed.notified() => {}
             }
         }
         // the connections waiting for these are told that the node is shutting down
@@ -364,6 +377,20 @@ impl ModuleShared {
         rx.await.map_err(|_| gone())?
     }
 
+    /// Runs the handler's start hook, logging a failure or a hang.
+    async fn run_start(self: &Arc<Self>) {
+        let (handler, ctx) = (Arc::clone(&self.handler), self.ctx());
+        let limit = self.hub.model.timeout * START_TIMEOUT_FACTOR;
+        let result = guarded_for(&self.hub, limit, async move { handler.start(&ctx).await }).await;
+        if let Err(error) = result {
+            self.hub.log(
+                LogLevel::Error,
+                Some(&self.module),
+                format!("starting the module failed: {error}"),
+            );
+        }
+    }
+
     async fn run_job(self: &Arc<Self>, job: Job) {
         let (hub, module, handler) = (&self.hub, self.module.as_str(), &self.handler);
         match job {
@@ -474,7 +501,15 @@ async fn guarded<T: Send + 'static>(
     hub: &Hub,
     call: impl Future<Output = Result<T, SecopError>> + Send + 'static,
 ) -> Result<T, SecopError> {
-    let timeout: Duration = hub.model.timeout;
+    guarded_for(hub, hub.model.timeout, call).await
+}
+
+/// [`guarded`] with another time limit.
+async fn guarded_for<T: Send + 'static>(
+    hub: &Hub,
+    timeout: Duration,
+    call: impl Future<Output = Result<T, SecopError>> + Send + 'static,
+) -> Result<T, SecopError> {
     let task = tokio::spawn(call);
     let abort = task.abort_handle();
     match tokio::time::timeout(timeout, task).await {

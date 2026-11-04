@@ -2,15 +2,15 @@
 
 ## 1. Setup
 
-- [ ] 1.1 Create the proc-macro crate `crates/must-macros` (SPDX headers, workspace lints, `syn`/`quote`/`proc-macro2` as workspace dependencies), depend on it from `must-server` and re-export it, and add `trybuild` as a dev-dependency of `must-server`. Verify with `cargo build --workspace` and `cargo deny check` passing.
+- [x] 1.1 Create the proc-macro crate `crates/must-macros` (SPDX headers, workspace lints, `syn`/`quote`/`proc-macro2` as workspace dependencies), depend on it from `must-server` and re-export it, and add `trybuild` as a dev-dependency of `must-server`. Verify with `cargo build --workspace` and `cargo deny check` passing.
 
 ## 2. Runtime start hook
 
-- [ ] 2.1 Add `ModuleHandler::start` with a no-op default, and queue a `Job::Start` in front of each module's startup reads (`runtime/node.rs`, `runtime/actor.rs`), guarded with ten times the node timeout and logged once on failure or timeout. Verify with runtime tests for *Read waits for start*, *Start hook fails* and *Hanging start hook* (paused tokio time), and with the existing `must-ffi-ctests` passing unchanged. Document the hook in the `ModuleHandler` rustdoc.
+- [x] 2.1 Add `ModuleHandler::start` with a no-op default, and queue a `Job::Start` in front of each module's startup reads (`runtime/node.rs`, `runtime/actor.rs`), guarded with ten times the node timeout and logged once on failure or timeout. Verify with runtime tests for *Read waits for start*, *Start hook fails* and *Hanging start hook* (paused tokio time), and with the existing `must-ffi-ctests` passing unchanged. Document the hook in the `ModuleHandler` rustdoc.
 
 ## 3. Typed values
 
-- [ ] 3.1 Implement `typed::SecopType` with `Kind`, `to_value`, `from_value` and `fits` for `f64`, `i8`–`i64`, `u8`–`u32`, `bool`, `String`, `Vec<u8>`, `Vec<T>`, tuples up to 12, and `Status` (with `Status::idle/busy/warn/error` constructors and `is_busy`). Verify with unit tests for round trips, `fits` on integer limits (*Limits too wide*) and `Status` encoding.
+- [x] 3.1 Implement `typed::SecopType` with `Kind`, `to_value`, `from_value` and `fits` for `f64`, `i8`–`i64`, `u8`–`u32`, `bool`, `String`, `Vec<u8>`, `Vec<T>`, tuples up to 12, and `Status` (with `Status::idle/busy/warn/error` constructors and `is_busy`). Verify with unit tests for round trips, `fits` on integer limits (*Limits too wide*) and `Status` encoding.
 - [ ] 3.2 Implement `#[derive(SecopEnum)]` and `#[derive(SecopStruct)]` in `must-macros` (per-field `#[datainfo(…)]`, `Option` fields as optional members). Verify with tests for *Enum datainfo* and *Optional struct member*, and trybuild failures for an enum with fields and a struct with tuple fields.
 
 ## 4. Typed module layer

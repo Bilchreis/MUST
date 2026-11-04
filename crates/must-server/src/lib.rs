@@ -167,6 +167,7 @@ pub mod monitor;
 mod protocol;
 mod report;
 mod runtime;
+pub mod typed;
 
 pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
