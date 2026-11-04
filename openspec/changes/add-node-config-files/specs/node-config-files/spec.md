@@ -73,7 +73,7 @@ The node SHALL publish the modules in the order their tables appear in the confi
 - **THEN** `describe` lists the modules as `p`, `mfc1`, `mfc2`, `mfc3`, `a`
 
 ### Requirement: Parameter initial values in the config
-For a macro-declared module type, a setting that names a parameter SHALL be its configured initial value, checked against its datainfo with all limits. A cached parameter (including `pollinterval`) SHALL start with it, a writable non-cached one SHALL be written with it at node start, and a readonly non-cached or constant one SHALL be a config error saying it cannot be configured. For a factory type, such a key SHALL be an ordinary setting.
+For a macro-declared module type, a setting that names a parameter SHALL be its configured initial value, checked against its datainfo with all limits. A writable parameter SHALL be written with it at node start (stored, without a write method). A readonly parameter without a read method SHALL start with it. A readonly parameter with a read method, or a constant one, SHALL be a config error saying it cannot be configured. For a factory type, such a key SHALL be an ordinary setting.
 
 #### Scenario: Poll interval from the config
 - **WHEN** a module of type `must::sim::Temperature` has `pollinterval = 2.0`

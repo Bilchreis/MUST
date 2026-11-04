@@ -25,13 +25,13 @@
 ### Declaration: `param!` in field-type position, read by the outer attribute
 
 ```rust
-#[must_server::module(Drivable, description = "LakeShore temperature loop", hooks)]
+#[must_server::module(Drivable, description = "LakeShore temperature loop")]
 pub struct TemperatureLoop {
     value:  param!("current temperature", double(min = 0.0, max = 1500.0, unit = "K")),
     status: param!("current status", status(IDLE, WARN, BUSY, ERROR)),
     target: param!("setpoint", double(min = 0.0, max = 1500.0, unit = "K"), writable),
-    tolerance: param!("convergence criterion", double(min = 0.0, unit = "K"), writable, cached, default = 0.1),
-    pollinterval: param!("polling interval", double(min = 0.1, max = 120.0, unit = "s"), writable, cached, default = 5.0),
+    tolerance: param!("convergence criterion", double(min = 0.0, unit = "K"), writable, default = 0.1),
+    pollinterval: param!("polling interval", double(min = 0.1, max = 120.0, unit = "s"), writable, default = 5.0),
     stop: command!("stop at the current temperature"),
 
     uri: property!("controller address", string()),
@@ -40,6 +40,16 @@ pub struct TemperatureLoop {
     heater_range: property!("heater range", int(min = 0, max = 5) as u8),
 
     conn: Option<LineConnection>,   // own state, Default-initialized
+}
+
+#[must_server::methods]
+impl TemperatureLoop {
+    async fn start(&mut self) -> Result<()> { … }                    // hook: connect using `uri`
+    async fn read_value(&mut self) -> Result<f64> { … }
+    async fn read_status(&mut self) -> Result<Status> { … }
+    async fn write_target(&mut self, target: f64) -> Result<f64> { … } // no read_target: stored value
+    async fn do_stop(&mut self) -> Result<()> { … }
+    // tolerance, pollinterval: no methods, implicit callbacks
 }
 ```
 
@@ -54,12 +64,36 @@ pub struct TemperatureLoop {
 
   The user chose this syntax in the issue #59 discussion.
 
-### Behaviour: naming convention, no interface-class traits
+### Behaviour: one `#[must_server::methods]` block, no interface-class traits
 
-Earlier sketches used `trait Drivable { async fn read_value(…); … }`. Since all accessibles, `value`/`target`/`stop` included, are now declared explicitly, such a trait would only repeat their signatures. The generated dispatch calls `self.read_<p>()`, `self.write_<p>(v)` and `self.do_<c>(arg)` on inherent async methods, as Frappy and secop-rs do:
-- **Missing or mistyped methods** become compile errors from the generated call. The macro emits the call with `quote_spanned!` at the field's span, so the error points at the declaration (*Missing read method*).
-- **Interface-class rules** (required accessibles, writable `target`, `stop` without argument, `BUSY` in `status`) are checked inside the macro, which sees all declarations, with errors at the struct or the field. `NodeBuilder::build` keeps checking them at runtime too, for hand-written modules.
-- **Optional hooks** live in a trait `typed::Hooks { async fn start(&mut self) -> Result<()>; async fn poll(&mut self, due: &[&str]) -> Result<()> }` with default methods. The macro emits `impl Hooks for X {}` unless the attribute says `hooks`, in which case the user writes the impl. A derive can't detect whether an impl exists, so the flag is explicit.
+Earlier sketches used `trait Drivable { async fn read_value(…); … }`. Since all accessibles, `value`/`target`/`stop` included, are now declared explicitly, such a trait would only repeat their signatures. Behaviour methods are named as in Frappy and secop-rs (`read_<p>`, `write_<p>`, `do_<c>`, plus the hooks `start` and `poll`) and live in one impl block with `#[must_server::methods]`.
+
+**Why a second attribute:** Frappy's rule, that a parameter without `read_<p>` is served from its stored value and one without `write_<p>` stores the change, needs to know which methods exist. The struct attribute can't see impl blocks. Annotating the methods block gives the macros that knowledge at compile time:
+- methodless parameters are known statically, so they get no polling and no startup reads;
+- the config rules (*Configured initial values*) are exact;
+- misspelled method names can be reported.
+
+**How the two macros meet (callback macro):**
+1. `#[module]` emits, next to the struct, a `macro_rules! __must_module_<Struct>` whose body holds the struct's whole declaration as tokens, made path-addressable with `pub(crate) use`.
+2. `#[methods]` doesn't generate code itself. It expands to an invocation of that macro (same path as the impl's self type, last segment replaced) with the impl block's tokens.
+3. The `macro_rules!` forwards both token sets to a hidden proc macro `__must_methods_impl!`. That macro sees the declaration and the methods, and generates:
+   - the dispatch;
+   - the implicit callbacks;
+   - `impl typed::Methods for X`, with which parameters have read and write methods and whether `start`/`poll` exist;
+   - every check, with its own message at the method's span: unknown `read_vlaue`, `write_` of a readonly parameter, a missing `do_<c>`.
+   
+   Signatures are checked by typed calls (`let v: f64 = …` / `write_target(v: f64)`), so a mismatch is rustc's type error, spanned to the method.
+4. **Missing or duplicate methods block.** The `TypedModule` impl from `#[module]` requires `X: typed::Methods`. That trait carries `#[diagnostic::on_unimplemented(message = "`{Self}` needs a `#[must_server::methods]` impl block")]`, so a missing block gets that message. Two blocks give conflicting `Methods` impls, which the docs explain.
+5. **Placement.** The methods block must be in the same crate as the struct, and name the struct by a path through which the struct's module is reachable. That's the normal case, and it's documented.
+
+**Other rules:**
+- **Interface classes.** The interface-class rules (required accessibles, writable `target`, `stop` without argument, `BUSY` in `status`) are checked by `#[module]`, which sees all declarations. `NodeBuilder::build` keeps checking them at runtime too, for hand-written modules.
+- **Hooks are found by name** in the block. There is no `hooks` flag and no `Hooks` trait.
+- **Prefixed helpers.** A helper with a `read_`/`write_`/`do_` name that isn't an accessible (e.g. `read_raw`) goes in another, unannotated impl block.
+
+*Alternatives considered:*
+- **An explicit `cached` flag, with a missing method as a compile error.** Rejected: it doesn't follow Frappy's rule, which the user asked for.
+- **The "inherent method shadows trait method" trick:** generate a trait with default `read_<p>` methods and let a user's inherent method win. It needs no second attribute, but a typo silently falls back to the stored value, and which methods exist is only known at runtime.
 
 ### Datainfo translation
 
@@ -104,8 +138,9 @@ pub trait SecopType: Sized + Clone + Send + 'static {
 
 - **Locking:** `TypedHandler<X: TypedModule>` holds `tokio::sync::Mutex<X>` and implements `ModuleHandler`. Every handler method locks, runs the generated dispatch inside the task-local scope, converts with `SecopType`, stores into the `Param` and returns the `Reading`. Since the module is not `concurrent_requests`, the actor already serializes requests, so the lock is never contended. It only provides `&mut self` safely.
 - **Send futures:** the generated dispatch boxes the user's futures as `Pin<Box<dyn Future + Send + '_>>`. A non-`Send` future (e.g. a `std` `MutexGuard` held across an `.await`) is reported at the generated call, which is spanned to the method. This is documented.
-- **`poll`:** without `hooks` it is not overridden, so the default (`ctx.read` per due parameter) keeps shared-read semantics. With `hooks` it locks and calls `Hooks::poll`, which publishes through `set`.
-- **`start`** runs in this order: bind every `Param`'s `Publisher` → `Hooks::start` → the initial writes in declaration order (`write_<p>(configured)`, the result stored and published, a failure logged and published with `Ctx::update_error`) → return. Configured values of cached parameters are set as `Parameter::initial_value` at construction, so no work is needed at start.
+- **`poll`:** without a `poll` method it is not overridden, so the default (`ctx.read` per due parameter) keeps shared-read semantics. With one, it locks and calls it, and it publishes through `set`.
+- **Implicit callbacks:** parameters without a read method are declared to the `Module` as cached (no polling, no startup reads, served from the cache). A `change` of a writable parameter without a write method is answered by the generated dispatch, which returns the value so the adapter stores and publishes it.
+- **`start`** runs in this order: bind every `Param`'s `Publisher` → the `start` method, if any → the initial writes in declaration order (`write_<p>(configured)`, the result stored and published, a failure logged and published with `Ctx::update_error`) → return. Configured values of readonly parameters without a read method are set as `Parameter::initial_value` at construction, so no work is needed at start.
 
 ### Construction: `Settings`
 
@@ -141,8 +176,8 @@ pub trait Settings {
 ## Risks / Trade-offs
 
 - [Proc-macro errors can be cryptic] → Every generated item is spanned to its declaration, the macro checks what it can before emitting code, and the UI tests pin the messages.
-- [Naming convention: a typo like `fn read_vlaue` gives "missing `read_value`" plus an unused-method warning, not "did you mean"] → The error names the expected method at the declaration, which is enough to spot the typo.
-- [`hooks` flag is easy to forget] → Without it, a user's `impl Hooks` gives a conflicting-impl error, which the docs explain. With it but without an impl, the error says that `Hooks` is not implemented.
+- [Implicit callbacks hide a forgotten `read_<p>`: the parameter quietly serves its stored value] → This is Frappy's rule, and what the user asked for. Misspelled names are still errors, and the docs and `describe` debugging show which parameters are served from the cache. A later `must check --verbose` could list them.
+- [The callback-macro handshake is unusual: a `macro_rules!` per module type, and path rules for where the methods block may live] → Generated names are prefixed `__must_`. The placement rule matches how modules are normally written. The UI tests cover a block in a child module and the *Missing methods block* message.
 - [`&mut self` rules out concurrent requests for typed modules] → Accepted for now. A later `&self` variant with interior mutability can add `concurrent_requests`.
 - [Task-local `Ctx` doesn't reach tasks spawned inside a method] → They publish through `Publisher` like any background task. The ordering guarantee applies only to the method's own task, which is documented.
 - [Generated code increases compile time] → One proc-macro crate with no heavy dependencies beyond `syn`.

@@ -83,14 +83,14 @@ A typed module SHALL be constructed from a module name, a description and a set 
 - **THEN** construction fails with an error naming `chanel`
 
 ### Requirement: Configured initial values
-A configured value of a cached parameter SHALL be its value when the node starts. A configured value of a writable parameter that is not cached SHALL be written with `write_<p>` when the node starts, after the start hook and before the startup reads. A configured value of a readonly parameter that is not cached, or of a constant parameter, SHALL be a construction error saying that the parameter cannot be configured.
+A configured value of a writable parameter SHALL be written with its write method when the node starts, after the start hook and before the startup reads; without a write method this stores it. A configured value of a readonly parameter without a read method SHALL be its value when the node starts. A configured value of a readonly parameter with a read method, or of a constant parameter, SHALL be a construction error saying that the parameter cannot be configured.
 
 #### Scenario: Target written at start
 - **WHEN** a `Drivable` module is constructed with the setting `target` 300.0 and the node starts
 - **THEN** `write_target(300.0)` is called once, after the start hook and before the first `read_value`
 
 #### Scenario: Configured readonly parameter
-- **WHEN** a module is constructed with the setting `value` 4.2
+- **WHEN** a module with a `read_value` method is constructed with the setting `value` 4.2
 - **THEN** construction fails with an error saying that `value` cannot be configured
 
 ### Requirement: Failing initial writes

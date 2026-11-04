@@ -8,7 +8,7 @@
 
 - [ ] 2.1 Implement `ModuleConfig` (consumed-key tracking; `get`/`get_or`/`get_opt` through serde; `error`), its `typed::Settings` implementation (errors at the key's span, or at the module table for a missing key), and `ConfigError`/`ConfigErrors` with locations, including the mapping of `typed::SettingsErrors`. Verify with unit tests for *Missing required setting*, *Wrong value type*, *Integer for a float* and *Type rejects a setting* (factory), and *Property from the config* and *Property value too long* (a test macro type).
 - [ ] 2.2 Implement `Registry` (`new`, `default`, `register::<T: TypedModule>`, `register_fn`, `ident(::ident)*` name checks, duplicate rejection, `names()` sorted). Verify with tests for *Duplicate type name* and *Invalid type name*.
-- [ ] 2.3 Write `must::sim::Temperature` and `must::sim::FlowController` with `#[must_server::module(Drivable)]` (properties `range`, `unit` and `settling_time` used in the datainfos; elapsed-time simulation; writable cached `pollinterval`), and register both in `Registry::default()`. Verify with runtime tests that serve a config: *Flow controller range* and *Simulated flow follows the target* (paused tokio time), and *Two instances of one type*.
+- [ ] 2.3 Write `must::sim::Temperature` and `must::sim::FlowController` with `#[must_server::module(Drivable)]` (properties `range`, `unit` and `settling_time` used in the datainfos; elapsed-time simulation; writable `pollinterval` without methods; a `#[must_server::methods]` block each), and register both in `Registry::default()`. Verify with runtime tests that serve a config: *Flow controller range* and *Simulated flow follows the target* (paused tokio time), and *Two instances of one type*.
 
 ## 3. Config loader
 

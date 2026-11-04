@@ -18,7 +18,7 @@ The library SHALL provide an attribute for a struct with named fields that decla
 - **THEN** compilation fails with an error at the attribute
 
 ### Requirement: Parameter declarations
-A field of the form `name: param!(description, datainfo, flags…)` SHALL declare a parameter named after the field, in field order. The flags SHALL be `writable`, `cached`, `constant = expr`, `default = expr`, `group = expr`, `visibility = expr`, `checkable`, `poll_interval = expr` and custom properties `_name = expr`. An unknown flag, a repeated flag, or `constant` together with `writable`, `cached` or `default` SHALL be a compile error at the flag.
+A field of the form `name: param!(description, datainfo, flags…)` SHALL declare a parameter named after the field, in field order. The flags SHALL be `writable`, `constant = expr`, `default = expr`, `group = expr`, `visibility = expr`, `checkable`, `poll_interval = expr` and custom properties `_name = expr`. An unknown flag, a repeated flag, or `constant` together with `writable` or `default` SHALL be a compile error at the flag.
 
 #### Scenario: Declared parameter in describe
 - **WHEN** a module declares `target: param!("setpoint", double(min = 0.0, max = 1500.0, unit = "K"), writable)`
@@ -101,19 +101,46 @@ A field without `param!`, `command!` or `property!` SHALL be the module's own st
 - **WHEN** a module has a plain field `driving: bool`
 - **THEN** the field is `false` after construction and `describe` has no accessible `driving`
 
-### Requirement: Behaviour methods
-The module type SHALL implement async methods taking `&mut self` and returning the type's `Result`: `read_<p>()` for every parameter that is neither cached nor constant, `write_<p>(value)` returning the value actually set for every writable parameter that is not cached, and `do_<c>([argument])` for every command. A missing method, or one with the wrong types, SHALL be a compile error naming the accessible.
+### Requirement: Methods block
+A module type SHALL have exactly one impl block with the methods attribute, which holds its behaviour methods: `read_<p>`, `write_<p>`, `do_<c>` and the hooks `start` and `poll`, as async methods taking `&mut self` and returning the type's `Result`. A module type without that block, or with two, SHALL be a compile error. Other methods in the block, and other impl blocks of the type, SHALL be ordinary Rust.
 
-#### Scenario: Missing read method
-- **WHEN** a module declares `sample: param!("sample temperature", double())` and has no `read_sample` method
-- **THEN** compilation fails with an error naming `read_sample`, at the `sample` declaration
+#### Scenario: Missing methods block
+- **WHEN** a module type has no impl block with the methods attribute
+- **THEN** compilation fails with an error saying that the type needs one
 
-### Requirement: Cached parameters without methods
-A cached parameter SHALL be served from its stored value without calling a method. A `change` of a writable cached parameter SHALL store the new value and reply with it without calling a method.
+#### Scenario: Helper method in the block
+- **WHEN** the methods block also contains `fn query(&mut self, cmd: &str)`
+- **THEN** compilation succeeds and `query` is not an accessible
 
-#### Scenario: Cached writable parameter
-- **WHEN** a module declares `tolerance: param!("convergence criterion", double(min = 0.0), writable, cached, default = 0.1)` and a client sends `change T:tolerance 0.2`
-- **THEN** the reply is `changed T:tolerance` with 0.2, a later `read` returns 0.2, and no method of the module is called
+### Requirement: Behaviour method names and signatures
+In the methods block, a `read_<x>` SHALL name a declared parameter, a `write_<x>` a declared writable parameter, and a `do_<x>` a declared command. `read_<p>()` SHALL return the parameter's Rust type, `write_<p>(value)` SHALL take and return it (the value actually set), and `do_<c>([argument])` SHALL take the argument type and return the result type, or `()`. A violation SHALL be a compile error at the method.
+
+#### Scenario: Misspelled method
+- **WHEN** the methods block has `read_vlaue` and the module declares `value` but no `vlaue`
+- **THEN** compilation fails with an error at `read_vlaue` saying that there is no parameter `vlaue`
+
+#### Scenario: Write method for a readonly parameter
+- **WHEN** the methods block has `write_value` and `value` is not writable
+- **THEN** compilation fails with an error at `write_value` saying that `value` is readonly
+
+#### Scenario: Wrong method signature
+- **WHEN** `target` is declared `double(…)` and the methods block has `async fn write_target(&mut self, t: i64) -> Result<i64>`
+- **THEN** compilation fails with a type mismatch error at `write_target` naming `f64`
+
+### Requirement: Implicit callbacks
+A parameter without a `read_<p>` method SHALL be served from its stored value, and SHALL NOT be polled or read at startup. A `change` of a writable parameter without a `write_<p>` method SHALL store the new value, publish it and reply with it. A command without a `do_<c>` method SHALL be a compile error naming the method.
+
+#### Scenario: Writable parameter without methods
+- **WHEN** a module declares `tolerance: param!("convergence criterion", double(min = 0.0), writable, default = 0.1)` with no `read_tolerance` or `write_tolerance`, and a client sends `change T:tolerance 0.2`
+- **THEN** the reply is `changed T:tolerance` with 0.2, activated clients receive the update, a later `read` returns 0.2, and no method of the module is called
+
+#### Scenario: Parameter without read method is not polled
+- **WHEN** a module declares `setpoint: param!("setpoint", double())` without `read_setpoint` and the module polls every second
+- **THEN** no poll of `setpoint` happens, and a `read` returns the last value set with `self.setpoint.set(…)`
+
+#### Scenario: Command without method
+- **WHEN** a module declares `stop: command!("stop")` and the methods block has no `do_stop`
+- **THEN** compilation fails with an error naming `do_stop`, at the `stop` declaration
 
 ### Requirement: Interface class checks
 The macro SHALL check the declarations against the interface class at compile time:
