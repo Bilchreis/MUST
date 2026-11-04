@@ -48,9 +48,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # release builds start without a cache, so nothing from other branches ends up in them
-      # SHALL-named libraries, import libraries, must-tui and headers
+      # SHALL-named libraries, import libraries, must, must-tui and headers
       - run: cargo xtask dist --target ${{ matrix.target }}
-      # exports against the headers, no Qt or C runtime DLLs, handles across both libraries
+      # exports against the headers, no Qt or C runtime DLLs, handles across both libraries,
+      # must and must-tui present and `must monitor` starting must-tui
       - run: cargo xtask check --target ${{ matrix.target }}
       - name: archive (Windows)
         if: runner.os == 'Windows'

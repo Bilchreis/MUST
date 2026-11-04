@@ -15,7 +15,8 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
   (`.\install.ps1` on Windows) installs both from a checkout into `~/.cargo/bin`, and
   `must update` installs the newest release (`vX.Y.Z` tag) from that checkout
   (`--tag v0.2.0` a given release, `--tag main` the latest commit on `main`).
-  `must-tui` also ships next to the libraries in `dist/<target>/`, and
+  `must` and `must-tui` also ship next to the libraries in `dist/<target>/` and the
+  release archives (download new releases there; `must update` needs a checkout), and
   `cargo run -p must-tui` runs it from the source tree.
 - **From a program:** `SECoP_S_initLibrary` with `bGUI` set, or
   `SECoP_S_showStatusWindow(1)`, opens it in a window of its own, as SHALL's flags opened

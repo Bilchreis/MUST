@@ -105,10 +105,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: dist-${{ matrix.target }}
-      # SHALL-named libraries, import libraries and headers
+      # SHALL-named libraries, import libraries, must, must-tui and headers
       - run: cargo xtask dist --target ${{ matrix.target }}
-      # exports against the headers, no Qt or C runtime DLLs, handles across both libraries
+      # exports against the headers, no Qt or C runtime DLLs, handles across both libraries,
+      # must and must-tui present and `must monitor` starting must-tui
       - run: cargo xtask check --target ${{ matrix.target }}
+      # a must from dist/ points to the Releases page instead of updating itself
+      - name: must update in dist/
+        shell: bash
+        run: |
+          ! dist/${{ matrix.target }}/must update 2> update.err
+          cat update.err
+          grep -q "release archive" update.err
       - uses: actions/upload-artifact@v5
         with:
           name: must-shall-${{ matrix.target }}

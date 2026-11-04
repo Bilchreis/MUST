@@ -38,12 +38,14 @@ fn tui() -> PathBuf {
 
 /// The checkout `must` was installed from: `MUST_CHECKOUT` when `must update` built it
 /// in a temporary worktree, else where it was built (`cargo install --path` builds in
-/// place).
-fn checkout() -> PathBuf {
-    option_env!("MUST_CHECKOUT").map_or_else(
-        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
-        PathBuf::from,
-    )
+/// place). `None` for a `must` from `dist/` or a release archive (`cargo xtask dist`
+/// sets `MUST_CHECKOUT` empty).
+fn checkout() -> Option<PathBuf> {
+    match option_env!("MUST_CHECKOUT") {
+        Some("") => None,
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
+    }
 }
 
 /// `"v1.2.3"` or `"1.2.3"` (a pre-release suffix is ignored) as numbers.
@@ -114,7 +116,15 @@ fn run(command: &mut Command) -> ExitCode {
 /// anything else that tag. It is built in a temporary worktree, so the checkout keeps
 /// its branch and local changes.
 fn update(tag: Option<&str>) -> ExitCode {
-    let root = checkout();
+    let Some(root) = checkout() else {
+        eprintln!(
+            "must: this must comes from a release archive; download new releases from \
+             {}/releases, or clone the repository and run install.sh \
+             (install.ps1 on Windows) to get `must update`",
+            env!("CARGO_PKG_REPOSITORY")
+        );
+        return ExitCode::FAILURE;
+    };
     if !root.join(".git").exists() {
         eprintln!(
             "must: {} is no longer a git checkout of must; clone it again and run \
@@ -178,12 +188,22 @@ fn update(tag: Option<&str>) -> ExitCode {
     }
 
     println!("Installing {name} (installed: {installed})");
+    install(&root, &rev, &name)
+}
+
+/// Builds `rev` of the checkout `root` in a temporary worktree and installs it.
+fn install(root: &Path, rev: &str, name: &str) -> ExitCode {
+    let git = || {
+        let mut git = Command::new("git");
+        git.arg("-C").arg(root);
+        git
+    };
     let worktree = std::env::temp_dir().join(format!("must-update-{}", std::process::id()));
     if !succeeds(
         git()
             .args(["worktree", "add", "--quiet", "--detach"])
             .arg(&worktree)
-            .arg(&rev),
+            .arg(rev),
     ) {
         eprintln!("must: cannot check out {name}; nothing was installed");
         return ExitCode::FAILURE;
@@ -197,7 +217,7 @@ fn update(tag: Option<&str>) -> ExitCode {
             // the tag's rust-toolchain.toml applies; the checkout's build cache is reused
             .current_dir(&worktree)
             .env("CARGO_TARGET_DIR", root.join("target"))
-            .env("MUST_CHECKOUT", &root),
+            .env("MUST_CHECKOUT", root),
     );
     #[cfg(windows)]
     if !installed {
