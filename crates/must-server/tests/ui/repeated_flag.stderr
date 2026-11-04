@@ -1,0 +1,5 @@
+error: `writable` is given twice
+ --> tests/ui/repeated_flag.rs:6:52
+  |
+6 |     target: param!("setpoint", double(), writable, writable),
+  |                                                    ^^^^^^^^

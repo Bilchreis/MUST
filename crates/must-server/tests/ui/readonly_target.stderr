@@ -1,0 +1,5 @@
+error: `target` must be a writable parameter for `Writable`: add the flag `writable`
+ --> tests/ui/readonly_target.rs:8:5
+  |
+8 |     target: param!("target", double()),
+  |     ^^^^^^

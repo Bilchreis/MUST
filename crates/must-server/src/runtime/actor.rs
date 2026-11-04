@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
 use serde_json::Value as Json;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -182,6 +182,8 @@ pub(crate) struct ModuleShared {
     changed: Notify,
     /// Signalled when a read has finished.
     read_finished: Notify,
+    /// Whether the start hook has finished (or the node stopped before).
+    started: watch::Sender<bool>,
 }
 
 /// Handle to send jobs to a module actor.
@@ -195,6 +197,13 @@ impl ActorHandle {
     /// The module's epoch now, to record when sending a [`Job::Read`].
     pub(crate) fn epoch(&self) -> u64 {
         self.shared.lock().epoch
+    }
+
+    /// Waits until the module's start hook has finished: requests served without the
+    /// handler, such as reads of cached parameters, wait for it too.
+    pub(crate) async fn started(&self) {
+        let mut started = self.shared.started.subscribe();
+        let _ = started.wait_for(|s| *s).await;
     }
 }
 
@@ -217,6 +226,7 @@ pub(crate) fn spawn_actor(
         state: Mutex::default(),
         changed: Notify::new(),
         read_finished: Notify::new(),
+        started: watch::Sender::new(false),
     });
     let actor = Arc::clone(&shared);
     tracker.spawn(async move {
@@ -227,6 +237,7 @@ pub(crate) fn spawn_actor(
             () = stop.cancelled() => false,
             () = actor.run_start() => true,
         };
+        actor.started.send_replace(true);
         if started {
             loop {
                 let (has_waiting, has_room) = actor.load();

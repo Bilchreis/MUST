@@ -46,7 +46,7 @@ impl<T: SecopType> Cell<T> {
     /// module (or the module is not bound yet), else through the publisher; before the
     /// node starts it is only stored.
     fn set(&self, value: T, via_request: bool) -> Result<(), SecopError> {
-        let encoded = value.to_value(&self.datainfo)?;
+        let encoded = super::value::produce(&self.name, &value, &self.datainfo)?;
         self.store(value);
         if via_request {
             let bound = self.publisher.get().map(Publisher::module);

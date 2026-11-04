@@ -1,0 +1,13 @@
+error[E0119]: conflicting implementations of trait `Methods` for type `M`
+  --> tests/ui/two_methods_blocks.rs:4:1
+   |
+ 4 | #[module]
+   | ^^^^^^^^^
+   | |
+   | first implementation here
+   | conflicting implementation for `M`
+...
+12 | #[methods]
+   | ---------- in this attribute macro expansion
+   |
+   = note: this error originates in the macro `::must_server::__methods_impl` which comes from the expansion of the attribute macro `methods` (in Nightly builds, run with -Z macro-backtrace for more info)

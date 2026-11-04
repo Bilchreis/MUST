@@ -1,0 +1,5 @@
+error: a constant parameter cannot be `writable` or have a `default`
+ --> tests/ui/constant_writable.rs:6:57
+  |
+6 |     serial: param!("serial number", string(), writable, constant = "SN-1"),
+  |                                                         ^^^^^^^^

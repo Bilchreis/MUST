@@ -145,7 +145,7 @@ pub fn module<X: TypedModule>(
 ) -> Result<Module, SettingsErrors> {
     let Some(description) = description.or(X::DEFAULT_DESCRIPTION) else {
         let mut error = settings.error(None, "the module needs a description".into());
-        error.module = name.to_owned();
+        name.clone_into(&mut error.module);
         return Err(SettingsErrors(vec![error]));
     };
     let declared = X::declare(name, description, &mut settings)?;
@@ -160,6 +160,7 @@ pub fn module<X: TypedModule>(
 /// A parameter declaration, as the module macro writes it.
 #[doc(hidden)]
 #[must_use]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ParamSpec<T> {
     name: &'static str,
     description: &'static str,
@@ -441,7 +442,7 @@ impl<'s> Declaring<'s> {
             } else if let Some(value) = self.decode(name, &json, &info) {
                 match T::from_value(&value, &info) {
                     Ok(v) if spec.writable && spec.has_write => {
-                        configured = Some(value).zip(Some(v))
+                        configured = Some(value).zip(Some(v));
                     }
                     Ok(v) => initial = Some(v),
                     Err(e) => self.error(Some(name), e.message),
@@ -608,6 +609,17 @@ fn no_such(what: &str, name: &str) -> SecopError {
     )
 }
 
+/// Checks the shape of a value a method produced for `parameter`.
+fn shaped(parameter: &str, value: Value, info: &DataInfo) -> Result<Value> {
+    super::value::check_shape(&value, info).map_err(|e| {
+        SecopError::new(
+            ErrorClass::InternalError,
+            format!("the value of `{parameter}` does not fit its datainfo: {e}"),
+        )
+    })?;
+    Ok(value)
+}
+
 fn param_of<'m, X: TypedModule>(module: &'m X, name: &str) -> Option<&'m dyn AnyParam> {
     module.params().into_iter().find(|p| p.name() == name)
 }
@@ -636,6 +648,7 @@ impl<X: TypedModule> TypedHandler<X> {
         } else {
             value
         };
+        let written = shaped(parameter, written, info)?;
         if let Some(param) = param_of(module, parameter) {
             param.store_value(&written)?;
         }
@@ -692,6 +705,7 @@ impl<X: TypedModule> ModuleHandler for TypedHandler<X> {
                 .ok_or_else(|| no_such("parameter", parameter))?
                 .current_value()?
         };
+        let value = shaped(parameter, value, info)?;
         if let Some(param) = param_of(&*module, parameter) {
             param.store_value(&value)?;
         }

@@ -1,0 +1,5 @@
+error: `SecopStruct` derives for a struct with named fields
+ --> tests/ui/struct_tuple_fields.rs:5:8
+  |
+5 | struct Pid(f64, f64);
+  |        ^^^

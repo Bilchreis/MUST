@@ -1,0 +1,31 @@
+error[E0277]: `M` needs a `#[must_server::methods]` impl block
+ --> tests/ui/missing_methods_block.rs:5:8
+  |
+5 | struct M {
+  |        ^ no `#[must_server::methods]` impl block for this module type
+  |
+help: the trait `Methods` is not implemented for `M`
+ --> tests/ui/missing_methods_block.rs:5:1
+  |
+5 | struct M {
+  | ^^^^^^^^
+  = note: put the module's read_/write_/do_ methods in an impl block annotated with `#[must_server::methods]`, even if it is empty
+note: required by a bound in `TypedModule`
+ --> src/typed/module.rs
+  |
+  | pub trait TypedModule: Methods + Sized {
+  |                        ^^^^^^^ required by this bound in `TypedModule`
+
+error[E0277]: `M` needs a `#[must_server::methods]` impl block
+ --> tests/ui/missing_methods_block.rs:4:1
+  |
+4 | #[module]
+  | ^^^^^^^^^ no `#[must_server::methods]` impl block for this module type
+  |
+help: the trait `Methods` is not implemented for `M`
+ --> tests/ui/missing_methods_block.rs:5:1
+  |
+5 | struct M {
+  | ^^^^^^^^
+  = note: put the module's read_/write_/do_ methods in an impl block annotated with `#[must_server::methods]`, even if it is empty
+  = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)

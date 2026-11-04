@@ -1,0 +1,7 @@
+error: `#[must_server::module]` applies to a struct with named fields
+ --> tests/ui/attribute_on_enum.rs:4:1
+  |
+4 | #[module(Readable)]
+  | ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)

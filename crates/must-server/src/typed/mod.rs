@@ -12,7 +12,9 @@ mod di;
 mod module;
 mod param;
 mod settings;
-mod value;
+#[doc(hidden)]
+pub mod support;
+pub(crate) mod value;
 
 pub use di::Di;
 pub use module::{
@@ -21,10 +23,14 @@ pub use module::{
 };
 pub use param::{AnyParam, Command, Param, ParamHandle};
 pub use settings::{Settings, SettingsError, SettingsErrors};
-pub use value::{Kind, STATUS_CODES, SecopType, Status, accepts, mismatch};
+pub use value::{Kind, STATUS_CODES, SecopType, Status, accepts, check_shape, mismatch};
+
+#[doc(hidden)]
+pub use must_types::{DataInfo, SecopError, Value};
 
 /// What module code usually needs: `use must_server::typed::prelude::*;`.
 pub mod prelude {
     pub use super::{Param, ParamHandle, Result, SecopType, Status};
+    pub use crate::{SecopEnum, SecopStruct, command, methods, module, param, property};
     pub use must_types::{ErrorClass, SecopError};
 }

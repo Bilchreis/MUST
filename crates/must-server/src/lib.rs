@@ -181,3 +181,41 @@ pub use model::{
     Parameter,
 };
 pub use runtime::{NODE_LOG_TARGET, RunningNode, StartError};
+
+#[doc(hidden)]
+pub use must_macros::__methods_impl;
+pub use must_macros::{SecopEnum, SecopStruct, methods, module};
+
+/// Declares a parameter of a [`module`] struct: `name: param!("description", datainfo,
+/// flags...)`. Only valid as the type of a field of a `#[must_server::module]` struct.
+#[macro_export]
+macro_rules! param {
+    ($($tokens:tt)*) => {
+        ::core::compile_error!(
+            "`param!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct"
+        )
+    };
+}
+
+/// Declares a command of a [`module`] struct: `name: command!("description", flags...)`.
+/// Only valid as the type of a field of a `#[must_server::module]` struct.
+#[macro_export]
+macro_rules! command {
+    ($($tokens:tt)*) => {
+        ::core::compile_error!(
+            "`command!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct"
+        )
+    };
+}
+
+/// Declares a config-only property of a [`module`] struct: `name: property!("description",
+/// datainfo, default = ...)`. Only valid as the type of a field of a
+/// `#[must_server::module]` struct.
+#[macro_export]
+macro_rules! property {
+    ($($tokens:tt)*) => {
+        ::core::compile_error!(
+            "`property!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct"
+        )
+    };
+}

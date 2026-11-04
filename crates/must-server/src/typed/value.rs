@@ -143,6 +143,66 @@ pub fn mismatch(what: &str, value: &Value, info: &DataInfo) -> SecopError {
     )
 }
 
+/// Checks the shape of a value a module produced against its datainfo: the lengths of
+/// arrays and blobs, through tuples, structs and arrays. Limits such as `min` and `max`
+/// are not checked: a node may report a measured value out of range.
+pub fn check_shape(value: &Value, info: &DataInfo) -> Result<(), String> {
+    match (value, info) {
+        (Value::Array(items), DataInfo::Array(a)) => {
+            let len = items.len() as u64;
+            if len > a.maxlen() || len < a.minlen() {
+                return Err(format!(
+                    "{len} elements, outside {}..={}",
+                    a.minlen(),
+                    a.maxlen()
+                ));
+            }
+            items.iter().enumerate().try_for_each(|(i, v)| {
+                check_shape(v, a.members()).map_err(|e| format!("[{i}]: {e}"))
+            })
+        }
+        (Value::Blob(bytes), DataInfo::Blob(b)) => {
+            let len = bytes.len() as u64;
+            if len > b.maxbytes() || len < b.minbytes() {
+                return Err(format!(
+                    "{len} bytes, outside {}..={}",
+                    b.minbytes(),
+                    b.maxbytes()
+                ));
+            }
+            Ok(())
+        }
+        (Value::Tuple(items), DataInfo::Tuple(t)) => items
+            .iter()
+            .zip(t.members())
+            .enumerate()
+            .try_for_each(|(i, (v, m))| check_shape(v, m).map_err(|e| format!("[{i}]: {e}"))),
+        (Value::Struct(items), DataInfo::Struct(s)) => items.iter().try_for_each(|(k, v)| {
+            s.members().get(k).map_or(Ok(()), |m| {
+                check_shape(v, m).map_err(|e| format!("{k}: {e}"))
+            })
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Converts `value` for `info` and checks its shape: the SECoP value a typed module
+/// publishes for `name`.
+pub(crate) fn produce<T: SecopType>(
+    name: &str,
+    value: &T,
+    info: &DataInfo,
+) -> Result<Value, SecopError> {
+    let v = value.to_value(info)?;
+    check_shape(&v, info).map_err(|e| {
+        SecopError::new(
+            ErrorClass::InternalError,
+            format!("the value of `{name}` does not fit its datainfo: {e}"),
+        )
+    })?;
+    Ok(v)
+}
+
 impl SecopType for f64 {
     const KINDS: &'static [Kind] = &[Kind::Double, Kind::Scaled];
 
@@ -170,6 +230,10 @@ impl SecopType for f64 {
 
     fn fallback() -> Self {
         0.0
+    }
+
+    fn datainfo() -> Option<DataInfo> {
+        DataInfo::double().build().ok()
     }
 }
 
@@ -213,6 +277,10 @@ macro_rules! integer {
                 Some((i64::from(<$t>::MIN), i64::from(<$t>::MAX)))
             }
 
+            fn datainfo() -> Option<DataInfo> {
+                DataInfo::int(i64::from(<$t>::MIN), i64::from(<$t>::MAX)).build().ok()
+            }
+
             fn to_byte(&self) -> Option<u8> {
                 u8::try_from(*self).ok().filter(|_| $byte)
             }
@@ -240,6 +308,10 @@ impl SecopType for bool {
     fn fallback() -> Self {
         false
     }
+
+    fn datainfo() -> Option<DataInfo> {
+        DataInfo::bool().build().ok()
+    }
 }
 
 impl SecopType for String {
@@ -258,6 +330,10 @@ impl SecopType for String {
 
     fn fallback() -> Self {
         Self::new()
+    }
+
+    fn datainfo() -> Option<DataInfo> {
+        DataInfo::string().build().ok()
     }
 }
 
@@ -342,6 +418,11 @@ macro_rules! tuple {
 
             fn fallback() -> Self {
                 ($($t::fallback(),)+)
+            }
+
+            fn datainfo() -> Option<DataInfo> {
+                let members = [$($t::datainfo()?),+];
+                DataInfo::tuple(members.iter()).build().ok()
             }
         }
     };
@@ -492,6 +573,12 @@ impl SecopType for Status {
     fn fallback() -> Self {
         Self::idle("")
     }
+
+    fn datainfo() -> Option<DataInfo> {
+        super::Di::status(&["DISABLED", "IDLE", "WARN", "BUSY", "ERROR"])
+            .build()
+            .ok()
+    }
 }
 
 #[cfg(test)]
@@ -499,10 +586,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[allow(clippy::needless_pass_by_value)]
     fn di(json: serde_json::Value) -> DataInfo {
         DataInfo::from_json(&json).unwrap()
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn round_trip<T: SecopType + PartialEq + std::fmt::Debug>(v: T, info: &DataInfo) {
         let value = v.to_value(info).unwrap();
         assert_eq!(T::from_value(&value, info).unwrap(), v);

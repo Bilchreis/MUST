@@ -29,7 +29,7 @@ quote = "1"
 serde = "1"
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 socket2 = { version = "0.6", features = ["all"] }
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }

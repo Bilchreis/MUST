@@ -1,0 +1,15 @@
+error: `param!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct
+ --> tests/ui/stray_param.rs:5:12
+  |
+5 |     let x: param!("x", double()) = 1.0;
+  |            ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `param` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+ --> tests/ui/stray_param.rs:5:36
+  |
+5 |     let x: param!("x", double()) = 1.0;
+  |            ---------------------   ^^^ expected `()`, found floating-point number
+  |            |
+  |            expected due to this

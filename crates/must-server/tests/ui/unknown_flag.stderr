@@ -1,0 +1,5 @@
+error: unknown parameter flag `writeable`; use writable, constant, default, group, visibility, checkable, poll_interval or a custom `_name`
+ --> tests/ui/unknown_flag.rs:6:42
+  |
+6 |     target: param!("setpoint", double(), writeable),
+  |                                          ^^^^^^^^^
