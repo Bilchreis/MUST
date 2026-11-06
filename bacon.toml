@@ -1,0 +1,46 @@
+#:schema https://dystroy.org/bacon/.bacon.schema.json
+
+# bacon (https://dystroy.org/bacon/) reruns a job on every change. The jobs below run the
+# checks CI runs. `bacon` starts clippy; the keys c, t and d switch to clippy, test and doc,
+# r runs the example node, ctrl-j lists all jobs. `bacon test -- -p must-server` tests one
+# crate.
+
+default_job = "clippy"
+env.CARGO_TERM_COLOR = "always"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets"]
+need_stdout = false
+
+# as the lint job in CI
+[jobs.clippy]
+command = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+need_stdout = false
+
+# tests must not open real status TUIs, as in CI
+[jobs.test]
+command = ["cargo", "test", "--workspace"]
+need_stdout = true
+env.MUST_TUI = "0"
+
+# broken intra-doc links fail, as in CI
+[jobs.doc]
+command = ["cargo", "doc", "--workspace", "--no-deps"]
+need_stdout = false
+env.RUSTDOCFLAGS = "-D warnings"
+
+[jobs.fmt]
+command = ["cargo", "fmt", "--all", "--check"]
+need_stdout = true
+
+# the example SEC node on port 2055, restarted on every change
+[jobs.node]
+command = ["cargo", "run", "--example", "simple_node", "--", "127.0.0.1:2055"]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+
+[keybindings]
+d = "job:doc"
+r = "job:node"

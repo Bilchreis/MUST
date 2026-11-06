@@ -13,16 +13,17 @@ env:
 
 jobs:
   lint:
-    name: fmt, clippy, licenses
+    name: fmt, clippy, cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # advisories are checked in the Advisories workflow
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check licenses
+          command: check licenses bans sources
 
   docs:
     name: API docs and guide
@@ -100,6 +101,36 @@ jobs:
           } finally {
             Stop-Process $node
           }
+
+  # line coverage of the Linux test run, reported in the job summary; not a gate
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup component add llvm-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: coverage
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Xvfb and xterm
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb xterm
+      - run: cargo llvm-cov --workspace --exclude xtask --lcov --output-path lcov.info
+      - name: summary
+        run: |
+          {
+            echo '## Line coverage'
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lcov
+          path: lcov.info
 
   dist:
     name: dist ${{ matrix.target }}
