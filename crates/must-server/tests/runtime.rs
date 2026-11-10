@@ -359,7 +359,12 @@ async fn activation_neither_loses_nor_repeats_updates() {
         let previous = initial.insert(spec.clone(), data);
         assert!(previous.is_none(), "{spec} sent twice before active");
     }
-    let mut last = initial["t2:value"][0].as_f64().unwrap_or(0.0);
+    // the pushed values are 1, 2, ...; any other snapshot value (the initial 4.2) means
+    // the client activated before the first push
+    let mut last = initial["t2:value"][0]
+        .as_f64()
+        .filter(|v| v.fract() == 0.0 && *v >= 1.0)
+        .unwrap_or(0.0);
     while last < f64::from(PUSHES) {
         let (action, spec, data) = parse(&c.line().await);
         if action != "update" || spec != "t2:value" {
