@@ -152,9 +152,8 @@ async fn follow(
     tx: mpsc::UnboundedSender<Msg>,
     mut requests: mpsc::UnboundedReceiver<Traffic>,
 ) -> Outcome {
-    let send = |msg| {
-        let _ = tx.send(Msg::Endpoint { key, msg });
-    };
+    // false once the app is gone
+    let send = |msg| tx.send(Msg::Endpoint { key, msg }).is_ok();
     let connection = match tokio::time::timeout(
         Duration::from_secs(5),
         client::connect(&registration, &options),
@@ -183,7 +182,9 @@ async fn follow(
         tokio::select! {
             message = events.next() => {
                 let Ok(Some(message)) = message else { break };
-                send(EndpointMsg::Message(message));
+                if !send(EndpointMsg::Message(message)) {
+                    break;
+                }
             }
             request = requests.recv() => {
                 let Some(Traffic { node, enabled }) = request else { break };

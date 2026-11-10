@@ -29,16 +29,16 @@ use std::path::Path;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 
-/// The default for [`Options::max_line_length`]: 64 MiB, room for the snapshot of a
-/// process with many large nodes.
-pub const DEFAULT_MAX_LINE_LENGTH: usize = 64 << 20;
-
 use crate::protocol::{
     ClientMessage, Event, NodeId, ProcessInfo, ServerMessage, Snapshot, UpdateMode,
     protocol_version, to_line,
 };
 use crate::registry::{self, Listed, Registration, RegistryError};
 use crate::transport::{self, Stream};
+
+/// The default for [`Options::max_line_length`]: 64 MiB, room for the snapshot of a
+/// process with many large nodes.
+pub const DEFAULT_MAX_LINE_LENGTH: usize = 64 << 20;
 
 /// Reading an endpoint failed.
 #[derive(Debug, Error)]
@@ -72,7 +72,8 @@ pub struct Options {
     pub client: String,
     /// Interval of coalesced parameter updates in seconds; `None` for the default 1 s.
     pub update_interval: Option<f64>,
-    /// The longest message line accepted from the endpoint, in bytes. A longer one is a
+    /// The longest message line accepted from the endpoint, in bytes, counting its
+    /// terminating LF. A longer one is a
     /// [`ClientError::Protocol`] and ends the connection, instead of growing a buffer
     /// without limit.
     pub max_line_length: usize,
@@ -380,6 +381,19 @@ mod tests {
         assert!(matches!(err, ClientError::Protocol(m) if m.contains("longer than")));
         // the stream cannot be framed any more
         assert!(matches!(events.next().await, Err(ClientError::Protocol(_))));
+    }
+
+    #[tokio::test]
+    async fn a_line_cut_off_by_the_end_is_a_protocol_error() {
+        let (mut events, mut endpoint) = events(DEFAULT_MAX_LINE_LENGTH);
+        let line = lagged_line(3);
+        endpoint
+            .write_all(&line.as_bytes()[..line.len() / 2])
+            .await
+            .unwrap();
+        drop(endpoint);
+        assert!(matches!(events.next().await, Err(ClientError::Protocol(_))));
+        assert_eq!(events.next().await.unwrap(), None);
     }
 
     #[tokio::test]

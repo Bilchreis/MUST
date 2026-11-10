@@ -14,6 +14,11 @@
 //! the cache under the connections lock too. Reading a cached value needs only the
 //! cache lock, so reads do not wait for updates being queued. Whoever takes both takes
 //! the connections lock first.
+//!
+//! A reply answered from the cache (a `read` of a cached parameter) is not ordered
+//! against updates: the value is read, then the reply queued, in two steps, so an update
+//! with a newer value may be queued in between and arrive before the reply carrying the
+//! older one. Both carry their timestamps.
 
 mod actor;
 mod connection;
@@ -262,8 +267,8 @@ pub(crate) struct Hub {
     /// while stopped, fed by every published value of that parameter.
     poll_intervals: HashMap<String, watch::Sender<Option<Duration>>>,
     /// Connections that asked for log events of some module; changed under the
-    /// connections lock,
-    /// read without it so that a record nobody asked for costs one check.
+    /// connections lock, read without it so that a record nobody asked for costs one
+    /// check.
     logging: AtomicUsize,
 }
 

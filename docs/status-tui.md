@@ -21,8 +21,9 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
   `cargo run -p must-tui` runs it from the source tree.
 - **From a program:** `SECoP_S_initLibrary` with `bGUI` set, or
   `SECoP_S_showStatusWindow(1)`, opens it in a window of its own, as SHALL's flags opened
-  the status window. Rust programs call `must_server::show_status_tui()`. Nothing
-  happens if a TUI already runs, and the call never fails or waits.
+  the status window. Rust programs call `must_launch::show_status_tui()` (crate
+  `must-launch`). Nothing happens if a TUI already runs, and the call never fails or
+  waits.
   - **Windows:** a new console window. Closing it ends only the TUI, never LabVIEW or
     your program.
   - **Linux:** a terminal emulator, when there is a graphical session (`DISPLAY` or
