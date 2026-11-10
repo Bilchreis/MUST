@@ -26,13 +26,14 @@ use tokio::process::Command;
 /// `secop-check` or `uv run --project /src/secop-checker secop-check`.
 pub const COMMAND_VAR: &str = "MUST_SECOP_CHECK";
 
-/// The checker command when [`COMMAND_VAR`] is not set: the checker's `work` branch, run
-/// with `uvx`.
+/// The checker command when [`COMMAND_VAR`] is not set: a pinned commit of the checker's
+/// `work` branch (the one with the JSON output), run with `uvx`. A pinned commit is
+/// reproducible, and once `uvx` has it cached the check works offline.
 // TODO: switch to the checker's main branch (or a release) once it has the JSON output
 pub const DEFAULT_COMMAND: &[&str] = &[
     "uvx",
     "--from",
-    "git+https://github.com/SampleEnvironment/secop-checker@work",
+    "git+https://github.com/SampleEnvironment/secop-checker@895648c067b2ed5e1aa476b79678c300cbb5267f",
     "secop-check",
 ];
 

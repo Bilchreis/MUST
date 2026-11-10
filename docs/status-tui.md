@@ -96,8 +96,9 @@ checked when the detail view first shows it and again when its description chang
 already has: it does not connect to the node.
 
 `secop-check` is a Python program. By default the TUI runs it with
-[uv](https://docs.astral.sh/uv/) (`uvx`), which fetches it from its repository on first
-use, so only uv needs to be installed. `MUST_SECOP_CHECK` names another command, e.g.
+[uv](https://docs.astral.sh/uv/) (`uvx`), which fetches a pinned commit from its repository
+on first use and runs it from its cache after that, offline too, so only uv needs to be
+installed. `MUST_SECOP_CHECK` names another command, e.g.
 `secop-check` installed with `pipx` or `uv tool install`, or
 `uv run --project /src/secop-checker secop-check` for a checkout; the TUI appends
 `--json --version 2.0 -` and writes the description to its stdin. Without uv or the
@@ -109,6 +110,6 @@ command, the section says the check could not run.
 |---|---|
 | `MUST_TUI` | path of `must-tui` (or the folder holding it), for programs that open the TUI; `0` turns opening it off (e.g. on unattended machines whose programs set `bGUI`) |
 | `MUST_TUI_TERMINAL` | Linux: terminal command to open the TUI in; the TUI's command line is appended, e.g. `alacritty -e` |
-| `MUST_SECOP_CHECK` | the [SECoP checker](#secop-check) command, split at spaces; default `uvx --from git+https://github.com/SampleEnvironment/secop-checker@work secop-check` |
+| `MUST_SECOP_CHECK` | the [SECoP checker](#secop-check) command, split at spaces; default `uvx --from git+https://github.com/SampleEnvironment/secop-checker@895648c067b2ed5e1aa476b79678c300cbb5267f secop-check` (a pinned commit of the checker's `work` branch) |
 | `NO_COLOR` | no colors |
 | `MUST_MONITOR_DIR` | registry directory of the monitoring endpoints (see [monitoring-protocol.md](monitoring-protocol.md)) |
