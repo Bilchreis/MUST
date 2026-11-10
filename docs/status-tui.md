@@ -46,7 +46,7 @@ default). Only one `must-tui` runs per user; a second one says so and exits.
 | View | Shows |
 |---|---|
 | 1 Overview | every process (name, pid, MUST version) with its nodes: context ID, address (wide terminals), state (`building`, `failed`, `running`, `stopped`, `gone`), clients, messages per second, the most severe module status |
-| 2 Detail | the selected node: state, address, context ID, the log file it writes (or that it writes none), build errors and warnings, every module with its status and every parameter's value (formatted with its unit), age or error, and the connected clients |
+| 2 Detail | the selected node: state, address, context ID, the log file it writes (or that it writes none), build errors and warnings, every module with its status and every parameter's value (formatted with its unit), age or error, the [SECoP check](#secop-check) of its description, and the connected clients |
 | 3 Traffic | the selected node's messages, live: time, `>` received or `<` sent, client, text; `…[cut]` marks messages shortened to 4 KiB. The node sends them only while this view is open. Remote logging's `log` events are not shown: their records are in the Logs view. |
 | 4 Logs | log records of all processes, merged by time: what the nodes log about themselves and what applications log for a module (`Ctx::log`, `SECoP_S_logMessage`) at error, warning or info; application debug records are not shown. Filters by level, node, process and text |
 
@@ -73,6 +73,7 @@ behind (`lagged`), could not be reached, or speaks an unsupported protocol versi
 | Esc | back to the overview |
 | / | filter (traffic, logs): Enter keeps it, Esc clears it |
 | p | pause / resume the traffic view |
+| c | check the node's description again (detail) |
 | l | log level: all, INFO+, WARN+, ERROR |
 | n | logs of the selected node only, or of all |
 | o | logs of the selected process only, or of all |
@@ -83,11 +84,32 @@ behind (`lagged`), could not be reached, or speaks an unsupported protocol versi
 `?` shows the same list in the TUI. Pausing the traffic view keeps receiving: the title
 counts the new messages, and resuming shows them.
 
+## SECoP check
+
+The detail view checks the selected node's description (its `describe` reply) against
+the SECoP 2.0 specification with
+[`secop-check`](https://github.com/SampleEnvironment/secop-checker) and lists what it
+finds, most severe first: `fatal`, `error`, `warning`, `hint`, each with the module or
+accessible it concerns. The section's title counts the findings, or says `ok`. A node is
+checked when the detail view first shows it and again when its description changes;
+`c` checks it again. The checker runs in the background on the description the TUI
+already has: it does not connect to the node.
+
+`secop-check` is a Python program. By default the TUI runs it with
+[uv](https://docs.astral.sh/uv/) (`uvx`), which fetches a pinned commit from its repository
+on first use and runs it from its cache after that, offline too, so only uv needs to be
+installed. `MUST_SECOP_CHECK` names another command, e.g.
+`secop-check` installed with `pipx` or `uv tool install`, or
+`uv run --project /src/secop-checker secop-check` for a checkout; the TUI appends
+`--json --version 2.0 -` and writes the description to its stdin. Without uv or the
+command, the section says the check could not run.
+
 ## Environment variables
 
 | Variable | Meaning |
 |---|---|
 | `MUST_TUI` | path of `must-tui` (or the folder holding it), for programs that open the TUI; `0` turns opening it off (e.g. on unattended machines whose programs set `bGUI`) |
 | `MUST_TUI_TERMINAL` | Linux: terminal command to open the TUI in; the TUI's command line is appended, e.g. `alacritty -e` |
+| `MUST_SECOP_CHECK` | the [SECoP checker](#secop-check) command, split at spaces; default `uvx --from git+https://github.com/SampleEnvironment/secop-checker@895648c067b2ed5e1aa476b79678c300cbb5267f secop-check` (a pinned commit of the checker's `work` branch) |
 | `NO_COLOR` | no colors |
 | `MUST_MONITOR_DIR` | registry directory of the monitoring endpoints (see [monitoring-protocol.md](monitoring-protocol.md)) |
