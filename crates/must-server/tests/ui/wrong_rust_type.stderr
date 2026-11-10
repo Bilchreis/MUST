@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: the Rust type `String` does not fit a `double` datainfo
+ --> tests/ui/wrong_rust_type.rs:6:40
+  |
+6 |     value: param!("value", double() as String),
+  |                                        ^^^^^^ evaluation of `_` failed here

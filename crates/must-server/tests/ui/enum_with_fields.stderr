@@ -1,0 +1,5 @@
+error: `SecopEnum` derives for a field-less enum: this variant has fields
+ --> tests/ui/enum_with_fields.rs:6:5
+  |
+6 |     Ramp(f64),
+  |     ^^^^

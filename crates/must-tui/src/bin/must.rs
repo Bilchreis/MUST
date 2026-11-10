@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! `must`: the command line entry point. `must monitor` runs the status TUI
-//! (`must-tui`), found next to this executable or else on `PATH`. `must update` installs
+//! (`must-tui`), found next to this executable or else on `PATH`. `must serve`, `must check`
+//! and `must types` serve and check node config files with the built-in module types
+//! (`must_config::cli`). `must update` installs
 //! the latest release (the highest `vX.Y.Z` tag), a given tag or `main` in the checkout
 //! `must` was installed from, without changing what that checkout has checked out. It
 //! fetches them from the public repository over HTTPS, which needs no credentials.
@@ -22,6 +24,9 @@ usage: must <command> [arguments]
 
 commands:
   monitor [--focus-pid <pid>]  show all MUST nodes of this user (the status TUI)
+  serve <config.toml>          serve the SEC node declared in a config file
+  check <config.toml>          check a config file and list its modules
+  types                        list the module types a config can use
   update [--tag <tag>]         install the latest release, if newer than this one;
                                with --tag: that release (e.g. v0.2.0), `latest` or
                                `main` (the latest commit on main)
@@ -77,6 +82,10 @@ fn main() -> ExitCode {
             (Some("--tag"), None, _) => usage_error("--tag needs a tag, e.g. v0.2.0 or main"),
             (Some(arg), ..) => usage_error(&format!("unknown argument {arg:?} to update")),
         },
+        Some(command @ ("serve" | "check" | "types")) => must_config::cli::run(
+            &must_config::Registry::default(),
+            std::iter::once(command.to_owned()).chain(args),
+        ),
         Some("--version") => {
             println!("must {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

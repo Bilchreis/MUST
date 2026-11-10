@@ -1,0 +1,39 @@
+error[E0308]: mismatched types
+  --> tests/ui/wrong_signature.rs:11:14
+   |
+ 9 | #[methods]
+   | ---------- in this attribute macro expansion
+10 | impl M {
+11 |     async fn write_target(&mut self, t: i64) -> Result<i64> {
+   |              ^^^^^^^^^^^^
+   |              |
+   |              expected `i64`, found `f64`
+   |              arguments to this method are incorrect
+   |
+note: method defined here
+  --> tests/ui/wrong_signature.rs:11:14
+   |
+11 |     async fn write_target(&mut self, t: i64) -> Result<i64> {
+   |              ^^^^^^^^^^^^            ------
+   = note: this error originates in the macro `::must_server::__methods_impl` which comes from the expansion of the attribute macro `methods` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui/wrong_signature.rs:11:14
+   |
+ 4 | #[module]
+   | --------- arguments to this function are incorrect
+...
+ 9 | #[methods]
+   | ---------- in this attribute macro expansion
+10 | impl M {
+11 |     async fn write_target(&mut self, t: i64) -> Result<i64> {
+   |              ^^^^^^^^^^^^ expected `&f64`, found `&i64`
+   |
+   = note: expected reference `&f64`
+              found reference `&i64`
+note: function defined here
+  --> src/typed/support.rs
+   |
+   | pub fn encode_as<T: SecopType>(
+   |        ^^^^^^^^^
+   = note: this error originates in the macro `::must_server::__methods_impl` which comes from the expansion of the attribute macro `methods` (in Nightly builds, run with -Z macro-backtrace for more info)

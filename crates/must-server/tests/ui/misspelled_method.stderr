@@ -1,0 +1,5 @@
+error: `M` has no parameter `vlaue` for `read_vlaue` to read
+  --> tests/ui/misspelled_method.rs:11:14
+   |
+11 |     async fn read_vlaue(&mut self) -> Result<f64> {
+   |              ^^^^^^^^^^

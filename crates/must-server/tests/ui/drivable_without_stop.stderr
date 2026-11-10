@@ -1,0 +1,5 @@
+error: `Drivable` needs a command `stop`
+ --> tests/ui/drivable_without_stop.rs:5:8
+  |
+5 | struct M {
+  |        ^

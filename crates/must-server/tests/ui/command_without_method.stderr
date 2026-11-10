@@ -1,0 +1,10 @@
+error: the command `stop` needs a method `do_stop` in the `#[must_server::methods]` block
+ --> tests/ui/command_without_method.rs:6:5
+  |
+6 |     stop: command!("stop"),
+  |     ^^^^
+...
+9 | #[methods]
+  | ---------- in this attribute macro expansion
+  |
+  = note: this error originates in the macro `__must_module_M` which comes from the expansion of the attribute macro `methods` (in Nightly builds, run with -Z macro-backtrace for more info)

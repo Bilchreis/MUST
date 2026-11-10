@@ -29,5 +29,10 @@ changes and implemented in this order:
 11. `add-matrix-datatype` – the SECoP 2.0 matrix data type (`must-types`, done)
 12. `add-check-message` – answers to SECoP `check` requests (`must-server`, done)
 13. `add-logging-messages` – SECoP remote logging (`must-server`, done)
+14. `add-module-macro` – modules declared as one struct with `#[must_server::module]`
+    and Frappy-style `read_`/`write_`/`do_` methods (`must-server`, `must-macros`, done)
+15. `add-node-config-files` – nodes declared in TOML config files, many modules of one
+    type through templates, and `must serve`/`check`/`types` (`must-config`, done;
+    [issue #59](https://github.com/Bilchreis/MUST/issues/59))
 
 SHALL's client library (`SECoP_C_*`) is out of scope.

@@ -72,6 +72,42 @@
 //!
 //! See `examples/simple_node.rs` for a complete simulated temperature controller.
 //!
+//! # Typed modules
+//!
+//! [`module`] and [`methods`] declare a module as one struct, with one line per
+//! accessible and datainfos in SECoP's own names, and its behaviour as `read_<p>`,
+//! `write_<p>` and `do_<c>` methods. A parameter without a read method is served from its
+//! stored value; a writable one without a write method stores changes. See
+//! `docs/writing-modules.md` and [`typed`].
+//!
+//! ```
+//! use must_server::typed::prelude::*;
+//! use must_server::{NodeBuilder, typed};
+//!
+//! #[module(Readable, description = "sample thermometer")]
+//! struct Thermometer {
+//!     value: param!("temperature", double(min = 0.0, unit = "K")),
+//!     status: param!("status", status(IDLE, ERROR)),
+//!     offset: param!("calibration offset", double(unit = "K"), writable, default = 0.0),
+//! }
+//!
+//! #[methods]
+//! impl Thermometer {
+//!     async fn read_value(&mut self) -> Result<f64> {
+//!         Ok(4.2 + self.offset.get()) // ask the hardware here
+//!     }
+//! }
+//!
+//! # fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+//! let t1 = typed::module::<Thermometer>("t1", None, serde_json::json!({"offset": 0.1}))?;
+//! let node = NodeBuilder::new("HZB-example", "an example node")
+//!     .bind("127.0.0.1:0".parse()?)
+//!     .module(t1)?
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # Polling
 //!
 //! A node polls its modules and sends every result to activated clients as an update,
@@ -167,6 +203,7 @@ pub mod monitor;
 mod protocol;
 mod report;
 mod runtime;
+pub mod typed;
 
 pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
@@ -180,3 +217,41 @@ pub use model::{
     Parameter,
 };
 pub use runtime::{NODE_LOG_TARGET, RunningNode, StartError};
+
+#[doc(hidden)]
+pub use must_macros::__methods_impl;
+pub use must_macros::{SecopEnum, SecopStruct, methods, module};
+
+/// Declares a parameter of a [`module`] struct: `name: param!("description", datainfo,
+/// flags...)`. Only valid as the type of a field of a `#[must_server::module]` struct.
+#[macro_export]
+macro_rules! param {
+    ($($tokens:tt)*) => {
+        ::core::compile_error!(
+            "`param!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct"
+        )
+    };
+}
+
+/// Declares a command of a [`module`] struct: `name: command!("description", flags...)`.
+/// Only valid as the type of a field of a `#[must_server::module]` struct.
+#[macro_export]
+macro_rules! command {
+    ($($tokens:tt)*) => {
+        ::core::compile_error!(
+            "`command!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct"
+        )
+    };
+}
+
+/// Declares a config-only property of a [`module`] struct: `name: property!("description",
+/// datainfo, default = ...)`. Only valid as the type of a field of a
+/// `#[must_server::module]` struct.
+#[macro_export]
+macro_rules! property {
+    ($($tokens:tt)*) => {
+        ::core::compile_error!(
+            "`property!` is only valid in a module declaration: as the type of a field of a `#[must_server::module]` struct"
+        )
+    };
+}
