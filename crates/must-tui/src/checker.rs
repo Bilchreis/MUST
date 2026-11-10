@@ -112,8 +112,13 @@ pub fn command() -> Vec<String> {
     }
 }
 
-/// Runs `command` (with [`ARGUMENTS`]) on `structure`.
+/// Runs `command` (with [`ARGUMENTS`]) on `structure`, for at most [`TIMEOUT`].
 pub async fn check(command: &[String], structure: &Json) -> Outcome {
+    check_within(command, structure, TIMEOUT).await
+}
+
+/// Runs `command` (with [`ARGUMENTS`]) on `structure`, for at most `timeout`.
+pub async fn check_within(command: &[String], structure: &Json, timeout: Duration) -> Outcome {
     let Some((program, args)) = command.split_first() else {
         return Err("no checker command".to_owned());
     };
@@ -132,14 +137,24 @@ pub async fn check(command: &[String], structure: &Json) -> Outcome {
             ),
             _ => format!("cannot run {program}: {e}"),
         })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let text = structure.to_string();
-        // a checker that exits early closes stdin; its output tells why
-        let _ = stdin.write_all(text.as_bytes()).await;
-    }
-    let output = tokio::time::timeout(TIMEOUT, child.wait_with_output())
+    let stdin = child.stdin.take();
+    let text = structure.to_string();
+    // stdin is written while stdout and stderr are read, so a checker that writes before
+    // it has read everything cannot block both sides; the timeout covers all of it
+    let feed = async move {
+        if let Some(mut stdin) = stdin {
+            // a checker that exits early closes stdin; its output tells why
+            let _ = stdin.write_all(text.as_bytes()).await;
+            // dropping stdin closes it: the checker reads to the end
+        }
+    };
+    let exchange = async {
+        let ((), output) = tokio::join!(feed, child.wait_with_output());
+        output
+    };
+    let output = tokio::time::timeout(timeout, exchange)
         .await
-        .map_err(|_| format!("the checker took longer than {}s", TIMEOUT.as_secs()))?
+        .map_err(|_| format!("the checker took longer than {}s", timeout.as_secs()))?
         .map_err(|e| format!("cannot run {program}: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let diagnostics = parse(&stdout);
@@ -241,6 +256,31 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error, "no such version");
+    }
+
+    /// A report larger than the pipe buffers: a checker that writes before it reads
+    /// works, and one that never reads runs into the timeout instead of hanging.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn large_reports_do_not_block() {
+        let report = serde_json::json!({"description": "x".repeat(1 << 20)});
+        let writes_first = vec![
+            "sh".into(),
+            "-c".into(),
+            "head -c 1048576 /dev/zero | tr '\\0' x; echo; cat > /dev/null".into(),
+        ];
+        let found = check_within(&writes_first, &report, Duration::from_secs(20))
+            .await
+            .unwrap();
+        assert!(found.is_empty());
+
+        let never_reads = vec!["sh".into(), "-c".into(), "sleep 30".into()];
+        let started = std::time::Instant::now();
+        let error = check_within(&never_reads, &report, Duration::from_millis(500))
+            .await
+            .unwrap_err();
+        assert!(error.contains("took longer"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     /// The real checker through `uvx` (needs uv and the network): a minimal node that

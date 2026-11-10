@@ -486,6 +486,32 @@ fn detail_check_failures_and_many_findings() {
     );
     assert!(shown.contains("… 13 more"), "{shown}");
 
+    // narrow: words wrap whole (one 22-letter word per row here), and a finding shown is
+    // shown to its end
+    let (id, _) = check_of(&press(&mut app, KeyCode::Char('c'))).unwrap();
+    let words = |end: &str| format!("{} {end}", ["abcdefghijklmnopqrstuv"; 4].join(" "));
+    app.update(checked(
+        id,
+        Ok(vec![
+            diagnostic(
+                Severity::Error,
+                &["SECNode", "Module t1"],
+                &words("endoffirstfinding00001"),
+            ),
+            diagnostic(
+                Severity::Error,
+                &["SECNode", "Module t1"],
+                &words("endofsecondfinding0002"),
+            ),
+        ]),
+    ));
+    let shown = screen(&app, 44, 40);
+    assert!(shown.contains("endoffirstfinding00001"), "{shown}");
+    assert!(
+        shown.contains("… 1 more") && !shown.contains("endofsecond"),
+        "{shown}"
+    );
+
     // no section for a node without a description
     press(&mut app, KeyCode::Right); // magnet
     assert!(!screen(&app, 100, 30).contains("SECoP check"));

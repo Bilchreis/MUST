@@ -439,9 +439,13 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
 /// has the counts.
 const MAX_CHECK_ROWS: usize = 8;
 
-/// Rows `line` takes when wrapped at `width` characters (at least, as words wrap whole).
+/// Rows `line` takes when wrapped at `width` columns, as the section draws it.
 fn rows_of(line: &Line, width: usize) -> usize {
-    line.width().div_ceil(width.max(1)).max(1)
+    let width = u16::try_from(width).unwrap_or(u16::MAX).max(1);
+    Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .max(1)
 }
 
 /// The SECoP check section of the detail view: title and lines; none without a
