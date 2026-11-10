@@ -172,6 +172,10 @@ The C tests use SHALL's `bGUI` flag and open the status TUI (on Linux, in a term
 window when there is a graphical session). Run them with `MUST_TUI=0` to keep it closed,
 as CI does.
 
+With [bacon](https://dystroy.org/bacon/) (`cargo install --locked bacon`), the checks CI
+runs rerun on every change: `bacon` starts clippy, `bacon test` the tests with
+`MUST_TUI=0`. The jobs are in `bacon.toml`.
+
 Build the SHALL-named libraries, their headers, `must` and `must-tui` into
 `dist/<target>/`:
 

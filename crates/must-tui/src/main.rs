@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use must_monitor::client::Options;
 use must_monitor::registry;
-use must_tui::app::{App, Msg};
-use must_tui::{discovery, terminal, ui};
+use must_tui::app::{App, Effect, Msg};
+use must_tui::{checker, discovery, terminal, ui};
 use ratatui::crossterm::event::{self, Event};
 use tokio::sync::mpsc;
 
@@ -17,6 +17,8 @@ const USAGE: &str = "\
 usage: must-tui [--focus-pid <pid>]
 
 Shows all MUST SEC nodes running for this user. Press ? for help, q to quit.
+The detail view checks the node's description with secop-check (run with uvx,
+or the command in MUST_SECOP_CHECK).
 
   --focus-pid <pid>  select the first node of this process once it appears
   --version          print the version
@@ -143,6 +145,7 @@ async fn run(
                 }
             }
         })?;
+    let checked_tx = tx.clone();
     let ticker_tx = tx;
     tokio::spawn(async move {
         let mut ticks = tokio::time::interval(Duration::from_millis(250));
@@ -156,16 +159,40 @@ async fn run(
 
     let mut app = App::new(now(), focus_pid);
     let theme = ui::Theme::from_env();
+    let check_command = checker::command();
+    let apply = |app: &mut App, msg: Msg| {
+        for effect in app.update(msg) {
+            match effect {
+                Effect::Check {
+                    key,
+                    node,
+                    id,
+                    structure,
+                } => {
+                    let command = check_command.clone();
+                    let checked_tx = checked_tx.clone();
+                    tokio::spawn(async move {
+                        let outcome = checker::check(&command, &structure).await;
+                        let _ = checked_tx.send(Msg::Checked {
+                            key,
+                            node,
+                            id,
+                            outcome,
+                        });
+                    });
+                }
+                Effect::Traffic { .. } => {
+                    let _ = effects_tx.send(effect);
+                }
+            }
+        }
+    };
     tui.draw(|frame| ui::draw(frame, &app, theme))?;
     while let Some(msg) = rx.recv().await {
-        for effect in app.update(msg) {
-            let _ = effects_tx.send(effect);
-        }
+        apply(&mut app, msg);
         // apply whatever else is queued before drawing once
         while let Ok(msg) = rx.try_recv() {
-            for effect in app.update(msg) {
-                let _ = effects_tx.send(effect);
-            }
+            apply(&mut app, msg);
         }
         if app.quit {
             break;

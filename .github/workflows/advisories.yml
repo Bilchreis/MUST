@@ -1,0 +1,23 @@
+name: Advisories
+
+# RustSec advisories against Cargo.lock (cargo-deny, configured in deny.toml). Kept out of
+# CI so that a newly published advisory does not fail unrelated pull requests: runs when the
+# dependencies change and weekly.
+on:
+  push:
+    paths: [Cargo.lock, "**/Cargo.toml", deny.toml, .github/workflows/advisories.yml]
+  pull_request:
+    paths: [Cargo.lock, "**/Cargo.toml", deny.toml, .github/workflows/advisories.yml]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
