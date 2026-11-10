@@ -272,7 +272,7 @@ mod tests {
         let found = check_within(&writes_first, &report, Duration::from_secs(20))
             .await
             .unwrap();
-        assert!(found.is_empty());
+        assert_eq!(found, Vec::new());
 
         let never_reads = vec!["sh".into(), "-c".into(), "sleep 30".into()];
         let started = std::time::Instant::now();
