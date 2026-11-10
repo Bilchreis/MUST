@@ -403,7 +403,8 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     // the section gets what the modules (at least 5 rows) and the clients leave, up to
     // MAX_CHECK_ROWS rows inside its borders
     let free = usize::from(area.height.saturating_sub(5 + clients_height + 2));
-    let check = check_lines(node, area.width, free.min(MAX_CHECK_ROWS), theme);
+    // no room for a single row: no section (the overview still shows the node)
+    let check = check_lines(node, area.width, free.min(MAX_CHECK_ROWS), theme).filter(|_| free > 0);
     let inner = usize::from(area.width.saturating_sub(2)).max(1);
     let check_height = check.as_ref().map_or(0, |(_, lines)| {
         let rows: usize = lines.iter().map(|l| rows_of(l, inner)).sum();
@@ -509,8 +510,14 @@ fn check_lines(
         }) {
             lines.push(line.clone());
         }
+        if lines.is_empty() {
+            // the most severe finding is shown, cut if it alone is too long
+            lines.push(all[0].clone());
+        }
         let more = all.len() - lines.len();
-        lines.push(Line::styled(format!("… {more} more"), theme.dim()));
+        if more > 0 {
+            lines.push(Line::styled(format!("… {more} more"), theme.dim()));
+        }
         lines
     };
     Some((format!("{title}: {}", check_counts(diagnostics)), lines))

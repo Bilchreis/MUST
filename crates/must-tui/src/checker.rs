@@ -10,6 +10,9 @@
 //! be installed; `MUST_SECOP_CHECK` names another command, e.g. an installed
 //! `secop-check`. The checker only sees the structure report: it does not connect to the
 //! node.
+//!
+//! A check that runs into [`TIMEOUT`] kills the command it started. A process that
+//! command started in turn (the Python interpreter that `uvx` runs) may outlive it.
 
 use std::io::ErrorKind;
 use std::process::Stdio;
@@ -158,6 +161,16 @@ pub async fn check_within(command: &[String], structure: &Json, timeout: Duratio
         .map_err(|e| format!("cannot run {program}: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let diagnostics = parse(&stdout);
+    // output that is not diagnostics must not pass for a description without findings,
+    // e.g. after a change of the checker's output format
+    if diagnostics.is_empty()
+        && let Some(line) = stdout.lines().find(|l| !l.trim().is_empty())
+    {
+        return Err(format!(
+            "unexpected output of {program}: {}",
+            line.chars().take(200).collect::<String>()
+        ));
+    }
     if !output.status.success() && diagnostics.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let reason = stderr
@@ -256,6 +269,18 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error, "no such version");
+
+        // output that is not diagnostics is not a description without findings
+        let error = check(
+            &fake("usage: secop-check [-h]", "", 0),
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("unexpected output") && error.contains("usage"),
+            "{error}"
+        );
     }
 
     /// A report larger than the pipe buffers: a checker that writes before it reads
@@ -267,7 +292,7 @@ mod tests {
         let writes_first = vec![
             "sh".into(),
             "-c".into(),
-            "head -c 1048576 /dev/zero | tr '\\0' x; echo; cat > /dev/null".into(),
+            "head -c 1048576 /dev/zero | tr '\\0' x >&2; cat > /dev/null".into(),
         ];
         let found = check_within(&writes_first, &report, Duration::from_secs(20))
             .await

@@ -519,6 +519,28 @@ fn detail_check_failures_and_many_findings() {
         "{shown}"
     );
 
+    // one finding too long for the rows there are is shown cut, not left out
+    let (id, _) = check_of(&press(&mut app, KeyCode::Char('c'))).unwrap();
+    app.update(checked(
+        id,
+        Ok(vec![diagnostic(
+            Severity::Error,
+            &["SECNode", "Module t1"],
+            &format!("startofthelongfinding {}", "word ".repeat(200)),
+        )]),
+    ));
+    let shown = screen(&app, 60, 40);
+    assert!(
+        shown.contains("startofthelongfinding") && !shown.contains("more"),
+        "{shown}"
+    );
+    // no room at all: no section, the clients keep their rows
+    let shown = screen(&app, 100, 13);
+    assert!(
+        !shown.contains("SECoP check") && shown.contains("Clients (1)"),
+        "{shown}"
+    );
+
     // no section for a node without a description
     press(&mut app, KeyCode::Right); // magnet
     assert!(!screen(&app, 100, 30).contains("SECoP check"));
