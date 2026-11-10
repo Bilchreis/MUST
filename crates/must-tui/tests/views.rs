@@ -485,6 +485,13 @@ fn detail_check_failures_and_many_findings() {
         "{shown}"
     );
     assert!(shown.contains("… 13 more"), "{shown}");
+    // a short terminal: fewer rows, still with the count of those left out
+    let shown = screen(&app, 100, 20);
+    assert!(
+        shown.contains("hint     hint 5") && !shown.contains("hint 6 "),
+        "{shown}"
+    );
+    assert!(shown.contains("… 14 more"), "{shown}");
 
     // narrow: words wrap whole (one 22-letter word per row here), and a finding shown is
     // shown to its end

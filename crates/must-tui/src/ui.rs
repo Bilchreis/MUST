@@ -400,11 +400,14 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     } else {
         u16::try_from(clients.min(5)).unwrap_or(5) + 3
     };
-    let check = check_lines(node, area.width, theme);
+    // the section gets what the modules (at least 5 rows) and the clients leave, up to
+    // MAX_CHECK_ROWS rows inside its borders
+    let free = usize::from(area.height.saturating_sub(5 + clients_height + 2));
+    let check = check_lines(node, area.width, free.min(MAX_CHECK_ROWS), theme);
     let inner = usize::from(area.width.saturating_sub(2)).max(1);
     let check_height = check.as_ref().map_or(0, |(_, lines)| {
         let rows: usize = lines.iter().map(|l| rows_of(l, inner)).sum();
-        u16::try_from(rows.min(MAX_CHECK_ROWS)).unwrap_or(0) + 2
+        u16::try_from(rows.min(free.min(MAX_CHECK_ROWS))).unwrap_or(0) + 2
     });
     let [top, middle, bottom] = Layout::vertical([
         Constraint::Min(5),
@@ -450,7 +453,12 @@ fn rows_of(line: &Line, width: usize) -> usize {
 
 /// The SECoP check section of the detail view: title and lines; none without a
 /// structure report.
-fn check_lines(node: &Node, width: u16, theme: Theme) -> Option<(String, Vec<Line<'static>>)> {
+fn check_lines(
+    node: &Node,
+    width: u16,
+    max_rows: usize,
+    theme: Theme,
+) -> Option<(String, Vec<Line<'static>>)> {
     node.info.structure.as_ref()?;
     let title = "SECoP check";
     let Some(check) = &node.check else {
@@ -489,7 +497,7 @@ fn check_lines(node: &Node, width: u16, theme: Theme) -> Option<(String, Vec<Lin
         .map(|d| diagnostic_line(d, theme))
         .collect();
     let total: usize = all.iter().map(|l| rows_of(l, room)).sum();
-    let lines = if total <= MAX_CHECK_ROWS {
+    let lines = if total <= max_rows {
         all
     } else {
         // as many findings as fit, and a row saying how many are left out
@@ -497,7 +505,7 @@ fn check_lines(node: &Node, width: u16, theme: Theme) -> Option<(String, Vec<Lin
         let mut rows = 0;
         for line in all.iter().take_while(|l| {
             rows += rows_of(l, room);
-            rows < MAX_CHECK_ROWS
+            rows < max_rows
         }) {
             lines.push(line.clone());
         }
