@@ -9,6 +9,13 @@
 //! `must-tui` use to discover and read endpoints. The endpoint itself is part of
 //! `must-server`.
 
+/// File name of the status TUI executable, `must-tui`.
+pub const TUI_EXECUTABLE: &str = if cfg!(windows) {
+    "must-tui.exe"
+} else {
+    "must-tui"
+};
+
 pub mod client;
 pub mod platform;
 pub mod protocol;

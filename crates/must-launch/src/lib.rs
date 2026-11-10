@@ -30,11 +30,7 @@ pub const TUI_VARIABLE: &str = "MUST_TUI";
 pub const TERMINAL_VARIABLE: &str = "MUST_TUI_TERMINAL";
 
 /// File name of the TUI executable.
-pub const EXECUTABLE: &str = if cfg!(windows) {
-    "must-tui.exe"
-} else {
-    "must-tui"
-};
+pub const EXECUTABLE: &str = must_monitor::TUI_EXECUTABLE;
 
 /// What [`launch`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]

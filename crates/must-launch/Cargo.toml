@@ -1,0 +1,16 @@
+[package]
+name = "must-launch"
+description = "Opens the MUST status TUI in a window of its own, for SHALL's status window flags"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+must-monitor.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -687,6 +687,7 @@ version = "0.2.2"
 dependencies = [
  "async-trait",
  "base64",
+ "must-launch",
  "must-server",
  "must-types",
  "serde_json",
@@ -713,6 +714,14 @@ dependencies = [
  "libloading",
  "must-monitor",
  "tokio",
+]
+
+[[package]]
+name = "must-launch"
+version = "0.2.2"
+dependencies = [
+ "must-monitor",
+ "tracing",
 ]
 
 [[package]]
@@ -753,6 +762,7 @@ dependencies = [
  "chrono",
  "indexmap",
  "insta",
+ "must-launch",
  "must-monitor",
  "must-server",
  "must-types",

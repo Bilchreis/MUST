@@ -16,7 +16,7 @@ use must_monitor::registry;
 #[test]
 #[ignore = "run in a child process"]
 fn launcher() {
-    println!("outcome {:?}", must_server::launcher::launch());
+    println!("outcome {:?}", must_launch::launch());
 }
 
 fn installed(program: &str) -> bool {
