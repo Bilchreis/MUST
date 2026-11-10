@@ -68,6 +68,8 @@ pub async fn run(
                         let _ = link.requests.send(Traffic { node, enabled });
                     }
                 }
+                // run by the main loop
+                Some(Effect::Check { .. }) => {}
                 None => break,
             },
         }

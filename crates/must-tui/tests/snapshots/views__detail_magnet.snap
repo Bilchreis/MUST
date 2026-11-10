@@ -21,4 +21,4 @@ expression: shown
 "┌ Clients (0) ─────────────────────────────────────────────────────────────────────────────────────┐"
 "│ID   ADDRESS                  CONNECTED  ACTIVATED                                                │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
-" ↑↓ scroll · ←→ node · Tab views · ? help · q quit                                                  "
+" ↑↓ scroll · ←→ node · c check · Tab views · ? help · q quit                                        "
