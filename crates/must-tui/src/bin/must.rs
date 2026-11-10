@@ -29,10 +29,7 @@ commands:
   --version                    print the version
   --help                       print this text";
 
-#[cfg(windows)]
-const TUI: &str = "must-tui.exe";
-#[cfg(not(windows))]
-const TUI: &str = "must-tui";
+use must_monitor::TUI_EXECUTABLE as TUI;
 
 /// `must-tui` next to this executable (as `cargo install` and `dist/` put them), else
 /// the bare name, looked up on `PATH`.

@@ -154,6 +154,7 @@ CI builds and tests on all three.
 | `crates/must-types` | SECoP 2.0 datainfo, values, identifiers and parameter postfixes |
 | `crates/must-server` | SEC node library: declare a node, connect hardware handlers, serve it over TCP |
 | `crates/must-monitor` | Monitoring protocol, per-user registry of endpoints, local transport and client library |
+| `crates/must-launch` | Opens `must-tui` in a window of its own, for SHALL's status window flags |
 | `crates/must-tui` | `must-tui`, the terminal UI showing all MUST nodes of the user, and the `must` command |
 | `crates/must-ffi` | SHALL's C interface (`SECoP_S_*`, `SECoP_V_*`), built as `SHALLserver64`/`32` |
 | `crates/must-ffi-variant` | `SHALLvariant64`/`32`, forwarding to `SHALLserver` |

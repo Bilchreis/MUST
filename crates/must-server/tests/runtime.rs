@@ -327,6 +327,56 @@ async fn initial_updates_before_active() {
     push.await.unwrap();
 }
 
+/// While values are pushed during `activate`, a client gets every parameter exactly once
+/// before `active`, and afterwards every later value exactly once and in order: none is
+/// lost or repeated across the activation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn activation_neither_loses_nor_repeats_updates() {
+    const PUSHES: u32 = 2000;
+    let n = start(node(Arc::new(Sim::default())));
+    let pusher = n.clone();
+    let mut c = Client::connect(n.local_addr()).await;
+    let push = tokio::spawn(async move {
+        for i in 1..=PUSHES {
+            pusher
+                .update("t2", "value", Value::Double(f64::from(i)))
+                .unwrap();
+            if i % 16 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+    });
+    c.send("activate").await;
+
+    let mut initial = std::collections::HashMap::new();
+    loop {
+        let line = c.line().await;
+        if line == "active" {
+            break;
+        }
+        let (action, spec, data) = parse(&line);
+        assert_eq!(action, "update", "{line}");
+        let previous = initial.insert(spec.clone(), data);
+        assert!(previous.is_none(), "{spec} sent twice before active");
+    }
+    // the pushed values are 1, 2, ...; any other snapshot value (the initial 4.2) means
+    // the client activated before the first push
+    let mut last = initial["t2:value"][0]
+        .as_f64()
+        .filter(|v| v.fract() == 0.0 && *v >= 1.0)
+        .unwrap_or(0.0);
+    while last < f64::from(PUSHES) {
+        let (action, spec, data) = parse(&c.line().await);
+        if action != "update" || spec != "t2:value" {
+            continue;
+        }
+        let value = data[0].as_f64().unwrap();
+        assert_eq!(value, last + 1.0, "an update was lost or repeated");
+        last = value;
+    }
+    push.await.unwrap();
+}
+
 // --- 4.5 polling and pushes
 
 #[tokio::test]

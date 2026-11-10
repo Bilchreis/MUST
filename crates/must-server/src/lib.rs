@@ -160,7 +160,6 @@
 pub mod discovery;
 pub mod events;
 pub mod handler;
-pub mod launcher;
 pub mod logfiles;
 pub mod model;
 pub mod monitor;
@@ -170,7 +169,6 @@ mod runtime;
 
 pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
-pub use launcher::show_status_tui;
 
 pub use handler::{
     AppLogLevel, CallResult, CheckResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading,

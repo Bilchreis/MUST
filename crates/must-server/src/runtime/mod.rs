@@ -3,9 +3,22 @@
 //! The running node: shared state ([`Hub`]), module actors, connections.
 //!
 //! Ordering rests on one rule: every message for a connection is put into that
-//! connection's outgoing queue while holding the hub lock, and module actors publish a
-//! request's side effects before they hand the result to the connection, which only
-//! then queues its reply. Updates therefore always precede the reply they belong to.
+//! connection's outgoing queue while holding the hub's connections lock, and module
+//! actors publish a request's side effects before they hand the result to the
+//! connection, which only then queues its reply. Updates therefore always precede the
+//! reply they belong to.
+//!
+//! The hub has two locks: one for the connections and one (a read-write lock) for the
+//! value cache. The cache is changed only while also holding the connections lock, so
+//! queueing an update and storing its value are one step for `activate`, which reads
+//! the cache under the connections lock too. Reading a cached value needs only the
+//! cache lock, so reads do not wait for updates being queued. Whoever takes both takes
+//! the connections lock first.
+//!
+//! A reply answered from the cache (a `read` of a cached parameter) is not ordered
+//! against updates: the value is read, then the reply queued, in two steps, so an update
+//! with a newer value may be queued in between and arrive before the reply carrying the
+//! older one. Both carry their timestamps.
 
 mod actor;
 mod connection;
@@ -14,7 +27,7 @@ mod node;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::Duration;
 
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, data_report};
@@ -232,9 +245,9 @@ impl ConnSink {
 /// `&str`; entries are shared so that reading one does not copy its value.
 type Cache = HashMap<String, HashMap<String, Arc<CacheEntry>>>;
 
+/// The connections of a node, behind the hub's connections lock.
 #[derive(Default)]
-struct HubState {
-    cache: Cache,
+struct Connections {
     conns: HashMap<ConnectionId, ConnSink>,
     next_id: ConnectionId,
 }
@@ -243,15 +256,19 @@ struct HubState {
 pub(crate) struct Hub {
     pub model: Arc<NodeModel>,
     pub report: Arc<str>,
-    state: Mutex<HubState>,
+    /// The connections lock; see the module documentation for how it relates to `cache`.
+    state: Mutex<Connections>,
+    /// The cache lock: changed only while holding the connections lock too.
+    cache: RwLock<Cache>,
     pub events: broadcast::Sender<NodeEvent>,
     /// The log file the node writes now (see [`crate::logfiles`]).
     log_file: Mutex<Option<std::path::PathBuf>>,
     /// Fast poll interval of each module driven by a `pollinterval` parameter, `None`
     /// while stopped, fed by every published value of that parameter.
     poll_intervals: HashMap<String, watch::Sender<Option<Duration>>>,
-    /// Connections that asked for log events of some module; changed under the hub lock,
-    /// read without it so that a record nobody asked for costs one check.
+    /// Connections that asked for log events of some module; changed under the
+    /// connections lock, read without it so that a record nobody asked for costs one
+    /// check.
     logging: AtomicUsize,
 }
 
@@ -268,9 +285,9 @@ fn poll_interval_of(value: &Value) -> Option<Duration> {
 
 impl Hub {
     pub(crate) fn new(model: Arc<NodeModel>, report: Arc<str>) -> Self {
-        let mut state = HubState::default();
+        let mut cache = Cache::new();
         for (mname, module) in &model.modules {
-            let entries = state.cache.entry(mname.clone()).or_default();
+            let entries = cache.entry(mname.clone()).or_default();
             for (pname, param) in module.parameters() {
                 if let Some(value) = &param.initial
                     && let Ok(json) = param.datainfo.encode(value)
@@ -289,7 +306,7 @@ impl Hub {
             .iter()
             .filter(|(_, m)| m.poll.driven)
             .map(|(name, m)| {
-                let start = match cache_get(&state.cache, name, POLLINTERVAL) {
+                let start = match cache_get(&cache, name, POLLINTERVAL) {
                     Some(CacheEntry::Value { value, .. }) => poll_interval_of(value),
                     _ => m.poll.fast,
                 };
@@ -300,7 +317,8 @@ impl Hub {
         Self {
             model,
             report,
-            state: Mutex::new(state),
+            state: Mutex::new(Connections::default()),
+            cache: RwLock::new(cache),
             events,
             log_file: Mutex::new(None),
             poll_intervals,
@@ -318,12 +336,22 @@ impl Hub {
             .map(watch::Sender::subscribe)
     }
 
-    fn lock(&self) -> MutexGuard<'_, HubState> {
-        // a panic while holding the lock leaves consistent data (all updates are
-        // single map operations), so poisoning is ignored
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    // a panic while holding a lock leaves consistent data (all updates are single map
+    // operations), so poisoning is ignored
+
+    /// Takes the connections lock.
+    fn lock(&self) -> MutexGuard<'_, Connections> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes the cache lock for reading.
+    fn read_cache(&self) -> RwLockReadGuard<'_, Cache> {
+        self.cache.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes the cache lock for writing. The caller must hold the connections lock.
+    fn write_cache(&self, _connections: &Connections) -> RwLockWriteGuard<'_, Cache> {
+        self.cache.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn emit(&self, event: NodeEvent) {
@@ -358,7 +386,7 @@ impl Hub {
     /// node and module as fields), as a [`NodeEvent::Log`] and, for a module's record, as
     /// a `log` event to the connections that asked for it.
     ///
-    /// Must not be called while holding the hub lock.
+    /// Must not be called while holding the connections lock.
     pub(crate) fn log(&self, level: LogLevel, module: Option<&str>, message: String) {
         let node = self.model.equipment_id.as_str();
         let m = module.unwrap_or_default();
@@ -389,7 +417,7 @@ impl Hub {
     /// [`NodeEvent::Log`], so that debug output stays out of the status display and the
     /// log files.
     ///
-    /// Must not be called while holding the hub lock.
+    /// Must not be called while holding the connections lock.
     pub(crate) fn log_debug(&self, module: &str, message: &str) {
         let node = self.model.equipment_id.as_str();
         tracing::debug!(target: NODE_LOG_TARGET, node, module, "{message}");
@@ -514,10 +542,12 @@ impl Hub {
     /// cache and then the `active` reply.
     pub(crate) fn activate(&self, id: ConnectionId, module: Option<&str>) {
         let mut state = self.lock();
-        let HubState { cache, conns, .. } = &mut *state;
-        let Some(conn) = conns.get_mut(&id) else {
+        let Some(conn) = state.conns.get_mut(&id) else {
             return;
         };
+        // under the connections lock, so no update is queued between these and the
+        // reply, and none is missed
+        let cache = self.read_cache();
         match module {
             None => {
                 conn.activation.all = true;
@@ -536,12 +566,13 @@ impl Hub {
                 if param.constant.is_some() {
                     continue;
                 }
-                if let Some(entry) = cache_get(cache, mname, pname) {
+                if let Some(entry) = cache_get(&cache, mname, pname) {
                     conn.push(update_line(mname, pname, entry).into(), false);
                 }
             }
         }
         conn.push(protocol::activation(true, module).into(), false);
+        drop(cache);
         drop(state);
         self.emit(NodeEvent::ClientActivated {
             id,
@@ -576,12 +607,12 @@ impl Hub {
 
     /// The cached state of a parameter, shared with the cache.
     pub(crate) fn cached(&self, module: &str, parameter: &str) -> Option<Arc<CacheEntry>> {
-        self.lock().cache.get(module)?.get(parameter).cloned()
+        self.read_cache().get(module)?.get(parameter).cloned()
     }
 
     /// The cached value of a parameter, if it has one.
     pub(crate) fn cached_value(&self, module: &str, parameter: &str) -> Option<Value> {
-        match cache_get(&self.lock().cache, module, parameter) {
+        match cache_get(&self.read_cache(), module, parameter) {
             Some(CacheEntry::Value { value, .. }) => Some(value.clone()),
             _ => None,
         }
@@ -688,14 +719,17 @@ impl Hub {
                     conn.push(line.clone(), true);
                 }
             }
-            let entries = match state.cache.get_mut(module) {
-                Some(entries) => entries,
-                None => state.cache.entry(module.to_owned()).or_default(),
-            };
-            match entries.get_mut(parameter) {
-                Some(slot) => *slot = Arc::new(entry),
-                None => {
-                    entries.insert(parameter.to_owned(), Arc::new(entry));
+            {
+                let mut cache = self.write_cache(&state);
+                let entries = match cache.get_mut(module) {
+                    Some(entries) => entries,
+                    None => cache.entry(module.to_owned()).or_default(),
+                };
+                match entries.get_mut(parameter) {
+                    Some(slot) => *slot = Arc::new(entry),
+                    None => {
+                        entries.insert(parameter.to_owned(), Arc::new(entry));
+                    }
                 }
             }
             for id in &overflowing {

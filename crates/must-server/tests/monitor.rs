@@ -300,8 +300,8 @@ async fn coalesced_and_every_update() {
     let _serial = serial();
     let n = start(Arc::new(Sim::default()));
     let mut m = monitor(Options {
-        client: "test".into(),
         update_interval: Some(0.3),
+        ..Options::new("test")
     })
     .await;
     let node = m.snapshot().nodes[0].id;

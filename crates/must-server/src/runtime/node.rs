@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use must_types::SecopError;
@@ -29,6 +29,7 @@ use crate::model::{Node, PollSource};
 
 /// A node could not be started.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StartError {
     /// The listening address could not be bound, e.g. because the port is in use.
     #[error("cannot listen on {addr}: {source}")]
@@ -38,6 +39,10 @@ pub enum StartError {
         /// The operating system's error.
         source: io::Error,
     },
+    /// The runtime [`Node::start`] runs nodes on could not be created, e.g. because
+    /// the operating system refused to create its worker threads.
+    #[error("cannot create the MUST runtime: {0}")]
+    Runtime(#[source] io::Error),
 }
 
 /// A node serving clients. Dropping the handle does not stop the node; call
@@ -64,15 +69,27 @@ pub struct RunningNode {
 
 /// The runtime used by [`Node::start`], created on first use and never shut down: its
 /// worker threads stay (idle) until the process exits.
-fn shared_runtime() -> &'static Runtime {
+///
+/// Creation can fail (the operating system may refuse threads); the error is returned
+/// and the next call tries again.
+fn shared_runtime() -> Result<&'static Runtime, StartError> {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("must-node")
-            .build()
-            .expect("cannot create the MUST runtime")
-    })
+    // serialises creation, so two first callers never both build (and one then drop) a
+    // runtime; dropping one inside an async context would panic
+    static CREATING: Mutex<()> = Mutex::new(());
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("must-node")
+        .build()
+        .map_err(StartError::Runtime)?;
+    Ok(RUNTIME.get_or_init(|| runtime))
 }
 
 impl Node {
@@ -86,7 +103,7 @@ impl Node {
     /// threads, run nodes on a runtime you control with [`spawn`](Self::spawn) and shut
     /// it down after [`RunningNode::stop`].
     pub fn start(self) -> Result<RunningNode, StartError> {
-        self.spawn(shared_runtime().handle())
+        self.spawn(shared_runtime()?.handle())
     }
 
     /// Starts serving on the given tokio runtime.
