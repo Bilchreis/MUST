@@ -759,7 +759,6 @@ dependencies = [
  "ratatui",
  "serde_json",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

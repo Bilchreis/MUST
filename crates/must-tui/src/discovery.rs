@@ -16,7 +16,6 @@ use must_monitor::protocol::NodeId;
 use must_monitor::registry::{EndpointStatus, Registration};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_util::task::AbortOnDropHandle;
 
 use crate::app::{Effect, EndpointMsg, Msg, ProcessKey};
 
@@ -179,31 +178,15 @@ async fn follow(
     let (process, snapshot, mut events, mut writer) = connection.into_parts();
     send(EndpointMsg::Connected { process, snapshot });
 
-    // reading in its own task: a read must not be cancelled halfway through a line. It
-    // ends with this one, also when the scan aborts this task: a dropped `JoinHandle`
-    // would leave it running, connected, until the endpoint closes.
-    let reader_tx = tx.clone();
-    let mut reader = AbortOnDropHandle::new(tokio::spawn(async move {
-        while let Ok(Some(message)) = events.next().await {
-            if reader_tx
-                .send(Msg::Endpoint {
-                    key,
-                    msg: EndpointMsg::Message(message),
-                })
-                .is_err()
-            {
-                break;
-            }
-        }
-    }));
+    // `Events::next` is cancellation safe, so a request may interrupt a read
     loop {
         tokio::select! {
-            _ = &mut reader => break,
+            message = events.next() => {
+                let Ok(Some(message)) = message else { break };
+                send(EndpointMsg::Message(message));
+            }
             request = requests.recv() => {
-                let Some(Traffic { node, enabled }) = request else {
-                    reader.abort();
-                    break;
-                };
+                let Some(Traffic { node, enabled }) = request else { break };
                 let _ = writer.subscribe_traffic(node, enabled).await;
             }
         }
