@@ -14,3 +14,14 @@ pub mod platform;
 pub mod protocol;
 pub mod registry;
 pub mod transport;
+
+/// Held by tests that spawn processes and by tests of file locks. A child process
+/// inherits all open files between fork and exec, so a lock file this process just
+/// closed stays locked (`flock` belongs to the open file) until the child has started.
+#[cfg(test)]
+pub(crate) fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+    static SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SPAWN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}

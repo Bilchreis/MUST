@@ -402,6 +402,7 @@ pub fn tui_running(dir: &Path) -> io::Result<bool> {
 mod tests {
     #[test]
     fn tui_lock() {
+        let _spawn = crate::spawn_guard();
         let dir = std::env::temp_dir().join(format!("must-tui-lock-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(!super::tui_running(&dir).unwrap());
@@ -530,6 +531,7 @@ mod tests {
         let dir = temp_dir("stale");
         prepare(&dir).unwrap();
         // a process that has exited
+        let spawn = crate::spawn_guard();
         let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
             .args(if cfg!(windows) {
                 &["/C", "exit"][..]
@@ -540,6 +542,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
         child.wait().unwrap();
+        drop(spawn);
         let socket = dir.join(format!("{pid}.sock"));
         std::fs::write(&socket, "").unwrap();
         let mut gone = own_registration(&dir);

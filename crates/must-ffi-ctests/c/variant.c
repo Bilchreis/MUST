@@ -375,3 +375,123 @@ int ctest_variant_compare_print(void)
     SECoP_V_destroy(&limited);
     return 0;
 }
+
+static int info_at(CSECoPbaseType* p, unsigned int pos, unsigned int type, unsigned int count, const char* name)
+{
+    enum SECoP_V_type t = SECoP_VT_NONE;
+    unsigned int c = 0;
+    const char* n = NULL;
+    if (!SECoP_V_getInfo(p, pos, &t, &c, &n) || (unsigned int)t != type || c != count
+        || (name == NULL ? n != NULL : (n == NULL || strcmp(n, name) != 0))) {
+        fprintf(stderr, "  position %u: type %u, count %u, name %s\n", pos, (unsigned int)t, c, n ? n : "(null)");
+        return 0;
+    }
+    return 1;
+}
+
+/* nested datainfos: a struct with an array of structs, ragged arrays (inner arrays of
+   different lengths, minlen != maxlen), a tuple of an array and a struct of tuples */
+int ctest_variant_nested(void)
+{
+    CSECoPbaseType* hint = SECoP_V_create(
+        "{\"type\":\"struct\",\"members\":{\"name\":{\"type\":\"string\"},"
+        "\"points\":{\"type\":\"array\",\"minlen\":1,\"maxlen\":3,\"members\":{\"type\":\"struct\",\"members\":{"
+        "\"x\":{\"type\":\"double\",\"min\":0,\"max\":10},"
+        "\"tags\":{\"type\":\"array\",\"maxlen\":2,\"members\":{\"type\":\"int\",\"min\":0,\"max\":9}}}}}}}");
+    CSECoPbaseType* p;
+    CSECoPbaseType* q;
+    unsigned int len, umin, umax;
+    double d = 0.0;
+    char buf[512];
+
+    /* created with minlen default items */
+    CHECK(hint != NULL && json_is(hint, "{\"name\":\"\",\"points\":[{\"x\":0.0,\"tags\":[]}]}"));
+    CHECK(SECoP_V_getType(hint, buf, (int)sizeof(buf)) > 0 && strstr(buf, "\"minlen\":1") != NULL);
+
+    /* a value with inner arrays of different lengths */
+    p = SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[1,2]},{\"x\":2.5,\"tags\":[]}]}", hint);
+    CHECK(p != NULL && json_is(p, "{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[1,2]},{\"x\":2.5,\"tags\":[]}]}"));
+    /* positions in pre-order; containers inside a struct have no name */
+    CHECK(info_at(p, 0, SECoP_VT_STRUCT, 2, NULL));
+    CHECK(info_at(p, 1, SECoP_VT_STRING, 1, "name"));
+    CHECK(info_at(p, 2, SECoP_VT_ARRAY, 2, NULL));
+    CHECK(info_at(p, 3, SECoP_VT_STRUCT, 2, NULL));
+    CHECK(info_at(p, 4, SECoP_VT_DOUBLE, 1, "x"));
+    CHECK(info_at(p, 5, SECoP_VT_ARRAY_INTEGER, 2, "tags"));
+    CHECK(info_at(p, 6, SECoP_VT_STRUCT, 2, NULL));
+    CHECK(info_at(p, 7, SECoP_VT_DOUBLE, 1, "x"));
+    CHECK(info_at(p, 8, SECoP_VT_ARRAY_INTEGER, 0, "tags"));
+    CHECK(SECoP_V_getInfo(p, 9, NULL, NULL, NULL) == 0);
+    CHECK(SECoP_V_getDouble(p, 7, 0, &d) == 1 && d == 2.5);
+    CHECK(SECoP_V_getArrayLength(p, 5, &len, &umin, &umax) == 1 && len == 2 && umin == 0 && umax == 2);
+    CHECK(SECoP_V_getArrayLength(p, 2, &len, &umin, &umax) == 1 && len == 2 && umin == 1 && umax == 3);
+
+    /* modifying one inner array leaves its neighbour alone */
+    CHECK(SECoP_V_modifyArrayLength(p, 8, 1, 0, 2) == 1 && SECoP_V_modifyInteger(p, 8, 0, 7) == 1);
+    CHECK(SECoP_V_modifyInteger(p, 8, 0, 10) == 0);  /* above max */
+    CHECK(SECoP_V_modifyDouble(p, 7, 0, 11.0) == 0); /* above max */
+    CHECK(json_is(p, "{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[1,2]},{\"x\":2.5,\"tags\":[7]}]}"));
+    /* growing the outer array adds default items */
+    CHECK(SECoP_V_modifyArrayLength(p, 2, 3, 1, 3) == 1);
+    CHECK(json_is(p, "{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[1,2]},{\"x\":2.5,\"tags\":[7]},{\"x\":0.0,\"tags\":[]}]}"));
+    CHECK(SECoP_V_modifyArrayLength(p, 2, 0, 1, 3) == 0); /* below minlen */
+
+    /* the same values with different inner lengths differ in value, not type */
+    q = SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[1]}]}", hint);
+    CHECK(q != NULL && SECoP_V_compare(p, q) == SECoP_VC_DIFF_VALUE);
+    SECoP_V_destroy(&q);
+    SECoP_V_destroy(&p);
+
+    /* limits deep inside are checked against the hint */
+    CHECK(SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[1,2,3]}]}", hint) == NULL);
+    CHECK(SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[{\"x\":11.0,\"tags\":[]}]}", hint) == NULL);
+    CHECK(SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[{\"x\":1.5,\"tags\":[10]}]}", hint) == NULL);
+    CHECK(SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[{\"tags\":[]}]}", hint) == NULL);
+    CHECK(SECoP_V_fromJSON("{\"name\":\"p\",\"points\":[]}", hint) == NULL);
+    SECoP_V_destroy(&hint);
+
+    /* a ragged 2d array */
+    hint = SECoP_V_create("{\"type\":\"array\",\"maxlen\":4,\"members\":"
+                          "{\"type\":\"array\",\"minlen\":1,\"maxlen\":3,\"members\":{\"type\":\"double\"}}}");
+    CHECK(hint != NULL && json_is(hint, "[]"));
+    p = SECoP_V_fromJSON("[[1.0],[2.0,3.0,4.0],[5.0,6.0]]", hint);
+    CHECK(p != NULL && json_is(p, "[[1.0],[2.0,3.0,4.0],[5.0,6.0]]"));
+    CHECK(info_at(p, 0, SECoP_VT_ARRAY, 3, NULL));
+    CHECK(info_at(p, 1, SECoP_VT_ARRAY_DOUBLE, 1, NULL));
+    CHECK(info_at(p, 2, SECoP_VT_ARRAY_DOUBLE, 3, NULL));
+    CHECK(info_at(p, 3, SECoP_VT_ARRAY_DOUBLE, 2, NULL));
+    CHECK(SECoP_V_getDouble(p, 2, 2, &d) == 1 && d == 4.0);
+    CHECK(SECoP_V_getArrayLength(p, 3, &len, &umin, &umax) == 1 && len == 2 && umin == 1 && umax == 3);
+    /* new inner arrays start at their minlen */
+    CHECK(SECoP_V_modifyArrayLength(p, 0, 4, 0, 4) == 1 && json_is(p, "[[1.0],[2.0,3.0,4.0],[5.0,6.0],[0.0]]"));
+    SECoP_V_destroy(&p);
+    CHECK(SECoP_V_fromJSON("[[1.0],[]]", hint) == NULL);              /* inner below minlen */
+    CHECK(SECoP_V_fromJSON("[[1.0,2.0,3.0,4.0]]", hint) == NULL);     /* inner above maxlen */
+    CHECK(SECoP_V_fromJSON("[[1.0],[1.0],[1.0],[1.0],[1.0]]", hint) == NULL);
+    SECoP_V_destroy(&hint);
+    /* without a hint, an array of arrays of different lengths is taken as a tuple */
+    p = SECoP_V_fromJSON("[[1.0],[2.0,3.0]]", NULL);
+    CHECK(p != NULL && type_at(p, 0) == SECoP_VT_TUPLE && type_at(p, 2) == SECoP_VT_ARRAY_DOUBLE);
+    CHECK(json_is(p, "[[1.0],[2.0,3.0]]"));
+    SECoP_V_destroy(&p);
+
+    /* a tuple of an array and a struct of tuples */
+    hint = SECoP_V_create("{\"type\":\"tuple\",\"members\":[{\"type\":\"array\",\"maxlen\":5,\"members\":{\"type\":\"double\"}},"
+                          "{\"type\":\"struct\",\"members\":{\"lim\":{\"type\":\"tuple\",\"members\":[{\"type\":\"double\"},{\"type\":\"double\"}]},"
+                          "\"mode\":{\"type\":\"enum\",\"members\":{\"off\":0,\"on\":1}}}}]}");
+    p = SECoP_V_fromJSON("[[1.5,2.5],{\"lim\":[0.5,9.5],\"mode\":1}]", hint);
+    CHECK(p != NULL && json_is(p, "[[1.5,2.5],{\"lim\":[0.5,9.5],\"mode\":1}]"));
+    CHECK(info_at(p, 0, SECoP_VT_TUPLE, 2, NULL));
+    CHECK(info_at(p, 1, SECoP_VT_ARRAY_DOUBLE, 2, NULL));
+    CHECK(info_at(p, 2, SECoP_VT_STRUCT, 2, NULL));
+    CHECK(info_at(p, 3, SECoP_VT_TUPLE, 2, NULL));
+    CHECK(info_at(p, 5, SECoP_VT_DOUBLE, 1, NULL));
+    CHECK(info_at(p, 6, SECoP_VT_ENUM, 1, "mode"));
+    CHECK(SECoP_V_getDouble(p, 5, 0, &d) == 1 && d == 9.5);
+    CHECK(strcmp(SECoP_V_getEnumeration(p, 6, 1, NULL), "on") == 0);
+    CHECK(SECoP_V_fromJSON("[[1.5],{\"lim\":[0.5],\"mode\":1}]", hint) == NULL);
+    CHECK(SECoP_V_fromJSON("[[1.5],{\"lim\":[0.5,1.5],\"mode\":2}]", hint) == NULL);
+    SECoP_V_destroy(&p);
+    SECoP_V_destroy(&hint);
+    return 0;
+}

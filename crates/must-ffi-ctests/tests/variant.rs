@@ -46,3 +46,8 @@ fn additional_items() {
 fn compare_and_print() {
     check("variant_compare_print");
 }
+
+#[test]
+fn nested_and_ragged() {
+    check("variant_nested");
+}

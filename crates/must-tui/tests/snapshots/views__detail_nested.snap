@@ -1,0 +1,26 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: shown
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   1 process, 1 node                                                  "
+"┌ Detail: geo ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
+"│geo  running on 0.0.0.0:2060  python3 (777)                                                                           │"
+"│log  no log file (file logging off or stopped)                                                                        │"
+"│                                                                                                                      │"
+"│geo  IDLE ok                                                                                                          │"
+"│  status             (IDLE, ok)  2s                                                                                   │"
+"│  value              [[1 K], [2 K, 3 K, 4 K], []]  2s                                                                 │"
+"│  arr3d              [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]  2s                                                         │"
+"│  tuple_arr          ([1, 2, 3], blah)  2s                                                                            │"
+"│  tuple_struct       ({x: 1.5 m, y: 2.5 m}, {name: probe, on: true})  2s                                              │"
+"│  nested_struct      {number: 5 s, string: blue, tupl: (1 m, 2 m, 3 m), pos_stru…  2s                                 │"
+"│  points             [{a: 1, b: x, c: (1, 2)}, {a: 2, b: , c: (3, 4)}]  2s                                            │"
+"│  struct_tuple       {limits: (0 m, 50 m), mode: on}  2s                                                              │"
+"│  path               {name: a, b, points: [{x: 0 m, y: 0 m, tags: []}, {x: 1.5 m…  2s                                 │"
+"│  spectrum           {mass: [1 u, 2 u, 4 u, 18 u, 28 u, 32 u, 44 u], pressure: […  2s                                 │"
+"│                                                                                                                      │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
+"┌ Clients (0) ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
+"│ID   ADDRESS                  CONNECTED  ACTIVATED                                                                    │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" ↑↓ scroll · ←→ node · Tab views · ? help · q quit                                                                      "

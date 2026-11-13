@@ -478,6 +478,7 @@ mod tests {
 
     #[test]
     fn exited_process() {
+        let spawn = crate::spawn_guard();
         let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
             .args(if cfg!(windows) {
                 &["/C", "exit"][..]
@@ -488,6 +489,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
         child.wait().unwrap();
+        drop(spawn);
         // reaped: either gone or (rarely) reused by another process with another start
         if let Some(p) = process(pid).unwrap() {
             assert_ne!(p.start, 0);
