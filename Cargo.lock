@@ -491,6 +491,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -673,10 +683,11 @@ dependencies = [
 
 [[package]]
 name = "must-ffi"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "base64",
+ "must-launch",
  "must-server",
  "must-types",
  "serde_json",
@@ -685,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "must-ffi-ctests"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "cc",
  "must-ffi",
@@ -697,7 +708,7 @@ dependencies = [
 
 [[package]]
 name = "must-ffi-variant"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "libloading",
@@ -706,8 +717,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "must-launch"
+version = "0.2.2"
+dependencies = [
+ "must-monitor",
+ "tracing",
+]
+
+[[package]]
 name = "must-monitor"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -718,15 +737,17 @@ dependencies = [
 
 [[package]]
 name = "must-server"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "chrono",
  "fastrand",
+ "if-addrs",
  "indexmap",
  "must-monitor",
  "must-types",
  "serde_json",
+ "socket2",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -736,11 +757,12 @@ dependencies = [
 
 [[package]]
 name = "must-tui"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "chrono",
  "indexmap",
  "insta",
+ "must-launch",
  "must-monitor",
  "must-server",
  "must-types",
@@ -751,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "must-types"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "base64",
  "indexmap",
@@ -1680,7 +1702,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.2.2"
 dependencies = [
  "cc",
 ]

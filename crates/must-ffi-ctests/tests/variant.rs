@@ -51,3 +51,8 @@ fn compare_and_print() {
 fn nested_and_ragged() {
     check("variant_nested");
 }
+
+#[test]
+fn matrix() {
+    check("variant_matrix");
+}

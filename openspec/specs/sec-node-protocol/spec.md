@@ -101,15 +101,65 @@ The node SHALL answer `do <module>:<command> [<argument>]` by validating the arg
 - **THEN** it receives `error_do t1:value` with a `NoSuchCommand` error report
 
 ### Requirement: Data and error reports
-The node SHALL send values as data reports `[<value>, <qualifiers>]` with `t` (timestamp) and `e` (uncertainty) qualifiers when known, and errors as error reports `[<class>, <text>, {"t": ...}]` using the SECoP 2.0 error class names.
+The node SHALL send values as data reports `[<value>, <qualifiers>]` with `t` (timestamp) and `e` (uncertainty) qualifiers when known, and errors as error reports `[<class>, <text>, {"t": ...}]` using the SECoP 2.0 error class names, or the custom class name a handler gave the error.
 
 #### Scenario: Error report format
 - **WHEN** a read handler fails with a hardware error "sensor disconnected"
 - **THEN** the reply is `error_read t1:value ["HardwareError", "sensor disconnected", {"t": <time>}]`
 
-### Requirement: Optional and custom messages
-The node SHALL answer `check` and `logging` requests with an `error_<action>` reply carrying a `ProtocolError`, and SHALL ignore empty lines.
+#### Scenario: Custom error class
+- **WHEN** a read handler fails with an error of the custom class `_Overheated` and the text "coil too hot"
+- **THEN** the reply is `error_read t1:value ["_Overheated", "coil too hot", {"t": <time>}]`
 
-#### Scenario: Check not supported
-- **WHEN** a client sends `check t1:target 5`
-- **THEN** it receives `error_check t1:target` with a `ProtocolError` error report
+### Requirement: Check
+The node SHALL answer `check <module>:<accessible> [<value>]` without changing any parameter, cache entry or hardware state. An accessible that is not marked `checkable: true` SHALL get `NotCheckable`. Otherwise the value SHALL be validated as for `change` (a parameter, including dynamic limits) or `do` (a command's argument) before the module's handler decides.
+
+#### Scenario: Accepted value
+- **WHEN** `t1:target` is checkable, its handler accepts 250, and a client sends `check t1:target 250`
+- **THEN** it receives `checked t1:target [250, {"t": <time>}]`, `t1:target` keeps its value, and no `update` is sent
+
+#### Scenario: Not checkable
+- **WHEN** a client sends `check t1:target 5` and `t1:target` has no `checkable` property
+- **THEN** it receives `error_check t1:target` with a `NotCheckable` error report
+
+#### Scenario: Rejected by the handler
+- **WHEN** `t1:target` is checkable and its handler rejects 250 with `Impossible` "heater off in this configuration"
+- **THEN** the client receives `error_check t1:target ["Impossible", "heater off in this configuration", {...}]`
+
+#### Scenario: Value outside datainfo
+- **WHEN** `t1:target` is checkable with `max` 300 and a client sends `check t1:target 400`
+- **THEN** it receives `error_check t1:target` with a `RangeError` error report and the handler is not asked
+
+#### Scenario: Value beyond dynamic limit
+- **WHEN** `t1:target` is checkable, `t1:target_max` is 200, and a client sends `check t1:target 250`
+- **THEN** it receives `error_check t1:target` with a `RangeError` error report and the handler is not asked
+
+#### Scenario: Readonly parameter
+- **WHEN** a client sends `check t1:value 5` for the readonly parameter `t1:value`
+- **THEN** it receives `error_check t1:value` with a `ReadOnly` error report
+
+#### Scenario: Command argument
+- **WHEN** the command `t1:ramp` with a double argument is checkable and a client sends `check t1:ramp "fast"`
+- **THEN** it receives `error_check t1:ramp` with a `WrongType` error report
+
+#### Scenario: Unknown accessible
+- **WHEN** a client sends `check t1:nope 1`
+- **THEN** it receives `error_check t1:nope` with a `NoSuchParameter` error report
+
+### Requirement: Check replies
+The node SHALL send `checked` and `error_check` replies only to the connection that sent the `check`, never to other activated clients, and SHALL apply the node's handler timeout to checks as to other requests.
+
+#### Scenario: Other clients see nothing
+- **WHEN** client A sends `check t1:target 250` while client B is activated
+- **THEN** A receives `checked t1:target ...` and B receives no message
+
+#### Scenario: Hanging check
+- **WHEN** a check handler never returns and the node timeout is 2 s
+- **THEN** the client receives `error_check t1:target` with `TimeoutError` after about 2 s
+
+### Requirement: Empty lines
+The node SHALL ignore empty lines.
+
+#### Scenario: Empty line between requests
+- **WHEN** a client sends an empty line followed by `ping 1`
+- **THEN** it receives only `pong 1 ...`

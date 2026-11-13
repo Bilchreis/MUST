@@ -1,6 +1,6 @@
 # Compatibility with SHALL
 
-must replaces SHALL's `SHALLserver` and `SHALLvariant` libraries. C and LabVIEW
+MUST replaces SHALL's `SHALLserver` and `SHALLvariant` libraries. C and LabVIEW
 programs written for SHALL use the same file names, the same function names and
 signatures, and the same `SECoP_S_error`, `SECoP_S_action` and `SECoP_V_type` values,
 and normally run unchanged. This page lists where must behaves differently.
@@ -21,7 +21,7 @@ and normally run unchanged. This page lists where must behaves differently.
 
 2. Replace SHALL's files with these, keeping both libraries in the same folder:
    `SHALLvariant` loads `SHALLserver` from its own folder. Remove the Qt libraries that
-   SHALL needed; must has no dependency besides the operating system (the Windows
+   SHALL needed; MUST has no dependency besides the operating system (the Windows
    libraries link the C runtime statically).
 3. C programs: compile against the headers in `include/` (or `dist/<triple>/include/`)
    and link `SHALLserver64.lib` / `-lSHALLserver64` (and `SHALLvariant` if you used it).
@@ -33,8 +33,8 @@ describes a quick check of the replaced libraries.
 
 ## Protocol: SECoP 2.0
 
-must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP 2.0
-(e.g. current Frappy) work with must nodes. Differences a client may notice:
+MUST speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP 2.0
+(e.g. current Frappy) work with MUST nodes. Differences a client may notice:
 
 - **Error classes** follow SECoP 2.0. Error codes returned by the application (from a
   callback or `SECoP_S_putCommandAnswer`) are sent as:
@@ -74,8 +74,72 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   `"expert"`.
 - **Custom properties** without a leading underscore are published under the given
   name, as in SHALL, and return `SECoP_S_WARNING_CUSTOM_PROPERTY`.
-- The optional messages `check` and `logging` are answered with `ProtocolError`; the
-  data type `matrix` is not supported.
+- **`check`**, SECoP's dry run of `change` and `do`, is answered for accessibles with
+  `"checkable": true`: the value is validated like the matching `change` or `do`, then
+  the application decides (see [Additions to SHALL](#additions-to-shall)), and the client
+  gets `checked` with the value or `error_check`. Other accessibles answer
+  `NotCheckable`, a readonly parameter `ReadOnly`. SHALL answered every `check` with an
+  error.
+- **Remote logging** (`logging`) is supported; SHALL answered it with an error. A client
+  sends `logging <module> <level>`, or `logging  <level>` for the whole node, with
+  `"debug"`, `"info"`, `"error"` or `"off"` (`false` counts as `"off"`), and then receives
+  that module's log messages as `log <module>:<level> "<message>"` events. The reply
+  echoes the request; a `module:parameter` specifier stands for its module and the reply
+  names only the module. Every module starts at `"off"` for every connection.
+  - **What is sent.** What the node logs about a module (failed polls and reads, values
+    that do not fit their datainfo) and what the application logs with
+    `SECoP_S_logMessage` (see below). MUST's error and warning records are sent as
+    `error`, info as `info`, debug as `debug`. Records not tied to a module (a failed
+    accept, a panicking handler) are not sent: a `log` event must name a module.
+  - **Slow clients.** Log events are best effort: while a client's unread updates and log
+    events exceed the slow-client limit, its log events are dropped instead of closing
+    the connection.
+- **Matrices.** MUST supports SECoP 2.0's `matrix` data type, which SHALL lacks; see
+  [Matrix values](#matrix-values). Its optional `compression` property is rejected,
+  since SECoP defines no compression yet.
+
+### Matrix values
+
+A `matrix` datainfo describes homogeneous, multi-dimensional numbers, such as detector
+images or spectra, e.g. `{"type": "matrix", "elementtype": "<f4", "names": ["x", "y"],
+"maxlen": [100, 100]}`. The value travels as the lengths and the raw element bytes in
+base64, first dimension varying fastest: `{"len": [2, 3], "blob": "AACAPwAA..."}`. MUST
+passes the bytes through unchanged; it does not interpret the elements.
+
+- **As a variant.** No `SECoP_V_type` is added. A matrix value is a `SECoP_VT_STRUCT`
+  with two members, which is its transport form as JSON:
+
+  | Position | Type | Name | Content |
+  |---|---|---|---|
+  | 0 | `SECoP_VT_STRUCT` | | count 2 |
+  | 1 | `SECoP_VT_ARRAY_INTEGER` | `len` | one length per dimension |
+  | 2 | `SECoP_VT_BLOB` | `blob` | the raw element bytes |
+
+  `SECoP_V_create` with a matrix datainfo gives this shape with all lengths 0 and an
+  empty blob; `SECoP_V_fromJSON` with such a handle as hint parses the transport JSON.
+  `SECoP_V_getType` still returns the matrix datainfo, so the handle can serve as a
+  parameter's datainfo. `SECoP_V_getInfo` reports a struct, though: a host tells a matrix
+  from a struct with these members by its own datainfo.
+- **Reading and writing a matrix handle.** Read the bytes with
+  `SECoP_V_getString(p, 2, size, buffer)`: the buffer needs one byte more than the blob,
+  for the NUL it always writes. Write them with `SECoP_V_modifyString(p, 2, bytes,
+  iSize)`, with the byte count as `iSize`. Set the lengths with
+  `SECoP_V_modifyInteger(p, 1, dimension, length)`. Each call checks only the member it
+  changes; whether lengths and blob agree is checked when the value reaches the node.
+  A value from a getter, a command or `SECoP_S_putCommandAnswer` that does not fit gives
+  the client an `InternalError`; `SECoP_S_updateParameter` returns
+  `SECoP_S_ERROR_INVALID_VALUE` and sends nothing.
+- **Without JSON.** Inside MUST, a matrix handle moves between the host and the node
+  without JSON: a getter's result or a pushed handle is base64-encoded once, for the
+  clients. `SECoP_S_updateParameter2` and `SECoP_S_putCommandAnswer2` take the transport
+  JSON and decode its base64 once.
+- **Faster pushes and answers.** `SECoP_S_updateParameterMatrix` and
+  `SECoP_S_putCommandAnswerMatrix` (see [Additions to SHALL](#additions-to-shall)) take
+  the lengths and bytes as plain pointers, so no variant has to be built. Prefer them for
+  large or frequent matrices, and from LabVIEW.
+- **Size.** Base64 makes the bytes a third larger: a 100×100 `<f8` matrix is about
+  107 kB on the wire, and every update goes to every activated client. A `change` from
+  a client is bounded by the maximum length of an incoming line (1 MiB by default).
 
 ## Library behavior
 
@@ -84,10 +148,28 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   effect (requests are always served by several threads).
 - **Callbacks** (getters, setters, command functions) run on worker threads of the
   library, possibly several at once for different modules, never on the thread that
-  called `SECoP_S_initLibrary`. Calls for one module are not overlapped.
-- **Polled requests** wait 60 s for `SECoP_S_putCommandAnswer[2]`, as in SHALL; then the
-  client gets `TimeoutError`. Answering an unknown id (timed out, answered before, never
-  handed out) returns `SECoP_S_ERROR_INVALID_NAME`, as in SHALL.
+  called `SECoP_S_initLibrary`. Calls for one module are not overlapped, even after a
+  timeout. Reads of one parameter in close succession share one getter call. A callback
+  that has not returned after 60 s gives the client `TimeoutError` (SHALL waited
+  forever); until it has returned, further requests for its module wait and may also get
+  `TimeoutError`, in which case their callbacks are not called. A callback must not wait
+  for a request to its own module, for example through a SECoP connection to its own
+  node: that request cannot start until the callback has returned.
+- **Polled requests** are handed out as they arrive, also while other requests of the
+  same module are not answered yet, and may be answered in any order, as in SHALL. Reads
+  of one parameter are merged into one request whose answer replies to every waiting
+  client, as in SHALL, except for a read sent after a `changed` or `done` reply of that
+  module: it gets a request of its own, so that it never returns a value from before the
+  change. They wait 60 s for `SECoP_S_putCommandAnswer[2]`, as in SHALL; then the
+  client gets `TimeoutError`, and a request not yet fetched is no longer handed out.
+  Answering an unknown id (timed out, answered before, never handed out) returns
+  `SECoP_S_ERROR_INVALID_NAME`, as in SHALL.
+- **Repeated reads**: a client that sends the same `read` twice in a row, the second
+  before the first is answered, gets two replies from one getter call or stored request,
+  in both modes, where SHALL sent one reply.
+- **Node `timeout`**: nodes publish the property `timeout` 60 (s), the time a client
+  should wait for a reply; SHALL published none. A `timeout` property set by the program
+  replaces it and also shortens how long the node waits for callbacks and answers.
 - **Small buffers** in `SECoP_S_getStoredCommand[2]` work as in SHALL: the request is
   handed out anyway with `SECoP_S_WARNING_BUFFER_TOO_SMALL`, the text is cut (and
   NUL-terminated), and the size arguments receive the full text length without NUL.
@@ -117,7 +199,7 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 - **Errors and warnings** of the building functions are kept for `SECoP_S_showErrors`,
   which prints them to stderr and clears them.
 - **Status window**: SHALL's Qt status window is replaced by the terminal UI `must-tui`
-  (shipped next to the libraries), which shows the nodes of all must programs of the user
+  (shipped next to the libraries), which shows the nodes of all MUST programs of the user
   at once and only reads. `bGUI` in `SECoP_S_initLibrary` and
   `SECoP_S_showStatusWindow(1)` open it in a window of its own (a console window on
   Windows; a terminal emulator on Linux with a graphical session), unless it runs
@@ -130,12 +212,19 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   states, context IDs, build errors, clients, traffic, values and log records. It is only
   accessible to the user and opens no network port. `MUST_MONITOR=0` turns it off. See
   [docs/monitoring-protocol.md](docs/monitoring-protocol.md).
+- **Discovery** (new): every node listens on UDP port 10767 of all interfaces and
+  answers SECoP discovery requests with its TCP port, `equipment_id`, `firmware` (or
+  `must-<version>` if the node has none) and `description`, and broadcasts that once
+  when `SECoP_S_nodeComplete` opens its port. SHALL opened no UDP port. A node on
+  `localhost` answers only local requests. `MUST_DISCOVERY=0` turns discovery off. See
+  the README.
 - **Log files** (new): every node writes its traffic (each published value once), client
   connections and its log records to `<log dir>\<equipment_id>\<YYYY-MM-DD>.log`, by
   default under `%LOCALAPPDATA%\must\logs` (Windows) or `~/.local/state/must/logs`
   (Linux), and deletes files older than 2 days. Configure it with environment variables
   set before the program starts: `MUST_LOG_FILES=0` (off), `MUST_LOG_DIR` (directory),
-  `MUST_LOG_DAYS` (retention). Logging never slows a node; there is no size limit, so
+  `MUST_LOG_DAYS` (retention). Logging never waits for the disk, though it takes CPU (about
+  40% of the peak request rate, see [bench/README.md](bench/README.md)); there is no size limit, so
   check the disk usage estimate in [docs/log-files.md](docs/log-files.md) for nodes with
   fast polling. The files contain all values exchanged with clients.
 - **Polling** depends on what the module declares:
@@ -161,6 +250,162 @@ must speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
   Every polled value is sent to activated clients, also when it did not change.
 - **Error strings** (`SECoP_S_getErrorString`) have SHALL's texts, but may differ in
   detail; do not compare them.
+
+## Additions to SHALL
+
+MUST exports functions that SHALL lacks, and one action code more. A program that uses
+them does not run with SHALL. `SECoP-exports.h` and `SECoP-types.h` declare them, marked
+as MUST additions.
+
+SHALL-LabVIEW's VIs refer to the first four (`SECoP_S_filterStoredCommand[2]` and
+`SECoP_S_[un]registerUserError`), but no SHALL library ever exported them. They take the
+arguments the VIs pass, in the VIs' order, plus `szContextID` at the end. The VIs pass
+no context ID yet: each of them must be updated to pass `Context_ID` as one more
+argument at the end before it works with MUST.
+`SECoP_S_logMessage` and the matrix and check functions are MUST's own.
+
+- **`SECoP_S_filterStoredCommand[2]`** work like `SECoP_S_getStoredCommand[2]`, but hand
+  out only the oldest stored request of the context that matches a filter. The other
+  requests stay stored, in order, for other host loops.
+  - **Argument order.** The filter comes first, as in SHALL-LabVIEW's
+    `SECoP-filterStoredCommand.vi`, and the context ID comes last:
+    ```c
+    SECoP_S_filterStoredCommand2(const char* szFilterAccessibles, int iFilterAction,
+        unsigned long long* pllId, enum SECoP_S_action* piAction,
+        char* szAccessible, int* piAccessibleSize, char* szValue, int* piValueSize,
+        const char* szContextID);
+    ```
+    `SECoP_S_filterStoredCommand` takes `CSECoPbaseType** ppValue` in place of the
+    value buffer and its size.
+  - **Accessibles.** Entries are `node`, `node:module` or `node:module:accessible`,
+    separated by commas, semicolons or whitespace (tabs and line ends too, as LabVIEW's
+    Array To Spreadsheet String writes them). Case is ignored. An entry selects every
+    accessible it names, so `cryo:tc` selects all of module `tc`. NULL or an empty
+    string selects every accessible of the context. The node name always comes first.
+  - **Action.** `0` is any action, otherwise a `SECoP_S_action` (1 read, 2 change, 3 do,
+    4 check).
+  - **Results.** `SECoP_S_ERROR_NO_DATA` when no request matches;
+    `SECoP_S_ERROR_INVALID_NAME` for a malformed entry (more than three parts, or a part
+    that is no SECoP identifier); `SECoP_S_ERROR_INVALID_VALUE` for another action;
+    `SECoP_S_ERROR_INVALID_CONTEXT_ID` for an unknown context. Small buffers work as in
+    `SECoP_S_getStoredCommand[2]`. Answer the request with
+    `SECoP_S_putCommandAnswer[2]`.
+- **`SECoP_S_registerUserError(szSECoPerror, szMessageText, szContextID)`** registers
+  an error class of your own, with a text, for a context and returns a new code of -1000
+  or below. For requests of that context, return the code from a callback or pass it to
+  `SECoP_S_putCommandAnswer[2]`: the client gets an error report with that class and
+  text, e.g. `["_Overheated", "target: coil too hot", {...}]`.
+  - **Names.** The name must be a SECoP identifier. Custom names should start with an
+    underscore; SECoP asks clients to treat unknown classes as generic errors. A SECoP
+    2.0 class such as `HardwareError` is allowed too and gives that class with your own
+    text.
+  - **Registering again.** Registering a name again for the same context returns the
+    same code and replaces the text. A name that differs from one of the context's names
+    or from a SECoP class only in case returns `SECoP_S_ERROR_NAME_ALREADY_USED`; an
+    invalid name returns `SECoP_S_ERROR_INVALID_NAME`.
+  - **Contexts.** The context must exist (`SECoP_S_initLibrary` or
+    `SECoP_S_createNode[2]`), otherwise the call returns
+    `SECoP_S_ERROR_INVALID_CONTEXT_ID`. Each context has its own codes: two contexts
+    registering `_Overheated` get two codes with their own texts. A code used for a
+    request of another context counts as unknown and gives an `InternalError` report.
+    `SECoP_S_doneLibrary(0, ctx)` removes the context's codes; with `bNodeOnly` 1 they
+    stay.
+  - **Error strings.** `SECoP_S_getErrorString` returns `<class>: <text>` for a
+    registered code. The string stays valid until the process ends.
+- **`SECoP_S_unregisterUserError(iError, szContextID)`** removes a code the context
+  registered. A removed code is never handed out again; a request answered with it gets
+  an `InternalError` report. Returns `SECoP_S_ERROR_INVALID_VALUE` for a code the context
+  has not registered, including SHALL's own codes.
+- **`SECoP_S_logMessage(szModule, iLevel, szMessage)`** logs a message for a module of a
+  running node, for SECoP's remote logging (see above):
+  ```c
+  enum SECoP_S_error SECoP_S_logMessage(const char* szModule, enum SECoP_S_logLevel iLevel,
+      const char* szMessage);
+  ```
+  - **Module.** `szModule` is `node:module`, like the names of
+    `SECoP_S_updateParameter`; case is ignored. Like that function it takes no
+    `szContextID`.
+  - **Levels.** `enum SECoP_S_logLevel` (in `SECoP-types.h`): `SECoP_S_LOG_ERROR` (1) and
+    `SECoP_S_LOG_WARNING` (2) are sent as `error`, `SECoP_S_LOG_INFO` (3) as `info`,
+    `SECoP_S_LOG_DEBUG` (4) as `debug`, to the clients whose level for the module admits
+    them.
+  - **Where messages go.** Error, warning and info messages also appear in the status
+    TUI and the node's log files, like the node's own records. Debug messages only reach
+    remote clients (and Rust `tracing`), so that a chatty host does not fill the log
+    files.
+  - **Threads.** It can be called from any thread, also from a getter, setter or command
+    function while the node waits for it; it never waits for the node.
+  - **Slow clients.** Log events count toward a client's unread updates: logging much at
+    debug level to a client that does not read can make a later update disconnect it.
+  - **Results.** `SECoP_S_SUCCESS`; `SECoP_S_ERROR_INVALID_NODE` for an unknown node or
+    one before `SECoP_S_nodeComplete`; `SECoP_S_ERROR_INVALID_MODULE` for an unknown
+    module; `SECoP_S_ERROR_INVALID_VALUE` for a level other than 1 to 4 or a NULL
+    `szMessage`. Invalid UTF-8 in the text is replaced.
+
+- **Checks.** A client's `check <module>:<accessible> [<value>]` asks whether a value
+  would be accepted, without changing anything (see
+  [Protocol](#protocol-secop-20)). An accessible offers checks with
+  `"checkable": true`; MUST validates the value against the datainfo (and the dynamic
+  limits of `<parameter>_min`, `_max`, `_limits`) before the application is asked, and
+  sends the validated value back in `checked`. The application must not change anything
+  for a check, and should answer independently of the module's status.
+  - **Callback mode.** `SECoP_S_setCheckFunction(ptrToCheck, szContextID)` sets the
+    check function of the focused parameter or command and publishes
+    `"checkable": true` for it; NULL clears both. It returns
+    `SECoP_S_ERROR_INVALID_PARAMETER` when the focus is a node or a module. The function
+    is called with the full name and the value (NULL for a command without argument),
+    like a setter, on the module's thread; the setter or command function is not called:
+    ```c
+    typedef void (*SECoP_S_checkFunction)(const char* name, const CSECoPbaseType* pValue,
+        enum SECoP_S_error* piError);
+    SECoP_S_setCheckFunction(SECoP_S_checkFunction ptrToCheck, const char* szContextID);
+    ```
+    An accessible with `"checkable": true` (e.g. from `SECoP_S_addPropertyBoolean`) but
+    no check function makes `SECoP_S_nodeComplete` fail with
+    `SECoP_S_ERROR_MISSING_MANDATORY`; `SECoP_S_showErrors` names it.
+  - **Polling mode.** `"checkable": true` (e.g. `SECoP_S_addPropertyBoolean("checkable",
+    1, ctx)`) is enough. Checks are stored like `change` and `do`, with the new action
+    `SECoP_S_ACTION_CHECK` (4) and the value to check, handed out by
+    `SECoP_S_getStoredCommand[2]` and `SECoP_S_filterStoredCommand[2]`, and answered
+    with `SECoP_S_putCommandAnswer[2]`, whose value is ignored. A check not answered
+    within the polled request timeout (or the node's `timeout`) gets `TimeoutError`.
+    Only hosts that publish `"checkable": true` ever see action 4. A polling loop or
+    LabVIEW VI that dispatches on the action needs a case for 4 before the node may
+    publish `"checkable": true`; one that leaves the request unanswered makes the client
+    wait for its `TimeoutError`.
+  - **Answers.** The code maps to error classes as for any answer: `SECoP_S_SUCCESS` (or
+    another non-negative code) gives `checked`, `SECoP_S_ERROR_OUT_OF_RANGE`
+    `RangeError`, `SECoP_S_ERROR_INVALID_VALUE` `WrongType`. For SECoP's `Impossible`
+    register it: `SECoP_S_registerUserError("Impossible", "not in this configuration",
+    ctx)`, and return that code.
+
+Two more additions push and answer [matrix values](#matrix-values) without building a
+variant. They take the lengths and the raw element bytes as plain C arrays, which a
+LabVIEW Call Library node passes from a U32 and a U8 array as "Array Data Pointer". The
+library copies both before the call returns and does not keep the pointers. The bytes
+are base64-encoded once, for the clients. Neither function takes a sigma: SECoP's `e`
+of a matrix would be a matrix itself. Use `SECoP_S_updateParameter2` or
+`SECoP_S_putCommandAnswer2` if one is needed.
+
+- **`SECoP_S_updateParameterMatrix(szParameterName, puLen, iDims, pData, iDataSize,
+  dblTimestamp)`** pushes a new value of a matrix parameter, like
+  `SECoP_S_updateParameter2` and with the same timestamp rules:
+  ```c
+  const unsigned int len[2] = {2, 3};
+  const float data[6] = {1, 2, 3, 4, 5, 6};
+  SECoP_S_updateParameterMatrix("my_node:mod1:image", len, 2, data, sizeof data, NAN);
+  ```
+  An unknown name gives the codes of `SECoP_S_updateParameter2`. A parameter that is not
+  a matrix, `iDims` other than the number of dimensions, or `iDataSize` other than the
+  product of the lengths times the element size give `SECoP_S_ERROR_INVALID_VALUE`, and
+  nothing is sent. An empty matrix (a length 0) needs no data: `pData` may be NULL.
+- **`SECoP_S_putCommandAnswerMatrix(llId, iErrorCode, puLen, iDims, pData, iDataSize,
+  dblTimestamp)`** answers a request from `SECoP_S_getStoredCommand[2]`, like
+  `SECoP_S_putCommandAnswer2`, with a matrix as the read value, the value after a change
+  or the command result. With a negative `iErrorCode` the matrix arguments are not read
+  and may be NULL. If the request's value is not a matrix, or the lengths and bytes do
+  not fit, it returns `SECoP_S_ERROR_INVALID_VALUE` and the request stays handed out, so
+  that it can still be answered.
 
 ## Not provided
 

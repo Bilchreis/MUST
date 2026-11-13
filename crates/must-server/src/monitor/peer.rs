@@ -120,6 +120,14 @@ impl Peer {
         state.queue.pop_front()
     }
 
+    /// Forgets a node that was removed: its subscriptions and pending updates.
+    pub(super) fn forget(&self, node: NodeId) {
+        let mut state = self.lock();
+        state.traffic.remove(&node);
+        state.all_updates.remove(&node);
+        state.dirty.retain(|(n, _, _), _| *n != node);
+    }
+
     fn apply(&self, message: &ClientMessage) {
         let mut state = self.lock();
         match *message {
@@ -275,10 +283,63 @@ async fn serve(shared: Arc<Shared>, stream: Stream, shutdown: CancellationToken)
         let Some(line) = line else { break };
         // read-only: subscriptions only; anything else is ignored
         if let Ok(message) = serde_json::from_str::<ClientMessage>(&line) {
-            peer.apply(&message);
+            // subscriptions of unknown nodes are ignored, so they cannot pile up; a node
+            // removed later is forgotten by every peer (under the same lock)
+            let inner = shared.lock();
+            let node = match message {
+                ClientMessage::SubscribeTraffic { node, .. }
+                | ClientMessage::SubscribeUpdates { node, .. } => Some(node),
+                ClientMessage::Hello { .. } => None,
+            };
+            if node.is_none_or(|node| inner.nodes.contains_key(&node)) {
+                peer.apply(&message);
+            }
         }
     }
     done.cancel();
     shared.lock().peers.retain(|p| !Arc::ptr_eq(p, &peer));
     let _ = writing.await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(module: &str) -> ParameterState {
+        ParameterState {
+            module: module.into(),
+            parameter: "value".into(),
+            report: serde_json::Value::Null,
+            error: false,
+        }
+    }
+
+    #[test]
+    fn removed_node_is_forgotten() {
+        let peer = Peer::new();
+        for node in [1, 2] {
+            peer.apply(&ClientMessage::SubscribeTraffic {
+                node,
+                enabled: true,
+            });
+            peer.apply(&ClientMessage::SubscribeUpdates {
+                node,
+                mode: UpdateMode::All,
+            });
+        }
+        peer.apply(&ClientMessage::SubscribeUpdates {
+            node: 2,
+            mode: UpdateMode::Coalesced,
+        });
+        peer.update(2, state("m"));
+
+        peer.forget(2);
+        let state = peer.lock();
+        assert_eq!(state.traffic, HashSet::from([1]));
+        assert_eq!(state.all_updates, HashSet::from([1]));
+        assert!(
+            state.dirty.is_empty(),
+            "pending updates of the node dropped"
+        );
+    }
 }

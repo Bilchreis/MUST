@@ -362,6 +362,114 @@ int ctest_server_callbacks(unsigned short port)
     return 0;
 }
 
+/* --- one module at a time in callback mode: the getter of mod1:a waits to be released */
+
+static volatile int g_cb_released = 0;
+static volatile int g_cb_a = 0, g_cb_b = 0, g_cb_c = 0, g_cb_target = 0;
+
+static void get_cb(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                   CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)ppSigma;
+    (void)timestamp;
+    if (strcmp(name, "cbc:mod1:a") == 0) {
+        int i;
+        ++g_cb_a;
+        for (i = 0; i < 1000 && !g_cb_released; ++i)
+            sleep_ms(5);
+    } else if (strcmp(name, "cbc:mod1:b") == 0) {
+        ++g_cb_b;
+    } else {
+        ++g_cb_c;
+    }
+    SECoP_V_modifyDouble(*ppData, 0, 0, 2.5);
+    *piError = SECoP_S_SUCCESS;
+}
+
+static enum SECoP_S_error add_cb_param(const char* name)
+{
+    enum SECoP_S_error rc = SECoP_S_addReadableParameter(name, get_cb, "cbc");
+    if (rc < 0)
+        return rc;
+    rc = SECoP_S_addPropertyString("description", name, "cbc");
+    if (rc < 0)
+        return rc;
+    return SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "cbc");
+}
+
+int ctest_cb_build(unsigned short port)
+{
+    g_cb_released = 0;
+    g_cb_a = g_cb_b = g_cb_c = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "cbc"));
+    OK(SECoP_S_createNode2("cbc", "one module at a time", "127.0.0.1", port, "cbc"));
+    OK(SECoP_S_addModule("mod1", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "cbc"));
+    OK(add_cb_param("a"));
+    OK(add_cb_param("b"));
+    OK(SECoP_S_addModule("mod2", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "another module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "cbc"));
+    OK(add_cb_param("c"));
+    CHECK(complete("cbc") >= 0);
+    return 0;
+}
+
+static void set_cb(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                   CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppData;
+    (void)ppSigma;
+    (void)timestamp;
+    ++g_cb_target;
+    *piError = SECoP_S_SUCCESS;
+}
+
+/* the same with a short node timeout, so the getter of mod1:a outlives it, and a setter */
+int ctest_cb_hang_build(unsigned short port, double pollinterval)
+{
+    g_cb_released = 0;
+    g_cb_a = g_cb_b = g_cb_c = g_cb_target = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "cbc"));
+    OK(SECoP_S_createNode2("cbc", "calls outliving the timeout", "127.0.0.1", port, "cbc"));
+    OK(SECoP_S_addPropertyDouble("timeout", 0.3, "cbc"));
+    OK(SECoP_S_addModule("mod1", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", pollinterval, "cbc"));
+    OK(add_cb_param("a"));
+    OK(add_cb_param("b"));
+    OK(SECoP_S_addWritableParameter("target", get_cb, set_cb, "cbc"));
+    OK(SECoP_S_addPropertyString("description", "target", "cbc"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "cbc"));
+    OK(SECoP_S_addModule("mod2", "cbc"));
+    OK(SECoP_S_addPropertyString("description", "another module", "cbc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "cbc"));
+    OK(add_cb_param("c"));
+    CHECK(complete("cbc") >= 0);
+    return 0;
+}
+
+int ctest_cb_calls(const char* parameter)
+{
+    switch (parameter[0]) {
+    case 'a':
+        return g_cb_a;
+    case 'b':
+        return g_cb_b;
+    case 't':
+        return g_cb_target;
+    default:
+        return g_cb_c;
+    }
+}
+
+void ctest_cb_release(void)
+{
+    g_cb_released = 1;
+}
+
 /* --- polling in callback mode: SHALL's pollinterval keeps one interval for all */
 
 /* reads per parameter of the "drv" module, and setter calls of its pollinterval */
@@ -556,6 +664,10 @@ int ctest_server_polling(unsigned short port)
     OK(SECoP_S_addWritableParameter("target", NULL, NULL, "poll"));
     OK(SECoP_S_addPropertyString("description", "target", "poll"));
     OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "poll"));
+    OK(SECoP_S_addReadableParameter("limit", NULL, "poll"));
+    OK(SECoP_S_addPropertyString("description", "limit", "poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "poll"));
+    OK(SECoP_S_addPropertyJSON("constant", "10.0", "poll"));
     OK(SECoP_S_addCommand("go", NULL, "poll"));
     OK(SECoP_S_addPropertyString("description", "go", "poll"));
     OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"command\",\"argument\":{\"type\":\"int\",\"min\":0,\"max\":10}}", "poll"));
@@ -678,11 +790,562 @@ int ctest_server_poll_step(int step)
         CHECK(SECoP_S_updateParameter2("other:mod1:value", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NODE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:value", "\"text\"", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_VALUE);
         CHECK(SECoP_S_updateParameter2("pnode:mod1:go", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        /* SHALL's codes for a constant and for names missing a part */
+        CHECK(SECoP_S_updateParameter2("pnode:mod1:limit", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        CHECK(SECoP_S_updateParameter2("", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NAME);
+        CHECK(SECoP_S_updateParameter2("pnode", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_NODE);
+        CHECK(SECoP_S_updateParameter2("pnode:mod1", "1", -1, NULL, 0, NAN) == SECoP_S_ERROR_INVALID_MODULE);
+        /* as in SHALL, the text ends at the first NUL: a size counting the NUL or a whole
+           buffer works */
+        OK(SECoP_S_updateParameter2("pnode:mod1:value", "5.5", 4, NULL, 0, NAN));
+        OK(SECoP_S_updateParameter2("pnode:mod1:value", "6.5\0junk", 8, "0.5\0junk", 8, NAN));
+        return 0;
+
+    case 8: /* read mod1:value, answered with sizes that count the NUL and what follows */
+        OK(poll2(&id, &action, name, &name_size, value, &value_size));
+        CHECK(action == SECoP_S_ACTION_READ);
+        OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "7.5\0junk", 8, "0.75", 5, 0.0));
         return 0;
 
     default:
         return __LINE__;
     }
+}
+
+/* --- several requests of one module at once, in polling mode: the Rust side sends
+   requests, these functions play the host */
+
+static struct {
+    char name[64];
+    unsigned long long id;
+} g_fetched[16];
+static int g_fetched_count = 0;
+
+static enum SECoP_S_error add_conc_param(const char* name, int writable)
+{
+    enum SECoP_S_error rc = writable ? SECoP_S_addWritableParameter(name, NULL, NULL, "conc")
+                                     : SECoP_S_addReadableParameter(name, NULL, "conc");
+    if (rc < 0)
+        return rc;
+    rc = SECoP_S_addPropertyString("description", name, "conc");
+    if (rc < 0)
+        return rc;
+    return SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "conc");
+}
+
+/* kind 0: mod1 with p0 to p3 and target, not polled;
+   kind 1: mod1 with value, polled every 0.2 s;
+   kind 2: mod1 with value, p0 and target, polled every 0.2 s */
+int ctest_conc_build(unsigned short port, int kind)
+{
+    g_fetched_count = 0;
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "conc"));
+    OK(SECoP_S_createNode2("cn", "concurrent requests", "127.0.0.1", port, "conc"));
+    OK(SECoP_S_addModule("mod1", "conc"));
+    OK(SECoP_S_addPropertyString("description", "polled module", "conc"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", kind == 0 ? 0.0 : 0.2, "conc"));
+    if (kind == 0) {
+        OK(add_conc_param("p0", 0));
+        OK(add_conc_param("p1", 0));
+        OK(add_conc_param("p2", 0));
+        OK(add_conc_param("p3", 0));
+    }
+    if (kind != 0)
+        OK(add_conc_param("value", 0));
+    if (kind == 2)
+        OK(add_conc_param("p0", 0));
+    if (kind != 1)
+        OK(add_conc_param("target", 1));
+    CHECK(complete("conc") >= 0);
+    return 0;
+}
+
+/* fetches the next request, without answering any: of the given name unless NULL */
+int ctest_conc_fetch(const char* expected, int action)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action got = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int i;
+    enum SECoP_S_error rc = SECoP_S_ERROR_NO_DATA;
+    for (i = 0; i < 500 && rc == SECoP_S_ERROR_NO_DATA; ++i) {
+        int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+        rc = SECoP_S_getStoredCommand2(&id, &got, name, &name_size, value, &value_size, "conc");
+        if (rc == SECoP_S_ERROR_NO_DATA)
+            sleep_ms(10);
+    }
+    OK(rc);
+    CHECK((int)got == action);
+    CHECK(expected == NULL || strcmp(name, expected) == 0);
+    CHECK(g_fetched_count < 16);
+    strcpy(g_fetched[g_fetched_count].name, name);
+    g_fetched[g_fetched_count].id = id;
+    ++g_fetched_count;
+    return 0;
+}
+
+/* no request is waiting */
+int ctest_conc_none(void)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+    CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "conc") == SECoP_S_ERROR_NO_DATA);
+    return 0;
+}
+
+/* answers the request of that name fetched last */
+int ctest_conc_answer(const char* name, const char* value)
+{
+    int i;
+    for (i = g_fetched_count - 1; i >= 0; --i) {
+        if (g_fetched[i].id != 0 && strcmp(g_fetched[i].name, name) == 0) {
+            OK(SECoP_S_putCommandAnswer2(g_fetched[i].id, SECoP_S_SUCCESS, value, -1, NULL, 0, 0.0));
+            g_fetched[i].id = 0;
+            return 0;
+        }
+    }
+    return __LINE__;
+}
+
+/* a host that sets a short node timeout and never fetches a request: step 0 builds the
+   node, step 1 runs after the client got its TimeoutError */
+int ctest_server_abandoned(int step, unsigned short port)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+
+    if (step == 0) {
+        OK(SECoP_S_initLibrary(NULL, 0, 0, "abandon"));
+        OK(SECoP_S_createNode2("anode", "abandoned requests", "127.0.0.1", port, "abandon"));
+        OK(SECoP_S_addPropertyDouble("timeout", 0.5, "abandon"));
+        OK(SECoP_S_addModule("mod1", "abandon"));
+        OK(SECoP_S_addPropertyString("description", "module", "abandon"));
+        OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "abandon"));
+        OK(SECoP_S_addReadableParameter("value", NULL, "abandon"));
+        OK(SECoP_S_addPropertyString("description", "value", "abandon"));
+        OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "abandon"));
+        CHECK(complete("abandon") >= 0);
+        return 0;
+    }
+    /* nobody waits for the request any more: it is not handed out */
+    CHECK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "abandon") == SECoP_S_ERROR_NO_DATA);
+    return 0;
+}
+
+/* --- user error codes (MUST addition): the Rust side sends the requests */
+
+/* of context "uerr": _Overheated and HardwareError; of "uerr_cb": _CbFault and another
+   _Overheated */
+static enum SECoP_S_error g_user_over, g_user_hw, g_user_cb, g_user_other;
+
+static void get_user_error(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                           CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppData;
+    (void)ppSigma;
+    (void)timestamp;
+    *piError = g_user_cb;
+}
+
+/* a module mod1 with the double parameter "name", not polled */
+static enum SECoP_S_error add_user_module(const char* name, int writable, SECoP_S_getsetFunction get,
+                                          const char* context)
+{
+    enum SECoP_S_error rc = SECoP_S_addModule("mod1", context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", "module", context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyDouble("pollinterval", 0.0, context);
+    if (rc >= 0)
+        rc = writable ? SECoP_S_addWritableParameter(name, get, NULL, context)
+                      : SECoP_S_addReadableParameter(name, get, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", name, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", context);
+    return rc;
+}
+
+/* a polling-mode node "un" (context "uerr") with mod1:target, a callback node "ucb"
+   (context "uerr_cb") whose getter of mod1:value returns a user error, and the user
+   errors */
+int ctest_user_error_build(unsigned short poll_port, unsigned short cb_port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "uerr"));
+    OK(SECoP_S_createNode2("un", "user errors, polling", "127.0.0.1", poll_port, "uerr"));
+    OK(add_user_module("target", 1, NULL, "uerr"));
+    CHECK(complete("uerr") >= 0);
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "uerr_cb"));
+    OK(SECoP_S_createNode2("ucb", "user errors, callbacks", "127.0.0.1", cb_port, "uerr_cb"));
+    OK(add_user_module("value", 0, get_user_error, "uerr_cb"));
+    CHECK(complete("uerr_cb") >= 0);
+
+    CHECK(SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr_none") == SECoP_S_ERROR_INVALID_CONTEXT_ID);
+    g_user_over = SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr");
+    CHECK(g_user_over <= -1000);
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_over), "_Overheated: coil too hot") == 0);
+    g_user_hw = SECoP_S_registerUserError("HardwareError", "sensor disconnected", "uerr");
+    g_user_cb = SECoP_S_registerUserError("_CbFault", "from a callback", "uerr_cb");
+    CHECK(g_user_hw <= -1000 && g_user_cb <= -1000);
+    CHECK(g_user_hw != g_user_over && g_user_cb != g_user_hw && g_user_cb != g_user_over);
+    /* the same name in another context: a code and a text of its own */
+    g_user_other = SECoP_S_registerUserError("_Overheated", "coil B too hot", "uerr_cb");
+    CHECK(g_user_other <= -1000 && g_user_other != g_user_over);
+    CHECK(SECoP_S_registerUserError("_overheated", "x", "uerr") == SECoP_S_ERROR_NAME_ALREADY_USED);
+    CHECK(SECoP_S_registerUserError("hardwareerror", "x", "uerr") == SECoP_S_ERROR_NAME_ALREADY_USED);
+    CHECK(SECoP_S_registerUserError("over-heated", "x", "uerr") == SECoP_S_ERROR_INVALID_NAME);
+    CHECK(SECoP_S_registerUserError("1st", "x", "uerr") == SECoP_S_ERROR_INVALID_NAME);
+    CHECK(SECoP_S_registerUserError(NULL, "x", "uerr") == SECoP_S_ERROR_INVALID_NAME);
+    return 0;
+}
+
+/* answers the next request of context "uerr" with the user error of "which":
+   0 = _Overheated (with putCommandAnswer2), 1 = HardwareError (with putCommandAnswer),
+   2 = _Overheated of context "uerr_cb" */
+int ctest_user_error_answer(int which)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int i;
+    enum SECoP_S_error rc = SECoP_S_ERROR_NO_DATA;
+    for (i = 0; i < 500 && rc == SECoP_S_ERROR_NO_DATA; ++i) {
+        int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+        rc = SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "uerr");
+        if (rc == SECoP_S_ERROR_NO_DATA)
+            sleep_ms(10);
+    }
+    OK(rc);
+    if (which == 0)
+        OK(SECoP_S_putCommandAnswer2(id, g_user_over, NULL, 0, NULL, 0, 0.0));
+    else if (which == 1)
+        OK(SECoP_S_putCommandAnswer(id, g_user_hw, NULL, NULL, 0.0));
+    else
+        OK(SECoP_S_putCommandAnswer2(id, g_user_other, NULL, 0, NULL, 0, 0.0));
+    return 0;
+}
+
+/* registering again, unregistering and the lifetime of error strings */
+int ctest_user_error_unregister(void)
+{
+    const char* kept = SECoP_S_getErrorString(g_user_over);
+    enum SECoP_S_error again;
+    /* again for the same context: the same code */
+    CHECK(SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr") == g_user_over);
+    /* not by another context */
+    CHECK(SECoP_S_unregisterUserError(g_user_over, "uerr_cb") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_over), "_Overheated: coil too hot") == 0);
+    /* one unregister removes it */
+    OK(SECoP_S_unregisterUserError(g_user_over, "uerr"));
+    CHECK(SECoP_S_unregisterUserError(g_user_over, "uerr") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_over), "INVALID", 7) == 0);
+    /* a string handed out before stays valid */
+    CHECK(strcmp(kept, "_Overheated: coil too hot") == 0);
+    /* the other context's code of the same name stays */
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_other), "_Overheated: coil B too hot") == 0);
+    /* SHALL's codes are not registered */
+    CHECK(SECoP_S_unregisterUserError(SECoP_S_ERROR_IS_BUSY, "uerr") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(SECoP_S_unregisterUserError(SECoP_S_SUCCESS, "uerr") == SECoP_S_ERROR_INVALID_VALUE);
+    /* codes are never reused */
+    again = SECoP_S_registerUserError("_Overheated", "coil too hot", "uerr");
+    CHECK(again <= -1000 && again != g_user_over && again != g_user_hw && again != g_user_cb &&
+          again != g_user_other);
+    OK(SECoP_S_unregisterUserError(again, "uerr"));
+    return 0;
+}
+
+/* the codes end with a full doneLibrary of their context */
+int ctest_user_error_done(void)
+{
+    /* nodes only: the codes stay, and the context gets them back when initialized again */
+    SECoP_S_doneLibrary(1, "uerr_cb");
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_cb), "_CbFault: from a callback") == 0);
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "uerr_cb"));
+    CHECK(SECoP_S_registerUserError("_CbFault", "from a callback", "uerr_cb") == g_user_cb);
+    SECoP_S_doneLibrary(0, "uerr_cb");
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_cb), "INVALID", 7) == 0);
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_other), "INVALID", 7) == 0);
+    /* the other context's codes were not touched */
+    CHECK(strcmp(SECoP_S_getErrorString(g_user_hw), "HardwareError: sensor disconnected") == 0);
+    SECoP_S_doneLibrary(0, "uerr");
+    CHECK(strncmp(SECoP_S_getErrorString(g_user_hw), "INVALID", 7) == 0);
+    return 0;
+}
+
+/* --- filtered requests (MUST addition): the Rust side sends the requests */
+
+static unsigned long long g_filter_id = 0;
+
+static enum SECoP_S_error add_filter_param(const char* name, int writable, const char* context)
+{
+    enum SECoP_S_error rc = writable ? SECoP_S_addWritableParameter(name, NULL, NULL, context)
+                                     : SECoP_S_addReadableParameter(name, NULL, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", name, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", context);
+    return rc;
+}
+
+static enum SECoP_S_error add_filter_module(const char* name, const char* context)
+{
+    enum SECoP_S_error rc = SECoP_S_addModule(name, context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyString("description", "module", context);
+    if (rc >= 0)
+        rc = SECoP_S_addPropertyDouble("pollinterval", 0.0, context);
+    return rc;
+}
+
+/* polling-mode nodes, not polled: "fn" (context "filt") with mod1:a, mod1:b (writable)
+   and mod2:b; "fn2" (context "filt2") with mod1:a */
+int ctest_filter_build(unsigned short port, unsigned short port2)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "filt"));
+    OK(SECoP_S_createNode2("fn", "filtered requests", "127.0.0.1", port, "filt"));
+    OK(add_filter_module("mod1", "filt"));
+    OK(add_filter_param("a", 1, "filt"));
+    OK(add_filter_param("b", 1, "filt"));
+    OK(add_filter_module("mod2", "filt"));
+    OK(add_filter_param("b", 0, "filt"));
+    CHECK(complete("filt") >= 0);
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "filt2"));
+    OK(SECoP_S_createNode2("fn2", "another context", "127.0.0.1", port2, "filt2"));
+    OK(add_filter_module("mod1", "filt2"));
+    OK(add_filter_param("a", 0, "filt2"));
+    CHECK(complete("filt2") >= 0);
+    return 0;
+}
+
+/* one call of SECoP_S_filterStoredCommand2 with large buffers; returns its result */
+int ctest_filter_rc(const char* filter, int action, const char* context)
+{
+    enum SECoP_S_action got = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+    return SECoP_S_filterStoredCommand2(filter, action, &g_filter_id, &got, name, &name_size, value, &value_size,
+                                        context);
+}
+
+/* takes a request with the filter and checks it: name, action and value (a double, or
+   NULL for none). variant 2: SECoP_S_filterStoredCommand2 with a name buffer of
+   name_cap bytes; variant 1: SECoP_S_filterStoredCommand */
+int ctest_filter_take(const char* filter, int action, const char* context, const char* expected,
+                      int expected_action, const char* expected_value, int name_cap, int variant)
+{
+    enum SECoP_S_action got = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = name_cap, value_size = (int)sizeof(value);
+    CSECoPbaseType* handle = NULL;
+    double number = 0.0;
+    enum SECoP_S_error rc;
+    CHECK(name_cap > 0 && name_cap <= (int)sizeof(name));
+    if (variant == 2)
+        rc = SECoP_S_filterStoredCommand2(filter, action, &g_filter_id, &got, name, &name_size, value, &value_size,
+                                          context);
+    else
+        rc = SECoP_S_filterStoredCommand(filter, action, &g_filter_id, &got, name, &name_size, &handle, context);
+    if (name_cap > (int)strlen(expected)) {
+        OK(rc);
+        CHECK(strcmp(name, expected) == 0);
+    } else {
+        /* too small: handed out anyway, cut and NUL-terminated, with the needed size */
+        CHECK(rc == SECoP_S_WARNING_BUFFER_TOO_SMALL);
+        CHECK(strncmp(name, expected, (size_t)name_cap - 1) == 0 && name[name_cap - 1] == '\0');
+    }
+    CHECK(name_size == (int)strlen(expected));
+    CHECK(g_filter_id != 0 && (int)got == expected_action);
+    if (variant == 2) {
+        CHECK(expected_value == NULL ? value[0] == '\0' : strtod(value, NULL) == strtod(expected_value, NULL));
+    } else {
+        CHECK((handle == NULL) == (expected_value == NULL));
+        if (handle != NULL) {
+            CHECK(SECoP_V_getDouble(handle, 0, 0, &number) && number == strtod(expected_value, NULL));
+            SECoP_V_destroy(&handle);
+        }
+    }
+    return 0;
+}
+
+/* answers the request taken last */
+int ctest_filter_answer(const char* value)
+{
+    OK(SECoP_S_putCommandAnswer2(g_filter_id, SECoP_S_SUCCESS, value, -1, NULL, 0, 0.0));
+    return 0;
+}
+
+/* --- checks (MUST addition): the Rust side sends the requests */
+
+static char g_check_name[64];
+static double g_check_value = 0.0;
+static int g_check_calls = 0, g_check_had_value = 0, g_check_setter_calls = 0;
+static enum SECoP_S_error g_check_code = SECoP_S_SUCCESS, g_check_impossible = SECoP_S_SUCCESS;
+
+static void check_accessible(const char* name, const CSECoPbaseType* pValue, enum SECoP_S_error* piError)
+{
+    ++g_check_calls;
+    strncpy(g_check_name, name, sizeof(g_check_name) - 1);
+    g_check_name[sizeof(g_check_name) - 1] = '\0';
+    g_check_had_value = pValue != NULL;
+    g_check_value = 0.0;
+    if (pValue != NULL && !SECoP_V_getDouble(pValue, 0, 0, &g_check_value)) {
+        *piError = SECoP_S_ERROR_INTERNAL;
+        return;
+    }
+    *piError = g_check_code;
+}
+
+static void get_check(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                      CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppSigma;
+    (void)timestamp;
+    SECoP_V_modifyDouble(*ppData, 0, 0, 1.0);
+    *piError = SECoP_S_SUCCESS;
+}
+
+static void set_check(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                      CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppData;
+    (void)ppSigma;
+    (void)timestamp;
+    ++g_check_setter_calls;
+    *piError = SECoP_S_SUCCESS;
+}
+
+static void call_check(const char* name, const CSECoPbaseType* pArgument, enum SECoP_S_error* piError,
+                       CSECoPbaseType** ppReturn, double* timestamp)
+{
+    (void)name;
+    (void)pArgument;
+    (void)ppReturn;
+    (void)timestamp;
+    *piError = SECoP_S_SUCCESS;
+}
+
+/* callback mode: node "cknode" (context "chk_cb") with mod1:target (checkable, max 1000),
+   mod1:go (checkable, double argument), mod1:stop (checkable, no argument) and
+   mod1:other (not checkable); "Impossible" is registered */
+int ctest_check_cb_build(unsigned short port)
+{
+    g_check_calls = 0;
+    g_check_setter_calls = 0;
+    g_check_code = SECoP_S_SUCCESS;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "chk_cb"));
+    OK(SECoP_S_createNode2("cknode", "checks, callbacks", "127.0.0.1", port, "chk_cb"));
+    OK(SECoP_S_addModule("mod1", "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "module", "chk_cb"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "chk_cb"));
+    /* the focus is a module: refused, and nothing changes */
+    CHECK(SECoP_S_setCheckFunction(check_accessible, "chk_cb") == SECoP_S_ERROR_INVALID_PARAMETER);
+    OK(SECoP_S_addWritableParameter("target", get_check, set_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "target", "chk_cb"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\",\"max\":1000}", "chk_cb"));
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_addCommand("go", call_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "go", "chk_cb"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"command\",\"argument\":{\"type\":\"double\"}}", "chk_cb"));
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_addCommand("stop", call_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "stop", "chk_cb"));
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_addWritableParameter("other", get_check, set_check, "chk_cb"));
+    OK(SECoP_S_addPropertyString("description", "other", "chk_cb"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_cb"));
+    /* set and cleared again: not checkable */
+    OK(SECoP_S_setCheckFunction(check_accessible, "chk_cb"));
+    OK(SECoP_S_setCheckFunction(NULL, "chk_cb"));
+    CHECK(complete("chk_cb") >= 0);
+    g_check_impossible = SECoP_S_registerUserError("Impossible", "not in this configuration", "chk_cb");
+    CHECK(g_check_impossible <= -1000);
+    return 0;
+}
+
+/* what the check function answers next: 0 success, 1 out of range, 2 "Impossible" */
+int ctest_check_cb_answer(int which)
+{
+    g_check_code = which == 0 ? SECoP_S_SUCCESS : which == 1 ? SECoP_S_ERROR_OUT_OF_RANGE : g_check_impossible;
+    return 0;
+}
+
+/* the last call of the check function: its name and value (NaN: no value), and how many
+   calls there were of it and of the setter */
+int ctest_check_cb_last(const char* name, double value, int calls, int setter_calls)
+{
+    CHECK(g_check_calls == calls);
+    CHECK(g_check_setter_calls == setter_calls);
+    if (calls > 0) {
+        CHECK(strcmp(g_check_name, name) == 0);
+        if (value != value) {
+            CHECK(!g_check_had_value);
+        } else {
+            CHECK(g_check_had_value && g_check_value == value);
+        }
+    }
+    return 0;
+}
+
+/* callback mode: "checkable" without a check function stops nodeComplete */
+int ctest_check_cb_missing(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "chk_bad"));
+    OK(SECoP_S_createNode2("cbad", "checkable without function", "127.0.0.1", port, "chk_bad"));
+    OK(SECoP_S_addModule("mod1", "chk_bad"));
+    OK(SECoP_S_addPropertyString("description", "module", "chk_bad"));
+    OK(SECoP_S_addWritableParameter("target", get_check, set_check, "chk_bad"));
+    OK(SECoP_S_addPropertyString("description", "target", "chk_bad"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_bad"));
+    OK(SECoP_S_addPropertyBoolean("checkable", 1, "chk_bad"));
+    CHECK(SECoP_S_nodeComplete("chk_bad") == SECoP_S_ERROR_MISSING_MANDATORY);
+    /* names cbad:mod1:target */
+    SECoP_S_showErrors();
+    SECoP_S_doneLibrary(0, "chk_bad");
+    return 0;
+}
+
+/* polling mode: node "cpnode" (context "chk_poll", node timeout 1 s) with mod1:target
+   (checkable through the property) and mod1:other (not checkable) */
+int ctest_check_poll_build(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "chk_poll"));
+    OK(SECoP_S_createNode2("cpnode", "checks, polling", "127.0.0.1", port, "chk_poll"));
+    OK(SECoP_S_addPropertyDouble("timeout", 1.0, "chk_poll"));
+    OK(SECoP_S_addModule("mod1", "chk_poll"));
+    OK(SECoP_S_addPropertyString("description", "module", "chk_poll"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "chk_poll"));
+    OK(SECoP_S_addWritableParameter("target", NULL, NULL, "chk_poll"));
+    OK(SECoP_S_addPropertyString("description", "target", "chk_poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_poll"));
+    OK(SECoP_S_addPropertyBoolean("checkable", 1, "chk_poll"));
+    OK(SECoP_S_addWritableParameter("other", NULL, NULL, "chk_poll"));
+    OK(SECoP_S_addPropertyString("description", "other", "chk_poll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "chk_poll"));
+    CHECK(complete("chk_poll") >= 0);
+    return 0;
+}
+
+/* takes the next request with SECoP_S_getStoredCommand2: a check of cpnode:mod1:target
+   with the value given, answered with SECoP_S_SUCCESS and a value that is ignored */
+int ctest_check_poll_answer(double expected)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64], value[64];
+    int name_size = (int)sizeof(name), value_size = (int)sizeof(value);
+    OK(SECoP_S_getStoredCommand2(&id, &action, name, &name_size, value, &value_size, "chk_poll"));
+    CHECK(action == SECoP_S_ACTION_CHECK);
+    CHECK(strcmp(name, "cpnode:mod1:target") == 0);
+    CHECK(strtod(value, NULL) == expected);
+    OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "12345", -1, NULL, 0, 0.0));
+    return 0;
 }
 
 /* --- stress */
@@ -722,4 +1385,236 @@ int ctest_status_window(void)
     SECoP_S_showStatusWindow(0);
     SECoP_S_doneLibrary(1, "gui");
     return 0;
+}
+
+/* --- matrix parameters */
+
+static const char* const MATRIX_IMAGE =
+    "{\"type\":\"matrix\",\"elementtype\":\"<f4\",\"names\":[\"x\",\"y\"],\"maxlen\":[100,100]}";
+/* the specification's example: 2x3 little-endian floats 1 to 6 */
+static const char* const MATRIX_SPEC = "{\"len\":[2,3],\"blob\":\"AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA\"}";
+static const float g_six[6] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}; /* all targets are little-endian */
+static const unsigned int g_len23[2] = {2, 3};
+
+/* fills the matrix handle a member at a time: lengths, then the blob */
+static void get_image(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                      CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppSigma;
+    (void)timestamp;
+    if (SECoP_V_modifyInteger(*ppData, 1, 0, 2) && SECoP_V_modifyInteger(*ppData, 1, 1, 3) &&
+        SECoP_V_modifyString(*ppData, 2, (const char*)g_six, (int)sizeof(g_six)))
+        *piError = SECoP_S_SUCCESS;
+    else
+        *piError = SECoP_S_ERROR_INTERNAL;
+}
+
+/* a 2x3 matrix with the bytes of one element only */
+static void get_bad_image(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                          CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppSigma;
+    (void)timestamp;
+    SECoP_V_modifyInteger(*ppData, 1, 0, 2);
+    SECoP_V_modifyInteger(*ppData, 1, 1, 3);
+    SECoP_V_modifyString(*ppData, 2, (const char*)g_six, (int)sizeof(float));
+    *piError = SECoP_S_SUCCESS;
+}
+
+static enum SECoP_S_error add_matrix_param(const char* name, int writable, SECoP_S_getsetFunction get,
+                                           const char* context)
+{
+    enum SECoP_S_error rc = writable ? SECoP_S_addWritableParameter(name, get, NULL, context)
+                                     : SECoP_S_addReadableParameter(name, get, context);
+    if (rc == SECoP_S_SUCCESS)
+        rc = SECoP_S_addPropertyString("description", name, context);
+    if (rc == SECoP_S_SUCCESS)
+        rc = SECoP_S_addPropertyJSON("datainfo", MATRIX_IMAGE, context);
+    return rc;
+}
+
+int ctest_server_matrix_callbacks(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "mcb"));
+    OK(SECoP_S_createNode2("mcbnode", "matrices in callback mode", "127.0.0.1", port, "mcb"));
+    OK(SECoP_S_addModule("cam", "mcb"));
+    OK(SECoP_S_addPropertyString("description", "a camera", "mcb"));
+    OK(add_matrix_param("image", 0, get_image, "mcb"));
+    OK(SECoP_S_setAddFocus("mcbnode:cam"));
+    OK(add_matrix_param("bad", 0, get_bad_image, "mcb"));
+    CHECK(complete("mcb") >= 0);
+    return 0;
+}
+
+int ctest_server_matrix_polling(unsigned short port)
+{
+    OK(SECoP_S_initLibrary(NULL, 0, 0, "mpoll"));
+    OK(SECoP_S_createNode2("mpnode", "matrices in polling mode", "127.0.0.1", port, "mpoll"));
+    OK(SECoP_S_addModule("cam", "mpoll"));
+    OK(SECoP_S_addPropertyString("description", "a camera", "mpoll"));
+    OK(add_matrix_param("image", 1, NULL, "mpoll"));
+    OK(SECoP_S_setAddFocus("mpnode:cam"));
+    OK(SECoP_S_addReadableParameter("plain", NULL, "mpoll"));
+    OK(SECoP_S_addPropertyString("description", "not a matrix", "mpoll"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "mpoll"));
+    CHECK(complete("mpoll") >= 0);
+    return 0;
+}
+
+/* waits for the next request of context "mpoll", with its value as a handle */
+static enum SECoP_S_error matrix_poll(unsigned long long* id, enum SECoP_S_action* action, char* name,
+                                      int name_size, CSECoPbaseType** value)
+{
+    int i, size;
+    enum SECoP_S_error rc = SECoP_S_ERROR_NO_DATA;
+    for (i = 0; i < 500 && rc == SECoP_S_ERROR_NO_DATA; ++i) {
+        size = name_size;
+        rc = SECoP_S_getStoredCommand(id, action, name, &size, value, "mpoll");
+        if (rc == SECoP_S_ERROR_NO_DATA)
+            sleep_ms(10);
+    }
+    return rc;
+}
+
+/* one step of the matrix polling test; the Rust side sends the matching request before */
+int ctest_server_matrix_step(int step)
+{
+    unsigned long long id = 0;
+    enum SECoP_S_action action = SECoP_S_ACTION_NONE;
+    char name[64];
+    CSECoPbaseType* handle = NULL;
+    CSECoPbaseType* hint = NULL;
+    enum SECoP_V_type t = SECoP_VT_NONE;
+    unsigned int count = 0;
+    const char* member = NULL;
+    long long len = 0;
+    unsigned char raw[5];
+    float value = 0.0f;
+    const unsigned int len00[2] = {0, 0};
+
+    switch (step) {
+    case 1: /* change cam:image {"len":[1,1],"blob":"AACAPw=="} */
+        OK(matrix_poll(&id, &action, name, (int)sizeof(name), &handle));
+        CHECK(action == SECoP_S_ACTION_CHANGE && strcmp(name, "mpnode:cam:image") == 0);
+        CHECK(SECoP_V_getInfo(handle, 0, &t, &count, &member) && t == SECoP_VT_STRUCT && count == 2);
+        CHECK(SECoP_V_getInfo(handle, 1, &t, &count, &member) && t == SECoP_VT_ARRAY_INTEGER && count == 2);
+        CHECK(strcmp(member, "len") == 0);
+        CHECK(SECoP_V_getInteger(handle, 1, 0, &len) && len == 1);
+        CHECK(SECoP_V_getInteger(handle, 1, 1, &len) && len == 1);
+        CHECK(SECoP_V_getInfo(handle, 2, &t, &count, &member) && t == SECoP_VT_BLOB && count == 4);
+        CHECK(strcmp(member, "blob") == 0);
+        CHECK(SECoP_V_getString(handle, 2, (unsigned int)sizeof(raw), (char*)raw) == 5);
+        memcpy(&value, raw, sizeof(value));
+        CHECK(value == 1.0f);
+        /* the value set, as the handle */
+        OK(SECoP_S_putCommandAnswer(id, SECoP_S_SUCCESS, handle, NULL, NAN));
+        SECoP_V_destroy(&handle);
+        return 0;
+
+    case 2: /* read cam:image, answered with the matrix arguments */
+        OK(matrix_poll(&id, &action, name, (int)sizeof(name), &handle));
+        CHECK(action == SECoP_S_ACTION_READ && handle == NULL);
+        /* sizes that do not fit leave the request handed out */
+        CHECK(SECoP_S_putCommandAnswerMatrix(id, SECoP_S_SUCCESS, g_len23, 2, g_six, 20, NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        CHECK(SECoP_S_putCommandAnswerMatrix(id, SECoP_S_SUCCESS, g_len23, 1, g_six, 24, NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        OK(SECoP_S_putCommandAnswerMatrix(id, SECoP_S_SUCCESS, g_len23, 2, g_six, (int)sizeof(g_six), 1000.0));
+        CHECK(SECoP_S_putCommandAnswerMatrix(id, SECoP_S_SUCCESS, g_len23, 2, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_NAME);
+        return 0;
+
+    case 3: /* read cam:image, answered with an error and no matrix */
+        OK(matrix_poll(&id, &action, name, (int)sizeof(name), &handle));
+        OK(SECoP_S_putCommandAnswerMatrix(id, SECoP_S_ERROR_COMM_FAILED, NULL, 0, NULL, 0, NAN));
+        return 0;
+
+    case 4: /* read cam:plain: no matrix value, but still answerable */
+        OK(matrix_poll(&id, &action, name, (int)sizeof(name), &handle));
+        CHECK(strcmp(name, "mpnode:cam:plain") == 0);
+        CHECK(SECoP_S_putCommandAnswerMatrix(id, SECoP_S_SUCCESS, g_len23, 2, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        OK(SECoP_S_putCommandAnswer2(id, SECoP_S_SUCCESS, "1.5", -1, NULL, 0, NAN));
+        return 0;
+
+    case 5: /* pushed matrices */
+        /* the timestamp is now */
+        OK(SECoP_S_updateParameterMatrix("mpnode:cam:image", g_len23, 2, g_six, (int)sizeof(g_six), NAN));
+        /* the same matrix through all three functions */
+        hint = SECoP_V_create(MATRIX_IMAGE);
+        handle = SECoP_V_fromJSON(MATRIX_SPEC, hint);
+        CHECK(handle != NULL);
+        OK(SECoP_S_updateParameter("mpnode:cam:image", handle, NULL, 1000.0));
+        OK(SECoP_S_updateParameter2("mpnode:cam:image", MATRIX_SPEC, -1, NULL, 0, 1000.0));
+        OK(SECoP_S_updateParameterMatrix("mpnode:cam:image", g_len23, 2, g_six, (int)sizeof(g_six), 1000.0));
+        SECoP_V_destroy(&handle);
+        SECoP_V_destroy(&hint);
+        /* nothing is sent for these: a handle whose blob is too short for its lengths, */
+        handle = SECoP_V_create(MATRIX_IMAGE);
+        CHECK(SECoP_V_modifyInteger(handle, 1, 0, 2) && SECoP_V_modifyInteger(handle, 1, 1, 3));
+        CHECK(SECoP_S_updateParameter("mpnode:cam:image", handle, NULL, NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        SECoP_V_destroy(&handle);
+        /* and matrix arguments that do not fit */
+        CHECK(SECoP_S_updateParameterMatrix("mpnode:cam:plain", g_len23, 2, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        CHECK(SECoP_S_updateParameterMatrix("mpnode:cam:image", g_len23, 2, g_six, 20, NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        CHECK(SECoP_S_updateParameterMatrix("mpnode:cam:image", g_len23, 3, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        CHECK(SECoP_S_updateParameterMatrix("mpnode:cam:image", g_len23, 2, NULL, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_VALUE);
+        CHECK(SECoP_S_updateParameterMatrix("mpnode:cam:nope", g_len23, 2, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_PARAMETER);
+        CHECK(SECoP_S_updateParameterMatrix("mpnode:nope:image", g_len23, 2, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_MODULE);
+        CHECK(SECoP_S_updateParameterMatrix("other:cam:image", g_len23, 2, g_six, (int)sizeof(g_six), NAN) == SECoP_S_ERROR_INVALID_NODE);
+        /* an empty matrix without data */
+        OK(SECoP_S_updateParameterMatrix("mpnode:cam:image", len00, 2, NULL, 0, 1000.0));
+        return 0;
+
+    default:
+        return __LINE__;
+    }
+}
+
+/* --- application log messages (MUST addition): node "my_node", module mod1 in callback
+   mode, whose getter logs for its own module while the node answers the read */
+
+static volatile int g_log_getter_rc = 1;
+
+static void get_logging(const char* name, enum SECoP_S_error* piError, CSECoPbaseType** ppData,
+                        CSECoPbaseType** ppSigma, double* timestamp)
+{
+    (void)name;
+    (void)ppSigma;
+    (void)timestamp;
+    g_log_getter_rc = SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "read requested");
+    SECoP_V_modifyDouble(*ppData, 0, 0, 1.0);
+    *piError = SECoP_S_SUCCESS;
+}
+
+int ctest_log_build(unsigned short port)
+{
+    g_log_getter_rc = 1;
+    OK(SECoP_S_initLibrary(NULL, 0, 1, "log"));
+    OK(SECoP_S_createNode2("my_node", "logs", "127.0.0.1", port, "log"));
+    OK(SECoP_S_addModule("mod1", "log"));
+    OK(SECoP_S_addPropertyString("description", "logging module", "log"));
+    OK(SECoP_S_addPropertyDouble("pollinterval", 0.0, "log"));
+    OK(SECoP_S_addReadableParameter("value", get_logging, "log"));
+    OK(SECoP_S_addPropertyString("description", "value", "log"));
+    OK(SECoP_S_addPropertyJSON("datainfo", "{\"type\":\"double\"}", "log"));
+    /* not complete yet */
+    CHECK(SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "x") == SECoP_S_ERROR_INVALID_NODE);
+    CHECK(complete("log") >= 0);
+    CHECK(SECoP_S_logMessage("my_node:nope", SECoP_S_LOG_INFO, "x") == SECoP_S_ERROR_INVALID_MODULE);
+    CHECK(SECoP_S_logMessage("other:mod1", SECoP_S_LOG_INFO, "x") == SECoP_S_ERROR_INVALID_NODE);
+    CHECK(SECoP_S_logMessage("my_node:mod1", (enum SECoP_S_logLevel)0, "x") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(SECoP_S_logMessage("my_node:mod1", (enum SECoP_S_logLevel)5, "x") == SECoP_S_ERROR_INVALID_VALUE);
+    CHECK(SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, NULL) == SECoP_S_ERROR_INVALID_VALUE);
+    return 0;
+}
+
+/* SECoP_S_logMessage for my_node:mod1 */
+int ctest_log_message(int level, const char* text)
+{
+    return SECoP_S_logMessage("my_node:mod1", (enum SECoP_S_logLevel)level, text);
+}
+
+/* what SECoP_S_logMessage returned in the getter, 1 before it ran */
+int ctest_log_getter_rc(void)
+{
+    return g_log_getter_rc;
 }

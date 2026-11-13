@@ -11,12 +11,19 @@ use std::fmt;
 use std::str::FromStr;
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
 use crate::identifier::{NameClash, NameScope};
 use crate::path::{Path, PathSegment};
+
+mod builder;
+mod parse;
+mod serialize;
+
+pub use builder::DataInfoBuilder;
+#[cfg(test)]
+mod tests;
 
 /// Default `relative_resolution` of `double` and `scaled`.
 pub const DEFAULT_RELATIVE_RESOLUTION: f64 = 1.2e-7;
@@ -47,6 +54,8 @@ pub enum DataInfo {
     Tuple(TupleInfo),
     /// `struct`: named members.
     Struct(StructInfo),
+    /// `matrix`: multi-dimensional numeric data, transported as lengths and base64 bytes.
+    Matrix(MatrixInfo),
     /// `command`: argument and result of a command.
     Command(CommandInfo),
 }
@@ -139,6 +148,104 @@ pub struct StructInfo {
     extra: Map<String, Json>,
 }
 
+/// Properties of a `matrix` datainfo.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatrixInfo {
+    elementtype: ElementType,
+    names: Vec<String>,
+    maxlen: Vec<u64>,
+    extra: Map<String, Json>,
+}
+
+/// The kind of number in a matrix element: the middle letter of `elementtype`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ElementKind {
+    /// `i`: signed integer.
+    Int,
+    /// `u`: unsigned integer.
+    UInt,
+    /// `f`: IEEE 754 floating point number.
+    Float,
+}
+
+/// The `elementtype` of a matrix, e.g. `<f4`: byte order, kind and size of one element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ElementType {
+    big_endian: bool,
+    kind: ElementKind,
+    bytes: u8,
+}
+
+impl ElementType {
+    /// An element type, or `None` if `bytes` is not 1, 2, 4 or 8, or a float has 1 byte.
+    pub fn new(big_endian: bool, kind: ElementKind, bytes: u8) -> Option<Self> {
+        let valid = matches!(bytes, 1 | 2 | 4 | 8) && !(kind == ElementKind::Float && bytes == 1);
+        valid.then_some(Self {
+            big_endian,
+            kind,
+            bytes,
+        })
+    }
+
+    /// Whether the elements are big-endian (`>`); little-endian (`<`) otherwise.
+    pub fn big_endian(self) -> bool {
+        self.big_endian
+    }
+
+    /// The kind of number.
+    pub fn kind(self) -> ElementKind {
+        self.kind
+    }
+
+    /// Size of one element in bytes: 1, 2, 4 or 8.
+    pub fn size(self) -> usize {
+        usize::from(self.bytes)
+    }
+}
+
+impl fmt::Display for ElementType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let order = if self.big_endian { '>' } else { '<' };
+        let kind = match self.kind {
+            ElementKind::Int => 'i',
+            ElementKind::UInt => 'u',
+            ElementKind::Float => 'f',
+        };
+        write!(f, "{order}{kind}{}", self.bytes)
+    }
+}
+
+/// A string is not a valid matrix `elementtype`.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid matrix element type `{0}`")]
+pub struct InvalidElementType(pub String);
+
+impl FromStr for ElementType {
+    type Err = InvalidElementType;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let invalid = || InvalidElementType(s.to_owned());
+        let &[order, kind, bytes] = s.as_bytes() else {
+            return Err(invalid());
+        };
+        let big_endian = match order {
+            b'<' => false,
+            b'>' => true,
+            _ => return Err(invalid()),
+        };
+        let kind = match kind {
+            b'i' => ElementKind::Int,
+            b'u' => ElementKind::UInt,
+            b'f' => ElementKind::Float,
+            _ => return Err(invalid()),
+        };
+        if !bytes.is_ascii_digit() {
+            return Err(invalid());
+        }
+        Self::new(big_endian, kind, bytes - b'0').ok_or_else(invalid)
+    }
+}
+
 /// Properties of a `command` datainfo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandInfo {
@@ -196,9 +303,10 @@ pub enum DataInfoErrorKind {
     /// The `type` is not a SECoP data type.
     #[error("unknown datainfo type `{0}`")]
     UnknownType(String),
-    /// The `type` is a SECoP data type that must does not support yet.
-    #[error("datainfo type `{0}` is not supported")]
-    UnsupportedType(String),
+    /// A property defined by SECoP that must does not support yet, such as the
+    /// `compression` of a matrix.
+    #[error("property `{0}` is not supported")]
+    UnsupportedProperty(&'static str),
     /// A mandatory property of the type is missing.
     #[error("missing mandatory property `{0}`")]
     MissingProperty(&'static str),
@@ -420,526 +528,6 @@ fn add_member_name(scope: &mut NameScope, name: &str) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------------------
-// parsing per type
-
-impl DataInfo {
-    /// Parses and validates a datainfo from its JSON representation.
-    pub fn from_json(json: &Json) -> Result<Self> {
-        let Json::Object(obj) = json else {
-            return err(DataInfoErrorKind::NotAnObject);
-        };
-        let Some(Json::String(ty)) = obj.get("type") else {
-            return err(DataInfoErrorKind::MissingType);
-        };
-        match ty.as_str() {
-            "double" => DoubleInfo::parse(obj).map(Self::Double),
-            "scaled" => ScaledInfo::parse(obj).map(Self::Scaled),
-            "int" => IntInfo::parse(obj).map(Self::Int),
-            "bool" => Ok(Self::Bool(BoolInfo {
-                extra: Props { obj, known: &[] }.extra(),
-            })),
-            "enum" => EnumInfo::parse(obj).map(Self::Enum),
-            "string" => StringInfo::parse(obj).map(Self::String),
-            "blob" => BlobInfo::parse(obj).map(Self::Blob),
-            "array" => ArrayInfo::parse(obj).map(Self::Array),
-            "tuple" => TupleInfo::parse(obj).map(Self::Tuple),
-            "struct" => StructInfo::parse(obj).map(Self::Struct),
-            "command" => CommandInfo::parse(obj).map(Self::Command),
-            "matrix" => err(DataInfoErrorKind::UnsupportedType(ty.clone())),
-            _ => err(DataInfoErrorKind::UnknownType(ty.clone())),
-        }
-    }
-}
-
-impl DoubleInfo {
-    const KNOWN: &[&str] = &[
-        "min",
-        "max",
-        "unit",
-        "absolute_resolution",
-        "relative_resolution",
-        "fmtstr",
-    ];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let info = Self {
-            min: p.f64("min")?,
-            max: p.f64("max")?,
-            unit: p.string("unit")?,
-            absolute_resolution: p.f64("absolute_resolution")?,
-            relative_resolution: p.f64("relative_resolution")?,
-            fmtstr: p.fmtstr()?,
-            extra: p.extra(),
-        };
-        check_bounds(info.min, info.max, "min", "max")?;
-        Ok(info)
-    }
-}
-
-impl ScaledInfo {
-    const KNOWN: &[&str] = &[
-        "scale",
-        "min",
-        "max",
-        "unit",
-        "absolute_resolution",
-        "relative_resolution",
-        "fmtstr",
-    ];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let info = Self {
-            scale: p.required("scale", Props::f64)?,
-            min: p.required("min", Props::i64)?,
-            max: p.required("max", Props::i64)?,
-            unit: p.string("unit")?,
-            absolute_resolution: p.f64("absolute_resolution")?,
-            relative_resolution: p.f64("relative_resolution")?,
-            fmtstr: p.fmtstr()?,
-            extra: p.extra(),
-        };
-        if !(info.scale.is_finite() && info.scale > 0.0) {
-            return err(DataInfoErrorKind::InvalidScale);
-        }
-        check_bounds(Some(info.min), Some(info.max), "min", "max")?;
-        Ok(info)
-    }
-}
-
-impl IntInfo {
-    const KNOWN: &[&str] = &["min", "max", "unit"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let info = Self {
-            min: p.required("min", Props::i64)?,
-            max: p.required("max", Props::i64)?,
-            unit: p.string("unit")?,
-            extra: p.extra(),
-        };
-        check_bounds(Some(info.min), Some(info.max), "min", "max")?;
-        Ok(info)
-    }
-}
-
-impl EnumInfo {
-    const KNOWN: &[&str] = &["members"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let Some(json_members) = p.get("members") else {
-            return err(DataInfoErrorKind::MissingProperty("members"));
-        };
-        let Json::Object(json_members) = json_members else {
-            return Err(wrong("members", "an object of names to integers"));
-        };
-        let mut scope = NameScope::new();
-        let mut members: IndexMap<String, i64> = IndexMap::new();
-        for (name, value) in json_members {
-            add_member_name(&mut scope, name)?;
-            let value = json_to_i64(value)
-                .ok_or_else(|| wrong("members", "an object of names to integers"))?;
-            if let Some((first, _)) = members.iter().find(|(_, v)| **v == value) {
-                return err(DataInfoErrorKind::DuplicateEnumValue {
-                    value,
-                    first: first.clone(),
-                    second: name.clone(),
-                });
-            }
-            members.insert(name.clone(), value);
-        }
-        Ok(Self {
-            members,
-            extra: p.extra(),
-        })
-    }
-}
-
-impl StringInfo {
-    const KNOWN: &[&str] = &["minchars", "maxchars", "isUTF8"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let info = Self {
-            minchars: p.u64("minchars")?,
-            maxchars: p.u64("maxchars")?,
-            is_utf8: p.bool("isUTF8")?,
-            extra: p.extra(),
-        };
-        check_bounds(info.minchars, info.maxchars, "minchars", "maxchars")?;
-        Ok(info)
-    }
-}
-
-impl BlobInfo {
-    const KNOWN: &[&str] = &["minbytes", "maxbytes"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let info = Self {
-            minbytes: p.u64("minbytes")?,
-            maxbytes: p.required("maxbytes", Props::u64)?,
-            extra: p.extra(),
-        };
-        check_bounds(info.minbytes, Some(info.maxbytes), "minbytes", "maxbytes")?;
-        Ok(info)
-    }
-}
-
-impl ArrayInfo {
-    const KNOWN: &[&str] = &["members", "minlen", "maxlen"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let Some(json_members) = p.get("members") else {
-            return err(DataInfoErrorKind::MissingProperty("members"));
-        };
-        let members = Box::new(parse_nested(json_members, PathSegment::Element)?);
-        let info = Self {
-            members,
-            minlen: p.u64("minlen")?,
-            maxlen: p.required("maxlen", Props::u64)?,
-            extra: p.extra(),
-        };
-        check_bounds(info.minlen, Some(info.maxlen), "minlen", "maxlen")?;
-        Ok(info)
-    }
-}
-
-impl TupleInfo {
-    const KNOWN: &[&str] = &["members"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let Some(json_members) = p.get("members") else {
-            return err(DataInfoErrorKind::MissingProperty("members"));
-        };
-        let Json::Array(json_members) = json_members else {
-            return Err(wrong("members", "a list of datainfos"));
-        };
-        let members = json_members
-            .iter()
-            .enumerate()
-            .map(|(i, m)| parse_nested(m, PathSegment::Index(i)))
-            .collect::<Result<_>>()?;
-        Ok(Self {
-            members,
-            extra: p.extra(),
-        })
-    }
-}
-
-impl StructInfo {
-    const KNOWN: &[&str] = &["members", "optional"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let Some(json_members) = p.get("members") else {
-            return err(DataInfoErrorKind::MissingProperty("members"));
-        };
-        let Json::Object(json_members) = json_members else {
-            return Err(wrong("members", "an object of names to datainfos"));
-        };
-        let mut scope = NameScope::new();
-        let mut members = IndexMap::new();
-        for (name, member) in json_members {
-            add_member_name(&mut scope, name)?;
-            members.insert(
-                name.clone(),
-                parse_nested(member, PathSegment::Member(name.clone()))?,
-            );
-        }
-        let optional = match p.get("optional") {
-            None => None,
-            Some(Json::Array(names)) => {
-                let names = names
-                    .iter()
-                    .map(|n| n.as_str().map(str::to_owned))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or_else(|| wrong("optional", "a list of member names"))?;
-                if let Some(unknown) = names.iter().find(|n| !members.contains_key(*n)) {
-                    return err(DataInfoErrorKind::UnknownOptionalMember(unknown.clone()));
-                }
-                Some(names)
-            }
-            Some(_) => return Err(wrong("optional", "a list of member names")),
-        };
-        Ok(Self {
-            members,
-            optional,
-            extra: p.extra(),
-        })
-    }
-}
-
-impl CommandInfo {
-    const KNOWN: &[&str] = &["argument", "result"];
-
-    fn parse(obj: &Map<String, Json>) -> Result<Self> {
-        let p = Props {
-            obj,
-            known: Self::KNOWN,
-        };
-        let nested = |key, segment| -> Result<Option<Box<DataInfo>>> {
-            match p.get(key) {
-                None | Some(Json::Null) => Ok(None),
-                Some(json) => parse_nested(json, segment).map(|i| Some(Box::new(i))),
-            }
-        };
-        Ok(Self {
-            argument: nested("argument", PathSegment::Argument)?,
-            result: nested("result", PathSegment::Result)?,
-            extra: p.extra(),
-        })
-    }
-}
-
-// ---------------------------------------------------------------------------------------
-// serialization
-
-/// Builds a JSON object with `type` first, then the given properties in order.
-struct ObjectWriter(Map<String, Json>);
-
-impl ObjectWriter {
-    fn new(ty: &str) -> Self {
-        let mut map = Map::new();
-        map.insert("type".into(), Json::from(ty));
-        Self(map)
-    }
-
-    fn opt(mut self, key: &str, value: Option<impl Into<Json>>) -> Self {
-        if let Some(v) = value {
-            self.0.insert(key.into(), v.into());
-        }
-        self
-    }
-
-    fn set(mut self, key: &str, value: impl Into<Json>) -> Self {
-        self.0.insert(key.into(), value.into());
-        self
-    }
-
-    fn finish(mut self, extra: &Map<String, Json>) -> Json {
-        for (k, v) in extra {
-            self.0.insert(k.clone(), v.clone());
-        }
-        Json::Object(self.0)
-    }
-}
-
-impl DataInfo {
-    /// Serializes the datainfo to JSON, with only the properties that were given.
-    pub fn to_json(&self) -> Json {
-        match self {
-            Self::Double(i) => ObjectWriter::new("double")
-                .opt("min", i.min)
-                .opt("max", i.max)
-                .opt("unit", i.unit.clone())
-                .opt("absolute_resolution", i.absolute_resolution)
-                .opt("relative_resolution", i.relative_resolution)
-                .opt("fmtstr", i.fmtstr.clone())
-                .finish(&i.extra),
-            Self::Scaled(i) => ObjectWriter::new("scaled")
-                .set("scale", i.scale)
-                .set("min", i.min)
-                .set("max", i.max)
-                .opt("unit", i.unit.clone())
-                .opt("absolute_resolution", i.absolute_resolution)
-                .opt("relative_resolution", i.relative_resolution)
-                .opt("fmtstr", i.fmtstr.clone())
-                .finish(&i.extra),
-            Self::Int(i) => ObjectWriter::new("int")
-                .set("min", i.min)
-                .set("max", i.max)
-                .opt("unit", i.unit.clone())
-                .finish(&i.extra),
-            Self::Bool(i) => ObjectWriter::new("bool").finish(&i.extra),
-            Self::Enum(i) => {
-                let members: Map<String, Json> = i
-                    .members
-                    .iter()
-                    .map(|(k, v)| (k.clone(), Json::from(*v)))
-                    .collect();
-                ObjectWriter::new("enum")
-                    .set("members", members)
-                    .finish(&i.extra)
-            }
-            Self::String(i) => ObjectWriter::new("string")
-                .opt("minchars", i.minchars)
-                .opt("maxchars", i.maxchars)
-                .opt("isUTF8", i.is_utf8)
-                .finish(&i.extra),
-            Self::Blob(i) => ObjectWriter::new("blob")
-                .opt("minbytes", i.minbytes)
-                .set("maxbytes", i.maxbytes)
-                .finish(&i.extra),
-            Self::Array(i) => ObjectWriter::new("array")
-                .set("members", i.members.to_json())
-                .opt("minlen", i.minlen)
-                .set("maxlen", i.maxlen)
-                .finish(&i.extra),
-            Self::Tuple(i) => {
-                let members: Vec<Json> = i.members.iter().map(Self::to_json).collect();
-                ObjectWriter::new("tuple")
-                    .set("members", members)
-                    .finish(&i.extra)
-            }
-            Self::Struct(i) => {
-                let members: Map<String, Json> = i
-                    .members
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.to_json()))
-                    .collect();
-                ObjectWriter::new("struct")
-                    .set("members", members)
-                    .opt("optional", i.optional.clone())
-                    .finish(&i.extra)
-            }
-            Self::Command(i) => ObjectWriter::new("command")
-                .opt("argument", i.argument.as_ref().map(|a| a.to_json()))
-                .opt("result", i.result.as_ref().map(|r| r.to_json()))
-                .finish(&i.extra),
-        }
-    }
-
-    /// The SECoP type name, e.g. `"double"`.
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Self::Double(_) => "double",
-            Self::Scaled(_) => "scaled",
-            Self::Int(_) => "int",
-            Self::Bool(_) => "bool",
-            Self::Enum(_) => "enum",
-            Self::String(_) => "string",
-            Self::Blob(_) => "blob",
-            Self::Array(_) => "array",
-            Self::Tuple(_) => "tuple",
-            Self::Struct(_) => "struct",
-            Self::Command(_) => "command",
-        }
-    }
-
-    /// Properties not defined by SECoP for this type (custom or from newer versions).
-    pub fn extra(&self) -> &Map<String, Json> {
-        match self {
-            Self::Double(i) => &i.extra,
-            Self::Scaled(i) => &i.extra,
-            Self::Int(i) => &i.extra,
-            Self::Bool(i) => &i.extra,
-            Self::Enum(i) => &i.extra,
-            Self::String(i) => &i.extra,
-            Self::Blob(i) => &i.extra,
-            Self::Array(i) => &i.extra,
-            Self::Tuple(i) => &i.extra,
-            Self::Struct(i) => &i.extra,
-            Self::Command(i) => &i.extra,
-        }
-    }
-}
-
-impl DataInfo {
-    /// Compares type and SECoP-defined properties, ignoring unknown and custom ones at
-    /// every nesting level. Used to check that a postfixed parameter matches its parent.
-    pub fn matches(&self, other: &DataInfo) -> bool {
-        self.without_extra() == other.without_extra()
-    }
-
-    /// A copy with all unknown and custom properties removed, recursively.
-    fn without_extra(&self) -> DataInfo {
-        let mut copy = self.clone();
-        copy.clear_extra();
-        copy
-    }
-
-    fn clear_extra(&mut self) {
-        match self {
-            Self::Double(i) => i.extra.clear(),
-            Self::Scaled(i) => i.extra.clear(),
-            Self::Int(i) => i.extra.clear(),
-            Self::Bool(i) => i.extra.clear(),
-            Self::Enum(i) => i.extra.clear(),
-            Self::String(i) => i.extra.clear(),
-            Self::Blob(i) => i.extra.clear(),
-            Self::Array(i) => {
-                i.extra.clear();
-                i.members.clear_extra();
-            }
-            Self::Tuple(i) => {
-                i.extra.clear();
-                i.members.iter_mut().for_each(Self::clear_extra);
-            }
-            Self::Struct(i) => {
-                i.extra.clear();
-                i.members.values_mut().for_each(Self::clear_extra);
-            }
-            Self::Command(i) => {
-                i.extra.clear();
-                i.argument.iter_mut().for_each(|a| a.clear_extra());
-                i.result.iter_mut().for_each(|r| r.clear_extra());
-            }
-        }
-    }
-}
-
-impl fmt::Display for DataInfo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_json())
-    }
-}
-
-impl FromStr for DataInfo {
-    type Err = DataInfoError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        let json: Json = serde_json::from_str(s)
-            .map_err(|e| DataInfoError::new(DataInfoErrorKind::InvalidJson(e.to_string())))?;
-        Self::from_json(&json)
-    }
-}
-
-impl Serialize for DataInfo {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        self.to_json().serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for DataInfo {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        let json = Json::deserialize(deserializer)?;
-        Self::from_json(&json).map_err(serde::de::Error::custom)
-    }
-}
-
-// ---------------------------------------------------------------------------------------
 // accessors
 
 impl DoubleInfo {
@@ -999,7 +587,7 @@ impl ScaledInfo {
     /// Effective format string; default `%.<n>f` with `n = max(0, -floor(log10(scale)))`.
     ///
     /// The SECoP prose defines this default; `schema/datatypes.yaml` of the
-    /// specification says `%.6g` instead. must follows the prose.
+    /// specification says `%.6g` instead. MUST follows the prose.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn fmtstr(&self) -> String {
         if let Some(f) = &self.fmtstr {
@@ -1120,6 +708,25 @@ impl StructInfo {
     }
 }
 
+impl MatrixInfo {
+    /// Byte order, kind and size of the elements.
+    pub fn elementtype(&self) -> ElementType {
+        self.elementtype
+    }
+    /// Names of the dimensions, first (fastest varying) dimension first.
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+    /// Maximum length of each dimension, in the order of [`names`](Self::names).
+    pub fn maxlen(&self) -> &[u64] {
+        &self.maxlen
+    }
+    /// Number of dimensions.
+    pub fn dims(&self) -> usize {
+        self.names.len()
+    }
+}
+
 impl CommandInfo {
     /// Datainfo of the argument, `None` if the command takes no argument.
     pub fn argument(&self) -> Option<&DataInfo> {
@@ -1128,544 +735,5 @@ impl CommandInfo {
     /// Datainfo of the result, `None` if the command returns nothing.
     pub fn result(&self) -> Option<&DataInfo> {
         self.result.as_deref()
-    }
-}
-
-// ---------------------------------------------------------------------------------------
-// building in code
-
-/// Builds a datainfo in code. [`build`](Self::build) runs the same validation as
-/// [`DataInfo::from_json`] on the equivalent JSON, and reports the same errors.
-///
-/// ```
-/// use must_types::DataInfo;
-///
-/// let info = DataInfo::double().min(0.0).max(300.0).unit("K").build()?;
-/// assert_eq!(info.to_string(), r#"{"type":"double","min":0.0,"max":300.0,"unit":"K"}"#);
-/// # Ok::<(), must_types::DataInfoError>(())
-/// ```
-#[derive(Debug, Clone)]
-#[must_use]
-pub struct DataInfoBuilder(Map<String, Json>);
-
-impl DataInfoBuilder {
-    fn new(ty: &str) -> Self {
-        let mut map = Map::new();
-        map.insert("type".into(), ty.into());
-        Self(map)
-    }
-
-    /// Sets any property, SECoP-defined or custom.
-    pub fn prop(mut self, key: &str, value: impl Into<Json>) -> Self {
-        self.0.insert(key.to_owned(), value.into());
-        self
-    }
-    /// Sets `min`.
-    pub fn min(self, min: impl Into<Json>) -> Self {
-        self.prop("min", min)
-    }
-    /// Sets `max`.
-    pub fn max(self, max: impl Into<Json>) -> Self {
-        self.prop("max", max)
-    }
-    /// Sets `unit`.
-    pub fn unit(self, unit: &str) -> Self {
-        self.prop("unit", unit)
-    }
-    /// Sets `fmtstr`.
-    pub fn fmtstr(self, fmtstr: &str) -> Self {
-        self.prop("fmtstr", fmtstr)
-    }
-    /// Sets the struct `optional` list.
-    pub fn optional<'a>(self, names: impl IntoIterator<Item = &'a str>) -> Self {
-        let names: Vec<Json> = names.into_iter().map(Json::from).collect();
-        self.prop("optional", names)
-    }
-    /// Sets a command `argument`.
-    pub fn argument(self, argument: &DataInfo) -> Self {
-        self.prop("argument", argument.to_json())
-    }
-    /// Sets a command `result`.
-    pub fn result(self, result: &DataInfo) -> Self {
-        self.prop("result", result.to_json())
-    }
-    /// Validates and returns the datainfo.
-    pub fn build(self) -> Result<DataInfo> {
-        DataInfo::from_json(&Json::Object(self.0))
-    }
-}
-
-impl DataInfo {
-    /// Starts a `double` datainfo.
-    pub fn double() -> DataInfoBuilder {
-        DataInfoBuilder::new("double")
-    }
-    /// Starts a `scaled` datainfo.
-    pub fn scaled(scale: f64, min: i64, max: i64) -> DataInfoBuilder {
-        DataInfoBuilder::new("scaled")
-            .prop("scale", scale)
-            .min(min)
-            .max(max)
-    }
-    /// Starts an `int` datainfo.
-    pub fn int(min: i64, max: i64) -> DataInfoBuilder {
-        DataInfoBuilder::new("int").min(min).max(max)
-    }
-    /// Starts a `bool` datainfo.
-    pub fn bool() -> DataInfoBuilder {
-        DataInfoBuilder::new("bool")
-    }
-    /// Starts an `enum` datainfo with the given members.
-    pub fn enumeration<'a>(members: impl IntoIterator<Item = (&'a str, i64)>) -> DataInfoBuilder {
-        let members: Map<String, Json> = members
-            .into_iter()
-            .map(|(k, v)| (k.to_owned(), v.into()))
-            .collect();
-        DataInfoBuilder::new("enum").prop("members", members)
-    }
-    /// Starts a `string` datainfo.
-    pub fn string() -> DataInfoBuilder {
-        DataInfoBuilder::new("string")
-    }
-    /// Starts a `blob` datainfo.
-    pub fn blob(maxbytes: u64) -> DataInfoBuilder {
-        DataInfoBuilder::new("blob").prop("maxbytes", maxbytes)
-    }
-    /// Starts an `array` datainfo.
-    pub fn array(members: &DataInfo, maxlen: u64) -> DataInfoBuilder {
-        DataInfoBuilder::new("array")
-            .prop("members", members.to_json())
-            .prop("maxlen", maxlen)
-    }
-    /// Starts a `tuple` datainfo.
-    pub fn tuple<'a>(members: impl IntoIterator<Item = &'a DataInfo>) -> DataInfoBuilder {
-        let members: Vec<Json> = members.into_iter().map(Self::to_json).collect();
-        DataInfoBuilder::new("tuple").prop("members", members)
-    }
-    /// Starts a `struct` datainfo.
-    pub fn structure<'a>(
-        members: impl IntoIterator<Item = (&'a str, &'a DataInfo)>,
-    ) -> DataInfoBuilder {
-        let members: Map<String, Json> = members
-            .into_iter()
-            .map(|(k, v)| (k.to_owned(), v.to_json()))
-            .collect();
-        DataInfoBuilder::new("struct").prop("members", members)
-    }
-    /// Starts a `command` datainfo.
-    pub fn command() -> DataInfoBuilder {
-        DataInfoBuilder::new("command")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[allow(clippy::needless_pass_by_value)]
-    fn parse(json: Json) -> Result<DataInfo> {
-        DataInfo::from_json(&json)
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
-    fn kind(json: Json) -> DataInfoErrorKind {
-        parse(json).expect_err("should fail").kind
-    }
-
-    // --- 3.1 type dispatch
-
-    #[test]
-    fn known_type() {
-        let DataInfo::Double(d) =
-            parse(json!({"type": "double", "min": 0, "max": 100, "unit": "K"})).unwrap()
-        else {
-            panic!("not a double")
-        };
-        assert_eq!(
-            (d.min(), d.max(), d.unit()),
-            (Some(0.0), Some(100.0), Some("K"))
-        );
-    }
-
-    #[test]
-    fn unknown_type() {
-        assert_eq!(
-            kind(json!({"type": "float"})),
-            DataInfoErrorKind::UnknownType("float".into())
-        );
-    }
-
-    #[test]
-    fn matrix_not_supported() {
-        let e =
-            parse(json!({"type": "matrix", "elementtype": "<f4", "names": ["x"], "maxlen": [100]}))
-                .unwrap_err();
-        assert_eq!(e.kind, DataInfoErrorKind::UnsupportedType("matrix".into()));
-        assert!(e.to_string().contains("not supported"));
-    }
-
-    #[test]
-    fn not_an_object() {
-        assert_eq!(kind(json!("double")), DataInfoErrorKind::NotAnObject);
-        assert_eq!(kind(json!([])), DataInfoErrorKind::NotAnObject);
-        assert_eq!(kind(json!({"min": 0})), DataInfoErrorKind::MissingType);
-        assert_eq!(kind(json!({"type": 3})), DataInfoErrorKind::MissingType);
-    }
-
-    #[test]
-    fn missing_mandatory_properties() {
-        assert_eq!(
-            kind(json!({"type": "int", "min": 0})),
-            DataInfoErrorKind::MissingProperty("max")
-        );
-        assert_eq!(
-            kind(json!({"type": "blob"})),
-            DataInfoErrorKind::MissingProperty("maxbytes")
-        );
-        assert_eq!(
-            kind(json!({"type": "scaled", "min": 0, "max": 1})),
-            DataInfoErrorKind::MissingProperty("scale")
-        );
-        for ty in ["enum", "tuple", "struct"] {
-            assert_eq!(
-                kind(json!({"type": ty})),
-                DataInfoErrorKind::MissingProperty("members")
-            );
-        }
-        assert_eq!(
-            kind(json!({"type": "array", "maxlen": 3})),
-            DataInfoErrorKind::MissingProperty("members")
-        );
-        assert_eq!(
-            kind(json!({"type": "array", "members": {"type": "bool"}})),
-            DataInfoErrorKind::MissingProperty("maxlen")
-        );
-    }
-
-    #[test]
-    fn property_types() {
-        assert!(matches!(
-            kind(json!({"type": "int", "min": 0.5, "max": 10})),
-            DataInfoErrorKind::WrongPropertyType {
-                property: "min",
-                ..
-            }
-        ));
-        assert!(matches!(
-            kind(json!({"type": "string", "maxchars": -1})),
-            DataInfoErrorKind::WrongPropertyType {
-                property: "maxchars",
-                ..
-            }
-        ));
-        assert!(matches!(
-            kind(json!({"type": "double", "unit": 5})),
-            DataInfoErrorKind::WrongPropertyType {
-                property: "unit",
-                ..
-            }
-        ));
-        assert!(matches!(
-            kind(json!({"type": "double", "fmtstr": 3})),
-            DataInfoErrorKind::WrongPropertyType {
-                property: "fmtstr",
-                ..
-            }
-        ));
-        // integral floats are accepted for integer properties
-        assert!(parse(json!({"type": "int", "min": 0.0, "max": 10.0})).is_ok());
-    }
-
-    // --- 3.2 numeric types
-
-    #[test]
-    fn consistent_limits() {
-        assert_eq!(
-            kind(json!({"type": "double", "min": 10, "max": 0})),
-            DataInfoErrorKind::InvertedLimits {
-                lower: "min",
-                upper: "max"
-            }
-        );
-        assert!(parse(json!({"type": "int", "min": 5, "max": 5})).is_ok());
-        assert!(parse(json!({"type": "scaled", "scale": 1, "min": 3, "max": 2})).is_err());
-    }
-
-    #[test]
-    fn scale_factor() {
-        for scale in [json!(0), json!(-0.1)] {
-            assert_eq!(
-                kind(json!({"type": "scaled", "scale": scale, "min": 0, "max": 10})),
-                DataInfoErrorKind::InvalidScale
-            );
-        }
-    }
-
-    #[test]
-    fn fmtstr_syntax() {
-        for f in ["%.3f", "%.12g", "%.0e"] {
-            assert!(parse(json!({"type": "double", "fmtstr": f})).is_ok(), "{f}");
-        }
-        for f in ["%5.3f", "%d", "%.3", "%.05f", "%.123f", ".3f"] {
-            assert_eq!(
-                kind(json!({"type": "double", "fmtstr": f})),
-                DataInfoErrorKind::InvalidFmtstr(f.into()),
-                "{f}"
-            );
-        }
-    }
-
-    #[test]
-    fn double_defaults() {
-        let DataInfo::Double(d) = parse(json!({"type": "double"})).unwrap() else {
-            panic!()
-        };
-        assert_eq!(d.fmtstr(), "%.6g");
-        assert!((d.absolute_resolution()).abs() < f64::EPSILON);
-        assert!((d.relative_resolution() - 1.2e-7).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn scaled_defaults() {
-        let DataInfo::Scaled(s) =
-            parse(json!({"type": "scaled", "scale": 0.01, "min": 0, "max": 1000})).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(s.fmtstr(), "%.2f");
-        assert!((s.absolute_resolution() - 0.01).abs() < f64::EPSILON);
-        assert!((s.relative_resolution() - 1.2e-7).abs() < f64::EPSILON);
-
-        let fmt = |scale: f64| {
-            let DataInfo::Scaled(s) = DataInfo::scaled(scale, 0, 1).build().unwrap() else {
-                panic!()
-            };
-            s.fmtstr()
-        };
-        assert_eq!(fmt(0.1), "%.1f");
-        assert_eq!(fmt(0.001), "%.3f");
-        assert_eq!(fmt(0.5), "%.1f");
-        assert_eq!(fmt(1.0), "%.0f");
-        assert_eq!(fmt(25.0), "%.0f");
-    }
-
-    // --- 3.3 enum, string, blob
-
-    #[test]
-    fn enum_duplicate_value() {
-        assert_eq!(
-            kind(json!({"type": "enum", "members": {"on": 1, "active": 1}})),
-            DataInfoErrorKind::DuplicateEnumValue {
-                value: 1,
-                first: "on".into(),
-                second: "active".into()
-            }
-        );
-    }
-
-    #[test]
-    fn enum_lookup_both_directions() {
-        let DataInfo::Enum(e) =
-            parse(json!({"type": "enum", "members": {"IDLE": 100, "BUSY": 300}})).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!(e.value_of("BUSY"), Some(300));
-        assert_eq!(e.name_of(100), Some("IDLE"));
-        assert_eq!(e.name_of(200), None);
-    }
-
-    #[test]
-    fn enum_names() {
-        // names need not be identifiers, but must be non-empty and unique ignoring case
-        assert!(parse(json!({"type": "enum", "members": {"heater on": 1, "1st": 2}})).is_ok());
-        assert_eq!(
-            kind(json!({"type": "enum", "members": {"": 1}})),
-            DataInfoErrorKind::EmptyMemberName
-        );
-        assert!(matches!(
-            kind(json!({"type": "enum", "members": {"On": 1, "on": 2}})),
-            DataInfoErrorKind::MemberNameClash(_)
-        ));
-        assert!(parse(json!({"type": "enum", "members": {}})).is_ok());
-        assert!(parse(json!({"type": "enum", "members": {"a": 1.5}})).is_err());
-    }
-
-    #[test]
-    fn length_bounds() {
-        assert!(parse(json!({"type": "string", "minchars": 5, "maxchars": 3})).is_err());
-        assert!(parse(json!({"type": "blob", "minbytes": 5, "maxbytes": 3})).is_err());
-        let DataInfo::String(s) = parse(json!({"type": "string"})).unwrap() else {
-            panic!()
-        };
-        assert_eq!((s.minchars(), s.maxchars(), s.is_utf8()), (0, None, false));
-    }
-
-    #[test]
-    fn large_maxbytes_on_any_platform() {
-        let big = u64::from(u32::MAX) + 1;
-        let DataInfo::Blob(b) = parse(json!({"type": "blob", "maxbytes": big})).unwrap() else {
-            panic!()
-        };
-        assert_eq!(b.maxbytes(), big);
-    }
-
-    // --- 3.4 structured types
-
-    #[test]
-    fn nested_datainfo() {
-        let DataInfo::Array(a) = parse(
-            json!({"type": "array", "maxlen": 10, "members": {"type": "int", "min": 0, "max": 9}}),
-        )
-        .unwrap() else {
-            panic!()
-        };
-        assert!(matches!(a.members(), DataInfo::Int(_)));
-        assert_eq!((a.minlen(), a.maxlen()), (0, 10));
-    }
-
-    #[test]
-    fn struct_member_names_clash() {
-        let e = parse(json!({"type": "struct", "members": {"X": {"type": "double"}, "x": {"type": "double"}}}))
-            .unwrap_err();
-        assert!(e.to_string().contains("`x`"), "{e}");
-    }
-
-    #[test]
-    fn nested_command() {
-        let e = parse(json!({"type": "tuple", "members": [{"type": "command"}]})).unwrap_err();
-        assert_eq!(e.kind, DataInfoErrorKind::NestedCommand);
-        assert_eq!(e.path.to_string(), "[0]");
-        assert!(
-            parse(json!({"type": "array", "maxlen": 1, "members": {"type": "command"}})).is_err()
-        );
-        assert!(parse(json!({"type": "command", "argument": {"type": "command"}})).is_err());
-    }
-
-    #[test]
-    fn nested_error_path() {
-        let e = parse(json!({"type": "struct", "members": {"p": {"type": "tuple", "members": [{"type": "bool"}, {"type": "int"}]}}}))
-            .unwrap_err();
-        assert_eq!(e.kind, DataInfoErrorKind::MissingProperty("min"));
-        assert_eq!(e.to_string(), "p[1]: missing mandatory property `min`");
-    }
-
-    #[test]
-    fn unknown_optional_member() {
-        assert_eq!(
-            kind(
-                json!({"type": "struct", "members": {"x": {"type": "double"}}, "optional": ["y"]})
-            ),
-            DataInfoErrorKind::UnknownOptionalMember("y".into())
-        );
-        let DataInfo::Struct(s) = parse(
-            json!({"type": "struct", "members": {"x": {"type": "double"}}, "optional": ["x"]}),
-        )
-        .unwrap() else {
-            panic!()
-        };
-        assert!(s.is_optional("x"));
-    }
-
-    #[test]
-    fn empty_tuple_and_struct_accepted() {
-        assert!(parse(json!({"type": "tuple", "members": []})).is_ok());
-        assert!(parse(json!({"type": "struct", "members": {}})).is_ok());
-    }
-
-    #[test]
-    fn command_without_argument() {
-        let DataInfo::Command(c) =
-            parse(json!({"type": "command", "result": {"type": "bool"}})).unwrap()
-        else {
-            panic!()
-        };
-        assert!(c.argument().is_none());
-        assert!(matches!(c.result(), Some(DataInfo::Bool(_))));
-        let DataInfo::Command(c) = parse(json!({"type": "command", "argument": null})).unwrap()
-        else {
-            panic!()
-        };
-        assert!(c.argument().is_none());
-    }
-
-    // --- 3.5 serialization and builders
-
-    #[test]
-    fn custom_property_round_trip() {
-        let info = parse(json!({"type": "bool", "_note": "x"})).unwrap();
-        assert_eq!(info.to_json(), json!({"type": "bool", "_note": "x"}));
-        // a property known for another type is preserved as unknown, too
-        let info = parse(json!({"type": "bool", "unit": "K"})).unwrap();
-        assert_eq!(info.extra().get("unit"), Some(&json!("K")));
-    }
-
-    #[test]
-    fn round_trip_keeps_order() {
-        let info = parse(
-            json!({"type": "struct", "members": {"y": {"type": "double"}, "x": {"type": "bool"}}}),
-        )
-        .unwrap();
-        let text = info.to_string();
-        assert!(
-            text.find("\"y\"").unwrap() < text.find("\"x\"").unwrap(),
-            "{text}"
-        );
-        assert_eq!(text.parse::<DataInfo>().unwrap(), info);
-    }
-
-    #[test]
-    fn no_defaults_added() {
-        let info = parse(json!({"type": "string"})).unwrap();
-        assert_eq!(info.to_json(), json!({"type": "string"}));
-    }
-
-    #[test]
-    fn built_in_code_same_error() {
-        let built = DataInfo::int(10, 0).build().unwrap_err();
-        let parsed = parse(json!({"type": "int", "min": 10, "max": 0})).unwrap_err();
-        assert_eq!(built, parsed);
-    }
-
-    #[test]
-    fn builders() {
-        let status = DataInfo::tuple(&[
-            DataInfo::enumeration([("IDLE", 100), ("BUSY", 300)])
-                .build()
-                .unwrap(),
-            DataInfo::string().build().unwrap(),
-        ])
-        .build()
-        .unwrap();
-        assert_eq!(
-            status.to_json(),
-            json!({"type": "tuple", "members": [
-                {"type": "enum", "members": {"IDLE": 100, "BUSY": 300}},
-                {"type": "string"}
-            ]})
-        );
-        let double = DataInfo::double().build().unwrap();
-        let s = DataInfo::structure([("x", &double), ("t", &double)])
-            .optional(["t"])
-            .build()
-            .unwrap();
-        assert!(matches!(&s, DataInfo::Struct(i) if i.is_optional("t")));
-        let cmd = DataInfo::command()
-            .argument(&s)
-            .result(&DataInfo::bool().build().unwrap())
-            .build();
-        assert!(cmd.is_ok());
-    }
-
-    #[test]
-    fn serde_integration() {
-        let info: DataInfo =
-            serde_json::from_str(r#"{"type": "int", "min": 0, "max": 3}"#).unwrap();
-        assert_eq!(
-            serde_json::to_string(&info).unwrap(),
-            r#"{"type":"int","min":0,"max":3}"#
-        );
-        assert!(serde_json::from_str::<DataInfo>(r#"{"type": "int"}"#).is_err());
     }
 }

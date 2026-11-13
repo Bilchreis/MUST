@@ -1,6 +1,6 @@
 # LabVIEW smoke test
 
-A manual check that LabVIEW can use must in place of SHALL. CI cannot run LabVIEW; run
+A manual check that LabVIEW can use MUST in place of SHALL. CI cannot run LabVIEW; run
 this once per release on Windows, with 32-bit and 64-bit LabVIEW, and record the result
 in the pull request.
 
@@ -45,6 +45,6 @@ Build a VI with "Call Library Function" nodes (calling convention **C**, library
 
 ## Results
 
-| Date | LabVIEW version, bitness | must commit | Result | Notes |
+| Date | LabVIEW version, bitness | MUST commit | Result | Notes |
 |---|---|---|---|---|
 | | | | | |

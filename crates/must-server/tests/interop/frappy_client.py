@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Drive the must example node with the Frappy SECoP client.
+"""Drive the MUST example node with the Frappy SECoP client.
 
 Usage: python3 frappy_client.py <host:port>
 

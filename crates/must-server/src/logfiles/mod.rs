@@ -18,7 +18,9 @@
 //! with the kinds `>` (received from a client), `<` (sent to a client), `U` (a published
 //! `update` or `error_update`, logged once however many clients receive it), `*`
 //! (connections, start and stop, dropped lines) and `INFO`/`WARN`/`ERROR` (what the node
-//! logs about itself, with the module when known).
+//! logs about itself, with the module when known, and what the application logs with
+//! [`Ctx::log`](crate::Ctx::log) and the like). Debug records of the application and the
+//! `log` events sent to clients are not written.
 //!
 //! Files whose day ended more than [`LogFiles::days`] days ago (default 2) are deleted
 //! when a node starts and every hour, in the folders of the nodes this process runs.
@@ -27,9 +29,12 @@
 //! `MUST_LOG_DIR` and `MUST_LOG_DAYS` configure it for the process, and
 //! [`NodeBuilder::log_files`](crate::NodeBuilder::log_files) for one node.
 //!
-//! Logging never slows a node: lines go through a bounded queue to one writer thread per
-//! process; when the queue is full, lines are dropped and a `* dropped <n> lines` line
-//! marks the gap. Files are flushed every second and when the node stops. If a file
+//! Logging never makes a node wait for the disk, but formatting the lines takes CPU: under
+//! full load a node with log files and monitoring handles about 60% of the requests it does
+//! without. Lines go through a queue (bounded in lines and in bytes) to one writer thread
+//! per process, which runs while any node logs and ends with the last one; when the queue
+//! is full, lines are dropped and a `* dropped <n> lines` line marks the gap. Lines are
+//! never shortened. Files are flushed every second and when the node stops. If a file
 //! cannot be written, the node logs one warning and file logging stops for it until the
 //! next day.
 
@@ -52,8 +57,8 @@ pub use config::{
 #[doc(hidden)]
 pub use writer::pause_writer;
 
-use self::format::{LineFormatter, dropped, node_folder, timestamp};
-use self::writer::{Command, LogId};
+use self::format::{LineClock, LineFormatter, dropped, node_folder};
+use self::writer::{Command, LogId, LogSender};
 use crate::events::{LogLevel, NodeEvent};
 use crate::runtime::Hub;
 
@@ -67,8 +72,9 @@ pub(crate) struct LogHandle {
 }
 
 impl LogHandle {
-    /// Resolves once the node's file is flushed and closed after `NodeEvent::Stopped`
-    /// (or after a few seconds if the writer is stuck).
+    /// Resolves once the node's file is flushed and closed after `NodeEvent::Stopped`,
+    /// and for the last logging node the writer thread has ended (or after a few seconds
+    /// if the writer is stuck).
     pub(crate) async fn finished(&self) {
         let _ = tokio::time::timeout(CLOSE_TIMEOUT, self.finished.cancelled()).await;
     }
@@ -94,7 +100,7 @@ pub(crate) fn start(hub: &Arc<Hub>, config: Option<&LogFiles>) -> Option<LogHand
         );
         return None;
     };
-    let sender = writer::sender()?;
+    let sender = writer::acquire()?;
     let node = NEXT.fetch_add(1, Ordering::Relaxed);
     let finished = CancellationToken::new();
     let open = Command::Open {
@@ -115,10 +121,10 @@ pub(crate) fn start(hub: &Arc<Hub>, config: Option<&LogFiles>) -> Option<LogHand
 }
 
 /// Hands `command` to the writer, waiting up to a few seconds while the queue is full.
-async fn send(sender: &std::sync::mpsc::SyncSender<Command>, mut command: Command) -> bool {
+async fn send(sender: &LogSender, mut command: Command) -> bool {
     let deadline = tokio::time::Instant::now() + CLOSE_TIMEOUT;
     loop {
-        match writer::try_send(sender, command) {
+        match sender.try_send(command) {
             Ok(()) => return true,
             Err(c) if tokio::time::Instant::now() < deadline => {
                 command = c;
@@ -132,13 +138,14 @@ async fn send(sender: &std::sync::mpsc::SyncSender<Command>, mut command: Comman
 /// The node's logger: turns its events into lines for the writer, never waiting for it.
 async fn run(
     mut events: tokio::sync::broadcast::Receiver<NodeEvent>,
-    sender: &'static std::sync::mpsc::SyncSender<Command>,
+    sender: LogSender,
     node: LogId,
     open: Command,
     finished: CancellationToken,
 ) {
-    if send(sender, open).await {
+    if send(&sender, open).await {
         let mut formatter = LineFormatter::default();
+        let mut clock = LineClock::default();
         let mut lost: u64 = 0;
         loop {
             let event = match events.recv().await {
@@ -150,37 +157,44 @@ async fn run(
                 Err(RecvError::Closed) => break,
             };
             if let Some(text) = formatter.format(&event) {
-                let now = Local::now();
-                let time = timestamp(&now);
+                let (time, date) = clock.now();
                 let mut lines = String::with_capacity(text.len() + 40);
                 if lost > 0 {
                     let _ = writeln!(lines, "{time} {}", dropped(lost));
                 }
-                lines.push_str(&time);
+                lines.push_str(time);
                 lines.push(' ');
                 lines.push_str(&text);
                 lines.push('\n');
                 let command = Command::Lines {
                     node,
-                    date: now.date_naive(),
+                    date,
                     text: lines,
                 };
                 if matches!(event, NodeEvent::Stopped) {
                     // the last line, and the count of lines lost before it, must not be
                     // dropped; the node is stopping anyway
-                    send(sender, command).await;
+                    send(&sender, command).await;
                     break;
                 }
-                match writer::try_send(sender, command) {
+                match sender.try_send(command) {
                     Ok(()) => lost = 0,
                     Err(_) => lost += 1,
                 }
             }
         }
         let (ack, closed) = tokio::sync::oneshot::channel();
-        if send(sender, Command::Close { node, ack }).await {
+        if send(&sender, Command::Close { node, ack }).await {
             let _ = tokio::time::timeout(CLOSE_TIMEOUT, closed).await;
         }
+    }
+    // the last logging node waits for the writer thread to end, so that a stopped node
+    // leaves no thread behind
+    if let Some(thread) = writer::release(sender) {
+        let joined = tokio::task::spawn_blocking(move || {
+            let _ = thread.join();
+        });
+        let _ = tokio::time::timeout(CLOSE_TIMEOUT, joined).await;
     }
     finished.cancel();
 }

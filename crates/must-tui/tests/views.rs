@@ -7,7 +7,8 @@ use must_monitor::protocol::{
     ClientInfo, Direction, Event, LogRecord, NodeInfo, NodeState, ParameterState, ProcessInfo,
     ServerMessage, Snapshot,
 };
-use must_tui::app::{App, EndpointMsg, Msg, ProcessKey, View};
+use must_tui::app::{App, Effect, EndpointMsg, Msg, ProcessKey, View};
+use must_tui::checker::{Diagnostic, Severity};
 use must_tui::ui::{self, BINDINGS, Theme};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -453,7 +454,7 @@ fn detail_nested_datainfos() {
     app.update(connected(PYTHON, snapshot.process.clone(), snapshot));
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.view, View::Detail);
-    let shown = screen(&app, 120, 22);
+    let shown = screen(&app, 120, 30);
     assert!(shown.contains("[[1 K], [2 K, 3 K, 4 K], []]"), "{shown}");
     assert!(
         shown.contains("[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]"),
@@ -465,6 +466,188 @@ fn detail_nested_datainfos() {
     );
     assert!(shown.contains("{limits: (0 m, 50 m), mode: on}"), "{shown}");
     insta::assert_snapshot!("detail_nested", shown);
+}
+
+/// The `Effect::Check` among `effects`: its id and structure report.
+fn check_of(effects: &[Effect]) -> Option<(u64, Json)> {
+    effects.iter().find_map(|e| match e {
+        Effect::Check {
+            key: LABVIEW,
+            node: 1,
+            id,
+            structure,
+        } => Some((*id, structure.clone())),
+        _ => None,
+    })
+}
+
+fn checked(id: u64, outcome: Result<Vec<Diagnostic>, String>) -> Msg {
+    Msg::Checked {
+        key: LABVIEW,
+        node: 1,
+        id,
+        outcome,
+    }
+}
+
+fn diagnostic(severity: Severity, context: &[&str], message: &str) -> Diagnostic {
+    Diagnostic {
+        severity,
+        step: "test".into(),
+        context: context.iter().map(|c| (*c).to_owned()).collect(),
+        message: message.into(),
+    }
+}
+
+#[test]
+fn detail_checks_the_description_once() {
+    let mut app = app();
+    assert!(
+        check_of(&press(&mut app, KeyCode::Char('3'))).is_none(),
+        "not in traffic"
+    );
+    let (id, structure) = check_of(&press(&mut app, KeyCode::Char('2'))).expect("checked");
+    assert_eq!(structure, self::structure());
+    assert!(screen(&app, 100, 30).contains("checking the description…"));
+    // switching away and back does not check again while it runs or after
+    press(&mut app, KeyCode::Char('1'));
+    assert!(check_of(&press(&mut app, KeyCode::Char('2'))).is_none());
+
+    // a stale answer is ignored
+    app.update(checked(id + 100, Ok(vec![])));
+    assert!(screen(&app, 100, 30).contains("checking the description…"));
+
+    let effects = app.update(checked(
+        id,
+        Ok(vec![
+            diagnostic(Severity::Warning, &["SECNode", "Module t1"], "odd\nunit"),
+            diagnostic(
+                Severity::Error,
+                &["SECNode", "Module t1"],
+                "missing required properties: 'implementation'",
+            ),
+        ]),
+    ));
+    assert!(check_of(&effects).is_none());
+    let shown = screen(&app, 100, 30);
+    assert!(shown.contains("SECoP check: 1 error, 1 warning"), "{shown}");
+    assert!(
+        shown.contains("error    Module t1: missing required properties: 'implementation'"),
+        "{shown}"
+    );
+    assert!(shown.contains("warning  Module t1: odd unit"), "{shown}");
+    let colored = terminal(&app, 100, 30, theme());
+    assert!(
+        colors_of(&colored, "error    ")
+            .iter()
+            .all(|c| *c == Color::Red)
+    );
+    assert!(
+        colors_of(&colored, "warning  ")
+            .iter()
+            .all(|c| *c == Color::Yellow)
+    );
+
+    // c checks again; a new description is checked again too
+    let (again, _) = check_of(&press(&mut app, KeyCode::Char('c'))).expect("rechecked");
+    assert!(again > id);
+    app.update(checked(again, Ok(vec![])));
+    assert!(screen(&app, 100, 30).contains("SECoP check: ok"));
+    let effects = app.update(Msg::Endpoint {
+        key: LABVIEW,
+        msg: EndpointMsg::Message(ServerMessage::Event(Event::NodeStarted {
+            node: 1,
+            address: "0.0.0.0:2055".into(),
+            structure: json!({"modules": {}}),
+            messages: vec![],
+        })),
+    });
+    assert_eq!(
+        check_of(&effects).map(|(_, s)| s),
+        Some(json!({"modules": {}}))
+    );
+}
+
+#[test]
+fn detail_check_failures_and_many_findings() {
+    let mut app = app();
+    let (id, _) = check_of(&press(&mut app, KeyCode::Char('2'))).unwrap();
+    app.update(checked(id, Err("uvx not found: install uv".into())));
+    let shown = screen(&app, 100, 30);
+    assert!(shown.contains("SECoP check: not run"), "{shown}");
+    assert!(shown.contains("uvx not found: install uv"), "{shown}");
+
+    let (id, _) = check_of(&press(&mut app, KeyCode::Char('c'))).unwrap();
+    let many = (0..20)
+        .map(|i| diagnostic(Severity::Hint, &["SECNode"], &format!("hint {i}")))
+        .collect();
+    app.update(checked(id, Ok(many)));
+    let shown = screen(&app, 100, 40);
+    assert!(shown.contains("SECoP check: 20 hints"), "{shown}");
+    assert!(
+        shown.contains("hint     hint 6") && !shown.contains("hint 7 "),
+        "{shown}"
+    );
+    assert!(shown.contains("… 13 more"), "{shown}");
+    // a short terminal: fewer rows, still with the count of those left out
+    let shown = screen(&app, 100, 20);
+    assert!(
+        shown.contains("hint     hint 5") && !shown.contains("hint 6 "),
+        "{shown}"
+    );
+    assert!(shown.contains("… 14 more"), "{shown}");
+
+    // narrow: words wrap whole (one 22-letter word per row here), and a finding shown is
+    // shown to its end
+    let (id, _) = check_of(&press(&mut app, KeyCode::Char('c'))).unwrap();
+    let words = |end: &str| format!("{} {end}", ["abcdefghijklmnopqrstuv"; 4].join(" "));
+    app.update(checked(
+        id,
+        Ok(vec![
+            diagnostic(
+                Severity::Error,
+                &["SECNode", "Module t1"],
+                &words("endoffirstfinding00001"),
+            ),
+            diagnostic(
+                Severity::Error,
+                &["SECNode", "Module t1"],
+                &words("endofsecondfinding0002"),
+            ),
+        ]),
+    ));
+    let shown = screen(&app, 44, 40);
+    assert!(shown.contains("endoffirstfinding00001"), "{shown}");
+    assert!(
+        shown.contains("… 1 more") && !shown.contains("endofsecond"),
+        "{shown}"
+    );
+
+    // one finding too long for the rows there are is shown cut, not left out
+    let (id, _) = check_of(&press(&mut app, KeyCode::Char('c'))).unwrap();
+    app.update(checked(
+        id,
+        Ok(vec![diagnostic(
+            Severity::Error,
+            &["SECNode", "Module t1"],
+            &format!("startofthelongfinding {}", "word ".repeat(200)),
+        )]),
+    ));
+    let shown = screen(&app, 60, 40);
+    assert!(
+        shown.contains("startofthelongfinding") && !shown.contains("more"),
+        "{shown}"
+    );
+    // no room at all: no section, the clients keep their rows
+    let shown = screen(&app, 100, 13);
+    assert!(
+        !shown.contains("SECoP check") && shown.contains("Clients (1)"),
+        "{shown}"
+    );
+
+    // no section for a node without a description
+    press(&mut app, KeyCode::Right); // magnet
+    assert!(!screen(&app, 100, 30).contains("SECoP check"));
 }
 
 fn app_with_cryo_detail() -> App {

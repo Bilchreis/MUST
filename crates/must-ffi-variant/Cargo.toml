@@ -1,6 +1,6 @@
 [package]
 name = "must-ffi-variant"
-description = "SHALL-compatible variant library of must (built as SHALLvariant32/64), forwarding to SHALLserver"
+description = "SHALL-compatible variant library of MUST (built as SHALLvariant32/64), forwarding to SHALLserver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

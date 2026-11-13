@@ -8,14 +8,26 @@
 //! without any description, and limits, scales, enum members and array lengths can be
 //! changed after creation. [`Node::to_datainfo`] converts to a validated SECoP 2.0
 //! datainfo where a handle meets the SEC node.
-
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex, MutexGuard};
+//!
+//! A `matrix` value is a struct of `len` (an int array) and `blob` (the raw element
+//! bytes), which is also its SECoP transport form. The node keeps the matrix datainfo,
+//! so that its type is still a matrix. Matrix bytes cross between nodes and `must-types`
+//! values directly ([`Node::into_value_direct`], [`Node::with_value_direct`]), without
+//! base64 and JSON.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use must_types::{DataInfo, Mode, Value};
+use must_types::datainfo::MatrixInfo;
+use must_types::{DataInfo, Mode, Value, ValueError};
 use serde_json::{Map, Value as Json, json};
+
+mod handles;
+
+pub use handles::{
+    CSECoPbaseType, clone_handle, destroy_handle, new_handle, take_handle, with_handle,
+};
+#[cfg(test)]
+mod tests;
 
 /// `SECoP_V_type` codes of SHALL (all listed; array codes are computed as scalar + 10).
 #[allow(missing_docs, dead_code)]
@@ -232,7 +244,13 @@ pub struct Node {
     pub kind: Kind,
     /// Datainfo properties SHALL does not model itself ("additional"), e.g. `unit`.
     pub extra: Map<String, Json>,
+    /// The datainfo of a matrix, whose value is the struct of `len` and `blob` in `kind`.
+    pub matrix: Option<Box<MatrixInfo>>,
 }
+
+/// Names of the members of a matrix struct.
+const MATRIX_LEN: &str = "len";
+const MATRIX_BLOB: &str = "blob";
 
 /// The kinds of values.
 #[derive(Debug, Clone, PartialEq)]
@@ -296,7 +314,105 @@ impl Node {
         Self {
             kind,
             extra: Map::new(),
+            matrix: None,
         }
+    }
+
+    /// An empty matrix of `info`: a struct of `len` (one 0 per dimension) and an empty
+    /// `blob`.
+    pub fn matrix(info: MatrixInfo) -> Self {
+        let dims = u32::try_from(info.dims()).unwrap_or(u32::MAX);
+        let len = Kind::ScalarArray {
+            ty: Scalar::Int {
+                min: 0,
+                max: i64::from(u32::MAX),
+            },
+            values: vec![Num::I(0); info.dims()],
+            minlen: dims,
+            maxlen: dims,
+            member_extra: Map::new(),
+        };
+        let blob = Kind::Bytes {
+            blob: true,
+            bytes: Vec::new(),
+            minlen: 0,
+            maxlen: u32::MAX,
+            utf8: None,
+        };
+        let name = |n: &str| Name::new(n).expect("no NUL in member names");
+        Self {
+            kind: Kind::Struct {
+                items: vec![
+                    (name(MATRIX_LEN), Self::new(len)),
+                    (name(MATRIX_BLOB), Self::new(blob)),
+                ],
+                optional: Vec::new(),
+            },
+            extra: Map::new(),
+            matrix: Some(Box::new(info)),
+        }
+    }
+
+    /// Lengths and bytes of a struct of `len` (int array) and `blob` (blob), the shape of
+    /// a matrix value, whether or not the node was made from a matrix datainfo.
+    fn matrix_parts(&self) -> Option<(&[Num], &[u8])> {
+        let Kind::Struct { items, .. } = &self.kind else {
+            return None;
+        };
+        match items.as_slice() {
+            [(len_name, len), (blob_name, blob)]
+                if len_name.as_str() == MATRIX_LEN && blob_name.as_str() == MATRIX_BLOB =>
+            {
+                match (&len.kind, &blob.kind) {
+                    (
+                        Kind::ScalarArray {
+                            ty: Scalar::Int { .. },
+                            values,
+                            ..
+                        },
+                        Kind::Bytes {
+                            blob: true, bytes, ..
+                        },
+                    ) => Some((values, bytes)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Like [`matrix_parts`](Self::matrix_parts), mutable.
+    fn matrix_parts_mut(&mut self) -> Option<(&mut Vec<Num>, &mut Vec<u8>)> {
+        self.matrix_parts()?;
+        let Kind::Struct { items, .. } = &mut self.kind else {
+            return None;
+        };
+        let [(_, len), (_, blob)] = items.as_mut_slice() else {
+            return None;
+        };
+        match (&mut len.kind, &mut blob.kind) {
+            (Kind::ScalarArray { values, .. }, Kind::Bytes { bytes, .. }) => Some((values, bytes)),
+            _ => None,
+        }
+    }
+
+    /// The matrix datainfo of a node made from one, as long as it still has the matrix
+    /// shape.
+    fn matrix_info(&self) -> Option<&MatrixInfo> {
+        self.matrix
+            .as_deref()
+            .filter(|_| self.matrix_parts().is_some())
+    }
+
+    /// Lengths of a matrix-shaped node as integers; `None` if a length is not one.
+    fn matrix_lengths(values: &[Num]) -> Option<Vec<i64>> {
+        values
+            .iter()
+            .map(|v| match v {
+                Num::I(i) => Some(*i),
+                Num::F(_) => None,
+            })
+            .collect()
     }
 
     /// A single value of the given scalar type.
@@ -326,6 +442,15 @@ impl Node {
         let ty = obj.get("type")?.as_str()?.to_ascii_lowercase();
         let mut rest = obj.clone();
         rest.shift_remove("type");
+        if ty == "matrix" {
+            // must-types checks the matrix properties
+            let mut description = obj.clone();
+            description.insert("type".into(), "matrix".into());
+            return match DataInfo::from_json(&Json::Object(description)) {
+                Ok(DataInfo::Matrix(info)) => Some(Self::matrix(info)),
+                _ => None,
+            };
+        }
         let mut take = |key: &str| rest.shift_remove(key);
         let kind = match ty.as_str() {
             "double" | "int" | "bool" | "enum" | "scaled" => {
@@ -425,7 +550,11 @@ impl Node {
             }
             _ => return None,
         };
-        Some(Self { kind, extra: rest })
+        Some(Self {
+            kind,
+            extra: rest,
+            matrix: None,
+        })
     }
 
     /// A value with a type inferred from bare JSON, like SHALL's `importSECoP(json)`.
@@ -657,13 +786,75 @@ impl Node {
         DataInfo::from_json(&self.type_json(true)?).ok()
     }
 
-    /// The value as a `must-types` value of `info`.
-    #[allow(dead_code, reason = "used by the server ABI's updateParameter")]
+    /// The value as a `must-types` value of `info`, see
+    /// [`to_value_direct`](Self::to_value_direct).
+    #[allow(dead_code, reason = "kept for callers that need no error")]
     pub fn to_value(&self, info: &DataInfo) -> Option<Value> {
-        info.decode(&self.export_value(), Mode::Report).ok()
+        self.to_value_direct(info).ok()
     }
 
+    /// The value as a `must-types` value of `info`, checked in report mode. A matrix copies
+    /// its lengths and bytes; any other type goes through JSON. Both give the same value
+    /// and the same error as decoding [`export_value`](Self::export_value).
+    pub fn to_value_direct(&self, info: &DataInfo) -> Result<Value, ValueError> {
+        if let DataInfo::Matrix(m) = info
+            && let Some((values, bytes)) = self.matrix_parts()
+            && let Some(len) = Self::matrix_lengths(values)
+        {
+            let len = m.signed_lengths(&len, Mode::Report)?;
+            return m.value(len, bytes.to_vec(), Mode::Report);
+        }
+        info.decode(&self.export_value(), Mode::Report)
+    }
+
+    /// Like [`to_value_direct`](Self::to_value_direct), moving a matrix's bytes instead of
+    /// copying them.
+    pub fn into_value_direct(mut self, info: &DataInfo) -> Result<Value, ValueError> {
+        if let DataInfo::Matrix(m) = info
+            && let Some((values, bytes)) = self.matrix_parts_mut()
+            && let Some(len) = Self::matrix_lengths(values)
+        {
+            let len = m.signed_lengths(&len, Mode::Report)?;
+            return m.value(len, std::mem::take(bytes), Mode::Report);
+        }
+        info.decode(&self.export_value(), Mode::Report)
+    }
+
+    /// A copy of this node (the type) holding `value` of `info`. A matrix moves its
+    /// lengths and bytes into a matrix-shaped node; any other value goes through JSON, as
+    /// [`import`](Self::import) without limit checks. On failure, the reason.
+    pub fn with_value_direct(&self, value: Value, info: &DataInfo) -> Result<Self, String> {
+        let value = match (info, value) {
+            (DataInfo::Matrix(_), Value::Matrix { len, data }) if self.matrix_parts().is_some() => {
+                let mut node = self.clone();
+                let (values, bytes) = node
+                    .matrix_parts_mut()
+                    .ok_or_else(|| "not a matrix".to_owned())?;
+                *values = len.iter().map(|&l| Num::I(i64::from(l))).collect();
+                *bytes = data;
+                return Ok(node);
+            }
+            (_, value) => value,
+        };
+        let json = info.encode(&value).map_err(|e| e.to_string())?;
+        let mut node = self.clone();
+        if node.import(&json, false) {
+            Ok(node)
+        } else {
+            Err(format!("cannot pass {} on", shorten(&json)))
+        }
+    }
+
+    /// The datainfo JSON of the type; a matrix gives its matrix datainfo, not the struct.
     fn type_json(&self, complete: bool) -> Option<Json> {
+        match self.matrix_info() {
+            Some(info) => Some(DataInfo::Matrix(info.clone()).to_json()),
+            None => self.kind_type_json(complete),
+        }
+    }
+
+    /// The datainfo JSON of the node's kind, as SHALL describes it.
+    fn kind_type_json(&self, complete: bool) -> Option<Json> {
         let mut map = Map::new();
         let lengths = |map: &mut Map<String, Json>, lo: &str, hi: &str, min: u32, max: u32| {
             if min > 0 {
@@ -938,6 +1129,16 @@ impl Node {
     }
 }
 
+/// JSON text for a message, cut to a readable length: a matrix's base64 can be large.
+pub fn shorten(json: &Json) -> String {
+    const MAX: usize = 200;
+    let text = json.to_string();
+    match text.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text,
+    }
+}
+
 fn scalar_array(ty: Scalar, values: Vec<Num>) -> Kind {
     Kind::ScalarArray {
         ty,
@@ -1015,234 +1216,4 @@ fn parse_lengths(
         Some(j) => json_u32(&j)?,
     };
     (min <= max).then_some((min, max))
-}
-
-// ---------------------------------------------------------------------------------------
-// handle table
-
-/// The opaque C type behind `CSECoPbaseType*`.
-#[repr(C)]
-pub struct CSECoPbaseType {
-    _private: [u8; 0],
-}
-
-/// All live handles. Every C function checks a handle against this table, as SHALL does,
-/// so that stale or foreign pointers are rejected.
-///
-/// Handles are numbers from a counter, not the nodes' addresses: an address is reused
-/// once its node is freed, so a destroyed handle would silently refer to a new value.
-/// The counter only repeats after it wraps around (2^29 handles on 32-bit targets), and
-/// then skips handles still in use.
-static HANDLES: LazyLock<Mutex<HandleTable>> = LazyLock::new(Mutex::default);
-
-/// First handle value; handles step by [`HANDLE_STEP`] so they look like aligned pointers.
-const FIRST_HANDLE: usize = 0x1_0000;
-const HANDLE_STEP: usize = 8;
-
-struct HandleTable {
-    nodes: HashMap<usize, Node>,
-    next: usize,
-}
-
-impl Default for HandleTable {
-    fn default() -> Self {
-        Self {
-            nodes: HashMap::new(),
-            next: FIRST_HANDLE,
-        }
-    }
-}
-
-fn handles() -> MutexGuard<'static, HandleTable> {
-    HANDLES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-impl HandleTable {
-    /// Stores `node` under the next free handle.
-    fn insert(&mut self, node: Node) -> usize {
-        let mut id = self.next;
-        while self.nodes.contains_key(&id) {
-            id = next_handle(id);
-        }
-        self.next = next_handle(id);
-        self.nodes.insert(id, node);
-        id
-    }
-}
-
-/// Registers a node and returns its handle.
-pub fn new_handle(node: Node) -> *mut CSECoPbaseType {
-    std::ptr::without_provenance_mut(handles().insert(node))
-}
-
-fn next_handle(id: usize) -> usize {
-    match id.checked_add(HANDLE_STEP) {
-        Some(next) => next,
-        None => FIRST_HANDLE,
-    }
-}
-
-/// Runs `f` on the node of a handle; `None` for NULL or unknown handles.
-pub fn with_handle<R>(handle: *const CSECoPbaseType, f: impl FnOnce(&mut Node) -> R) -> Option<R> {
-    let mut table = handles();
-    table.nodes.get_mut(&handle.addr()).map(f)
-}
-
-/// A copy of the node of a handle.
-pub fn clone_handle(handle: *const CSECoPbaseType) -> Option<Node> {
-    with_handle(handle, |n| n.clone())
-}
-
-/// Removes and frees a handle; returns whether it existed.
-pub fn destroy_handle(handle: *const CSECoPbaseType) -> bool {
-    handles().nodes.remove(&handle.addr()).is_some()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[allow(clippy::needless_pass_by_value)]
-    fn describe(j: Json) -> Node {
-        Node::from_description(&j, false).unwrap()
-    }
-
-    #[test]
-    fn descriptions() {
-        let d = describe(json!({"type": "DOUBLE", "min": 0, "max": 10, "unit": "K"}));
-        assert_eq!(d.code(), vt::DOUBLE);
-        assert_eq!(d.extra.get("unit"), Some(&json!("K")));
-        assert_eq!(
-            d.export_type(),
-            Some(json!({"type": "double", "min": 0.0, "max": 10.0, "unit": "K"}))
-        );
-
-        // SECoP 1.0: int without limits
-        let i = describe(json!({"type": "int"}));
-        assert_eq!(i.export_type(), Some(json!({"type": "int"})));
-        assert_eq!(
-            i.to_datainfo().unwrap().to_json(),
-            json!({"type": "int", "min": -16_777_216, "max": 16_777_216})
-        );
-
-        let a = describe(json!({"type": "array", "members": {"type": "int"}, "maxlen": 5}));
-        assert_eq!(
-            (a.code(), a.count()),
-            (vt::ARRAY_INTEGER, 0),
-            "starts at minlen"
-        );
-        let s = describe(
-            json!({"type": "array", "members": {"type": "string"}, "minlen": 2, "maxlen": 5}),
-        );
-        assert_eq!((s.code(), s.count()), (vt::ARRAY, 2));
-
-        assert!(Node::from_description(&json!({"type": "nope"}), false).is_none());
-        assert!(Node::from_description(&json!({"type": "command"}), false).is_none());
-        assert!(Node::from_description(&json!({"type": "command"}), true).is_some());
-        assert!(
-            Node::from_description(&json!({"type": "double", "min": 5, "max": 1}), false).is_none()
-        );
-    }
-
-    #[test]
-    fn inferred_types() {
-        let code = |j: Json| Node::from_json(&j).map(|n| n.code());
-        assert_eq!(code(json!(true)), Some(vt::BOOL));
-        assert_eq!(code(json!(1.5)), Some(vt::DOUBLE));
-        assert_eq!(code(json!(3)), Some(vt::INTEGER));
-        assert_eq!(code(json!("x")), Some(vt::STRING));
-        assert_eq!(code(json!({"a": 1})), Some(vt::STRUCT));
-        assert_eq!(code(json!([1.0, 2.5])), Some(vt::ARRAY_DOUBLE));
-        assert_eq!(code(json!([1, 2])), Some(vt::ARRAY_INTEGER));
-        assert_eq!(code(json!([true])), Some(vt::ARRAY_BOOL));
-        assert_eq!(code(json!(["a", "b"])), Some(vt::ARRAY));
-        assert_eq!(code(json!([1, "b"])), Some(vt::TUPLE));
-        assert_eq!(code(json!(null)), Some(vt::NONE));
-        assert_eq!(code(json!([])), None);
-    }
-
-    #[test]
-    fn import_with_hint_type() {
-        let mut s = describe(json!({"type": "scaled", "scale": 0.1, "min": 0, "max": 2500}));
-        assert!(s.import(&json!(1255), true));
-        assert_eq!(s.export_value(), json!(1255));
-        assert!(!s.import(&json!(2501), true));
-        let mut b = describe(json!({"type": "blob", "maxbytes": 8}));
-        assert!(b.import(&json!("U0VDb1A="), true));
-        assert_eq!(b.count(), 5);
-        assert_eq!(b.export_value(), json!("U0VDb1A="));
-    }
-
-    #[test]
-    fn walk_positions() {
-        let n = Node::from_json(&json!({"a": 1.0, "b": "x"})).unwrap();
-        assert_eq!(n.locate(0), Some((vec![], None)));
-        assert_eq!(n.locate(1), Some((vec![0], Some("a".into()))));
-        assert_eq!(n.locate(2), Some((vec![1], Some("b".into()))));
-        assert_eq!(n.locate(3), None);
-        assert_eq!(n.positions(), 3);
-
-        let nested = Node::from_json(&json!({"p": {"x": 1, "y": [1, "z"]}, "q": true})).unwrap();
-        // 0 root, 1 p (container: no name), 2 x, 3 y (tuple), 4 1, 5 "z", 6 q
-        assert_eq!(nested.locate(1), Some((vec![0], None)));
-        assert_eq!(nested.locate(2), Some((vec![0, 0], Some("x".into()))));
-        assert_eq!(nested.locate(5), Some((vec![0, 1, 1], None)));
-        assert_eq!(nested.locate(6), Some((vec![1], Some("q".into()))));
-        assert_eq!(nested.locate(7), None);
-    }
-
-    #[test]
-    fn comparison() {
-        let a = Node::from_json(&json!(1.5)).unwrap();
-        let s = Node::from_json(&json!("x")).unwrap();
-        assert_eq!(a.compare(&s), vc::DIFF_TYPE);
-        assert_eq!(a.compare(&a.clone()), vc::EQUAL);
-        let mut b = a.clone();
-        b.import(&json!(2.0), false);
-        assert_eq!(a.compare(&b), vc::DIFF_VALUE);
-        let limited = describe(json!({"type": "double", "min": 0, "max": 10}));
-        let mut limited = limited;
-        limited.import(&json!(1.5), true);
-        assert_eq!(a.compare(&limited), vc::SIMILAR_VALUE);
-    }
-
-    #[test]
-    fn handle_table() {
-        let h = new_handle(Node::from_json(&json!(1)).unwrap());
-        assert_eq!(with_handle(h, |n| n.code()), Some(vt::INTEGER));
-        assert!(destroy_handle(h));
-        assert!(!destroy_handle(h));
-        assert_eq!(with_handle(h, |n| n.code()), None);
-    }
-
-    #[test]
-    fn destroyed_handles_are_not_reused() {
-        let h = new_handle(Node::from_json(&json!(1)).unwrap());
-        assert!(destroy_handle(h));
-        // new values, even when their memory takes the place of the destroyed one
-        let others: Vec<_> = (0..1000)
-            .map(|_| new_handle(Node::from_json(&json!(2.5)).unwrap()))
-            .collect();
-        assert!(!others.contains(&h));
-        assert_eq!(with_handle(h, |n| n.code()), None);
-        for o in others {
-            assert!(destroy_handle(o));
-        }
-    }
-
-    #[test]
-    fn handle_counter_wraps_and_skips_live_handles() {
-        let node = || Node::from_json(&json!(1)).unwrap();
-        let mut table = HandleTable::default();
-        let first = table.insert(node());
-        assert_eq!(first, FIRST_HANDLE);
-        // the counter wraps around at the end of the address range ...
-        table.next = usize::MAX - 3;
-        assert_eq!(table.insert(node()), usize::MAX - 3);
-        // ... and skips handles still in use
-        assert_eq!(table.insert(node()), FIRST_HANDLE + HANDLE_STEP);
-        assert_eq!(table.nodes.len(), 3);
-    }
 }

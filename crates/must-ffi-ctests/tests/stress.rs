@@ -228,6 +228,10 @@ fn eight_threads_for_ten_seconds() {
     );
     println!("{pushes} pushes, {answers} answers, {replies} replies");
     assert!(pushes > 0 && replies > 0);
-    // every request a client sent was answered by a poller
-    assert_eq!(answers, replies);
+    // every request a client sent was answered by a poller: half are changes, each with an
+    // answer of its own, and one answer may reply to several reads of one parameter
+    assert!(
+        answers >= replies / 2 && answers <= replies,
+        "{answers} answers"
+    );
 }

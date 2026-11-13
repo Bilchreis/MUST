@@ -119,6 +119,53 @@ async fn startup_reads_fill_the_cache() {
 }
 
 #[tokio::test]
+async fn startup_reads_of_a_module_with_more_parameters_than_jobs() {
+    // more than twice the jobs a module holds, so the startup reads cannot all be queued
+    // at once
+    const EXTRA: usize = 200;
+    let sim = Arc::new(Sim::default());
+    let mut module = Module::new("m", "x")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("status", common::status_info(), "s"))
+        .unwrap()
+        .no_polling()
+        .handler_arc(Arc::clone(&sim) as Arc<dyn must_server::ModuleHandler>);
+    for i in 0..EXTRA {
+        module = module
+            .parameter(Parameter::new(&format!("p{i}"), kelvin(), "x"))
+            .unwrap();
+    }
+    let n = start(
+        NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .module(module)
+            .unwrap(),
+    );
+    let all = EXTRA + 2;
+    let read = tokio::time::timeout(Duration::from_secs(5), async {
+        while sim.reads.load(Ordering::SeqCst) < all {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        read.is_ok(),
+        "{} of {all} parameters read",
+        sim.reads.load(Ordering::SeqCst)
+    );
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send("activate").await;
+    let mut updates = 0;
+    while c.line().await != "active" {
+        updates += 1;
+    }
+    assert_eq!(updates, all, "an initial update for every parameter");
+}
+
+#[tokio::test]
 async fn hanging_handler_times_out() {
     let n = start(node(Arc::new(Sim::default())).timeout(0.5));
     let mut c = Client::connect(n.local_addr()).await;
@@ -276,6 +323,56 @@ async fn initial_updates_before_active() {
             seen_before_active.contains(spec),
             "{spec} missing before active"
         );
+    }
+    push.await.unwrap();
+}
+
+/// While values are pushed during `activate`, a client gets every parameter exactly once
+/// before `active`, and afterwards every later value exactly once and in order: none is
+/// lost or repeated across the activation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn activation_neither_loses_nor_repeats_updates() {
+    const PUSHES: u32 = 2000;
+    let n = start(node(Arc::new(Sim::default())));
+    let pusher = n.clone();
+    let mut c = Client::connect(n.local_addr()).await;
+    let push = tokio::spawn(async move {
+        for i in 1..=PUSHES {
+            pusher
+                .update("t2", "value", Value::Double(f64::from(i)))
+                .unwrap();
+            if i % 16 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+    });
+    c.send("activate").await;
+
+    let mut initial = std::collections::HashMap::new();
+    loop {
+        let line = c.line().await;
+        if line == "active" {
+            break;
+        }
+        let (action, spec, data) = parse(&line);
+        assert_eq!(action, "update", "{line}");
+        let previous = initial.insert(spec.clone(), data);
+        assert!(previous.is_none(), "{spec} sent twice before active");
+    }
+    // the pushed values are 1, 2, ...; any other snapshot value (the initial 4.2) means
+    // the client activated before the first push
+    let mut last = initial["t2:value"][0]
+        .as_f64()
+        .filter(|v| v.fract() == 0.0 && *v >= 1.0)
+        .unwrap_or(0.0);
+    while last < f64::from(PUSHES) {
+        let (action, spec, data) = parse(&c.line().await);
+        if action != "update" || spec != "t2:value" {
+            continue;
+        }
+        let value = data[0].as_f64().unwrap();
+        assert_eq!(value, last + 1.0, "an update was lost or repeated");
+        last = value;
     }
     push.await.unwrap();
 }
@@ -459,4 +556,162 @@ fn library_owned_runtime() {
 async fn status_helper_is_valid() {
     // the status values used by the simulation fit the status datainfo
     assert!(common::status_info().encode(&status(300, "x")).is_ok());
+}
+
+/// Keeps a publisher from its first read, as a handler feeding a background task would.
+#[derive(Default)]
+struct Keeper {
+    publisher: std::sync::OnceLock<must_server::Publisher>,
+}
+
+#[async_trait::async_trait]
+impl must_server::ModuleHandler for Keeper {
+    async fn read(&self, ctx: &must_server::Ctx, _parameter: &str) -> must_server::HandlerResult {
+        let _ = self.publisher.set(ctx.publisher());
+        Ok(Value::Double(1.0).into())
+    }
+}
+
+#[tokio::test]
+async fn stored_publisher_does_not_keep_the_node_alive() {
+    let keeper = Arc::new(Keeper::default());
+    let n = start(
+        NodeBuilder::new("keeper", "a node")
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .initial_read(false)
+            .monitored(false)
+            .log_files(must_server::logfiles::LogFiles::off())
+            .discovery(must_server::Discovery::off())
+            .module(
+                Module::new("m", "a module")
+                    .interface_classes(["Readable"])
+                    .handler_arc(Arc::clone(&keeper) as Arc<dyn must_server::ModuleHandler>)
+                    .parameter(Parameter::new("value", kelvin(), "value"))
+                    .unwrap()
+                    .parameter(
+                        Parameter::new("status", common::status_info(), "status")
+                            .initial_value(status(100, "ok")),
+                    )
+                    .unwrap()
+                    .no_polling(),
+            )
+            .unwrap(),
+    );
+    let mut c = Client::connect(n.local_addr()).await;
+    assert!(c.request("read m:value").await.starts_with("reply m:value"));
+    let publisher = keeper.publisher.get().expect("kept on the read").clone();
+
+    activate(&mut c).await;
+    publisher.update("value", Value::Double(42.0)).unwrap();
+    let line = c.line().await;
+    assert!(line.starts_with("update m:value [42"), "{line}");
+
+    n.stop().await;
+    drop(n);
+    let gone = tokio::time::timeout(Duration::from_secs(5), async {
+        while publisher.update("value", Value::Double(1.0)).is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        gone.is_ok(),
+        "the node was freed although the handler keeps a publisher"
+    );
+}
+
+// --- matrix parameters
+
+/// A camera whose `image` is a `<f4` matrix of up to 4×4 elements.
+#[derive(Default)]
+struct Camera {
+    changes: std::sync::atomic::AtomicUsize,
+}
+
+fn image_info() -> must_types::DataInfo {
+    common::di(
+        json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [4, 4]}),
+    )
+}
+
+#[async_trait::async_trait]
+impl must_server::ModuleHandler for Camera {
+    async fn read(&self, _ctx: &must_server::Ctx, parameter: &str) -> must_server::HandlerResult {
+        let must_types::DataInfo::Matrix(info) = image_info() else {
+            unreachable!()
+        };
+        match parameter {
+            "image" => Ok(info
+                .from_f64s(&[2, 3], &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+                .unwrap()
+                .into()),
+            _ => Ok(status(100, "idle").into()),
+        }
+    }
+
+    async fn change(
+        &self,
+        _ctx: &must_server::Ctx,
+        _parameter: &str,
+        value: Value,
+    ) -> must_server::HandlerResult {
+        self.changes.fetch_add(1, Ordering::SeqCst);
+        Ok(value.into())
+    }
+}
+
+#[tokio::test]
+async fn matrix_parameter() {
+    let camera = Arc::new(Camera::default());
+    let module = Module::new("cam", "a camera")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "sensor temperature").cached())
+        .unwrap()
+        .parameter(Parameter::new("status", common::status_info(), "status"))
+        .unwrap()
+        .parameter(Parameter::new("image", image_info(), "the picture").writable())
+        .unwrap()
+        .no_polling()
+        .handler_arc(Arc::clone(&camera) as Arc<dyn must_server::ModuleHandler>);
+    let n = start(
+        NodeBuilder::new("x", "y")
+            .log_files(must_server::logfiles::LogFiles::off())
+            .discovery(must_server::Discovery::off())
+            .initial_read(false)
+            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .module(module)
+            .unwrap(),
+    );
+    let mut c = Client::connect(n.local_addr()).await;
+
+    let (_, _, describe) = parse(&c.request("describe").await);
+    assert_eq!(
+        describe["modules"]["cam"]["accessibles"]["image"]["datainfo"],
+        image_info().to_json()
+    );
+
+    let (action, spec, data) = parse(&c.request("read cam:image").await);
+    assert_eq!((action.as_str(), spec.as_str()), ("reply", "cam:image"));
+    assert_eq!(
+        data[0],
+        json!({"len": [2, 3], "blob": "AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA"})
+    );
+
+    // 5 elements along x, at most 4 allowed; the 20 bytes fit the lengths
+    let blob = format!("{}=", "A".repeat(27));
+    let line = c
+        .request(&format!(
+            "change cam:image {{\"len\": [5, 1], \"blob\": \"{blob}\"}}"
+        ))
+        .await;
+    assert_eq!(error_class(&line), "RangeError", "{line}");
+    assert_eq!(camera.changes.load(Ordering::SeqCst), 0);
+
+    let line = c
+        .request("change cam:image {\"len\": [1, 1], \"blob\": \"AACAPw==\"}")
+        .await;
+    let (action, _, data) = parse(&line);
+    assert_eq!(action, "changed", "{line}");
+    assert_eq!(data[0], json!({"len": [1, 1], "blob": "AACAPw=="}));
+    assert_eq!(camera.changes.load(Ordering::SeqCst), 1);
 }

@@ -2,6 +2,7 @@
 
 //! Property tests: random valid datainfos with matching values survive JSON round trips.
 
+use must_types::datainfo::{ElementKind, ElementType};
 use must_types::{DataInfo, Mode, Value};
 use proptest::prelude::*;
 
@@ -42,7 +43,37 @@ fn leaf() -> impl Strategy<Value = DataInfo> {
         ),
         any::<bool>().prop_map(|utf8| DataInfo::string().prop("isUTF8", utf8).build().unwrap()),
         (0..16u64).prop_map(|max| DataInfo::blob(max).build().unwrap()),
+        matrix(),
     ]
+}
+
+fn matrix() -> impl Strategy<Value = DataInfo> {
+    let elementtype = (
+        any::<bool>(),
+        prop::sample::select(vec![
+            (ElementKind::Int, 1u8),
+            (ElementKind::Int, 2),
+            (ElementKind::Int, 4),
+            (ElementKind::Int, 8),
+            (ElementKind::UInt, 1),
+            (ElementKind::UInt, 2),
+            (ElementKind::UInt, 4),
+            (ElementKind::UInt, 8),
+            (ElementKind::Float, 2),
+            (ElementKind::Float, 4),
+            (ElementKind::Float, 8),
+        ]),
+    )
+        .prop_map(|(big_endian, (kind, bytes))| ElementType::new(big_endian, kind, bytes).unwrap());
+    (elementtype, prop::collection::vec(1..5u64, 1..4)).prop_map(|(elementtype, maxlen)| {
+        let names: Vec<String> = (0..maxlen.len()).map(|i| format!("d{i}")).collect();
+        DataInfo::matrix(
+            elementtype,
+            names.iter().map(String::as_str).zip(maxlen.iter().copied()),
+        )
+        .build()
+        .unwrap()
+    })
 }
 
 fn datainfo() -> impl Strategy<Value = DataInfo> {
@@ -113,6 +144,24 @@ fn value_for(info: &DataInfo) -> BoxedStrategy<Value> {
                 .map(value_for)
                 .collect::<Vec<_>>()
                 .prop_map(move |values| Value::Struct(names.iter().cloned().zip(values).collect()))
+                .boxed()
+        }
+        DataInfo::Matrix(m) => {
+            let size = m.elementtype().size();
+            m.maxlen()
+                .iter()
+                .map(|&max| 0..=u32::try_from(max).unwrap())
+                .collect::<Vec<_>>()
+                .prop_flat_map(move |len| {
+                    let count = len.iter().map(|&l| l as usize).product::<usize>();
+                    // any bytes, including NaN payloads, must survive unchanged
+                    prop::collection::vec(any::<u8>(), count * size).prop_map(move |data| {
+                        Value::Matrix {
+                            len: len.clone(),
+                            data,
+                        }
+                    })
+                })
                 .boxed()
         }
         other => panic!("no values for {other}"),

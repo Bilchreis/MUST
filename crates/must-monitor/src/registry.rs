@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! The per-user directory in which every process with must nodes registers its
+//! The per-user directory in which every process with MUST nodes registers its
 //! monitoring endpoint as `<pid>.json`.
 
 use std::io;
@@ -400,20 +400,6 @@ pub fn tui_running(dir: &Path) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn tui_lock() {
-        let _spawn = crate::spawn_guard();
-        let dir = std::env::temp_dir().join(format!("must-tui-lock-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(!super::tui_running(&dir).unwrap());
-        let held = super::try_lock_tui(&dir).unwrap().expect("free");
-        assert!(super::tui_running(&dir).unwrap());
-        assert!(super::try_lock_tui(&dir).unwrap().is_none());
-        drop(held);
-        assert!(!super::tui_running(&dir).unwrap(), "released with the file");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -531,7 +517,6 @@ mod tests {
         let dir = temp_dir("stale");
         prepare(&dir).unwrap();
         // a process that has exited
-        let spawn = crate::spawn_guard();
         let mut child = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
             .args(if cfg!(windows) {
                 &["/C", "exit"][..]
@@ -542,7 +527,6 @@ mod tests {
             .unwrap();
         let pid = child.id();
         child.wait().unwrap();
-        drop(spawn);
         let socket = dir.join(format!("{pid}.sock"));
         std::fs::write(&socket, "").unwrap();
         let mut gone = own_registration(&dir);

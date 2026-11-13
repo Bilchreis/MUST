@@ -10,6 +10,9 @@ use must_monitor::protocol::{
     ProcessInfo, ServerMessage, Snapshot,
 };
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use serde_json::Value as Json;
+
+use crate::checker;
 
 /// Identifies a monitored process: pid and start time (pids can be reused).
 pub type ProcessKey = (u32, u64);
@@ -41,6 +44,17 @@ pub enum Msg {
         key: ProcessKey,
         /// What happened.
         msg: EndpointMsg,
+    },
+    /// A SECoP check of a node's structure report ended.
+    Checked {
+        /// The process.
+        key: ProcessKey,
+        /// The node.
+        node: NodeId,
+        /// The check, as in [`Effect::Check`].
+        id: u64,
+        /// What it found.
+        outcome: checker::Outcome,
     },
 }
 
@@ -82,6 +96,18 @@ pub enum Effect {
         /// On or off.
         enabled: bool,
     },
+    /// Check a node's structure report with the SECoP checker; answer with
+    /// [`Msg::Checked`].
+    Check {
+        /// The process.
+        key: ProcessKey,
+        /// The node.
+        node: NodeId,
+        /// Identifies this check.
+        id: u64,
+        /// The structure report.
+        structure: Json,
+    },
 }
 
 /// State of the connection to a process.
@@ -104,7 +130,7 @@ pub struct Process {
     pub pid: u32,
     /// Executable name.
     pub name: String,
-    /// Version of its must library, once connected.
+    /// Version of its MUST library, once connected.
     pub library_version: String,
     /// The connection.
     pub link: Link,
@@ -133,6 +159,20 @@ pub struct Node {
     pub traffic: VecDeque<TrafficLine>,
     /// Messages received into `traffic` in total (counts the ones pushed out, too).
     pub traffic_total: u64,
+    /// The last SECoP check of its structure report, started when the detail view shows
+    /// the node.
+    pub check: Option<Check>,
+}
+
+/// A SECoP check of a node's structure report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Check {
+    /// Identifies the check.
+    pub id: u64,
+    /// The structure report checked; a new one is checked again.
+    pub structure: Json,
+    /// Running while `None`, then what it found.
+    pub outcome: Option<checker::Outcome>,
 }
 
 /// A message on the wire.
@@ -294,6 +334,8 @@ pub struct App {
     pub ui: UiState,
     /// The node whose traffic is subscribed.
     traffic_node: Option<(ProcessKey, NodeId)>,
+    /// The id of the last check started.
+    last_check: u64,
 }
 
 impl App {
@@ -310,6 +352,7 @@ impl App {
             quit: false,
             ui: UiState::default(),
             traffic_node: None,
+            last_check: 0,
         }
     }
 
@@ -320,9 +363,27 @@ impl App {
             Msg::Resize => {}
             Msg::Tick { now } => self.tick(now),
             Msg::Endpoint { key, msg } => self.endpoint(key, msg),
+            Msg::Checked {
+                key,
+                node,
+                id,
+                outcome,
+            } => {
+                if let Some(check) = self
+                    .processes
+                    .get_mut(&key)
+                    .and_then(|p| p.nodes.get_mut(&node))
+                    .and_then(|n| n.check.as_mut())
+                    .filter(|c| c.id == id)
+                {
+                    check.outcome = Some(outcome);
+                }
+            }
         }
         self.repair_selection();
-        self.traffic_effects()
+        let mut effects = self.traffic_effects();
+        effects.extend(self.check_effect());
+        effects
     }
 
     /// All nodes in display order.
@@ -396,6 +457,7 @@ impl App {
                 self.ui.editing_filter = true;
             }
             KeyCode::Char('p') if self.view == View::Traffic => self.toggle_pause(),
+            KeyCode::Char('c') if self.view == View::Detail => self.recheck(),
             KeyCode::Char('l') if self.view == View::Logs => {
                 self.ui.log_level = self.ui.log_level.next();
                 self.ui.scroll = 0;
@@ -569,6 +631,49 @@ impl App {
         }
     }
 
+    /// Checks the selected node again: drops its check, so the next update starts one.
+    fn recheck(&mut self) {
+        if let Some((key, id)) = self.selected
+            && let Some(node) = self
+                .processes
+                .get_mut(&key)
+                .and_then(|p| p.nodes.get_mut(&id))
+            && node.check.as_ref().is_none_or(|c| c.outcome.is_some())
+        {
+            node.check = None;
+        }
+    }
+
+    /// Starts a check of the selected node's structure report while the detail view is
+    /// open, unless that report was checked or is being checked.
+    fn check_effect(&mut self) -> Option<Effect> {
+        if self.view != View::Detail {
+            return None;
+        }
+        let (key, id) = self.selected?;
+        let node = self.processes.get_mut(&key)?.nodes.get_mut(&id)?;
+        let structure = node.info.structure.as_ref()?;
+        if node
+            .check
+            .as_ref()
+            .is_some_and(|c| c.structure == *structure)
+        {
+            return None;
+        }
+        self.last_check += 1;
+        node.check = Some(Check {
+            id: self.last_check,
+            structure: structure.clone(),
+            outcome: None,
+        });
+        Some(Effect::Check {
+            key,
+            node: id,
+            id: self.last_check,
+            structure: structure.clone(),
+        })
+    }
+
     /// Subscribes the traffic of the selected node while the traffic view is open.
     fn traffic_effects(&mut self) -> Vec<Effect> {
         let wanted = match self.view {
@@ -642,10 +747,16 @@ impl App {
                 entry.library_version = process.library_version;
                 entry.link = Link::Connected;
                 entry.gone_since = None;
+                let old = std::mem::take(&mut entry.nodes);
                 entry.nodes = snapshot
                     .nodes
                     .into_iter()
-                    .map(|info| (info.id, Node::new(info)))
+                    .map(|info| {
+                        let mut node = Node::new(info);
+                        // a reconnect keeps the check; a changed report is checked again
+                        node.check = old.get(&node.info.id).and_then(|n| n.check.clone());
+                        (node.info.id, node)
+                    })
                     .collect();
                 // the snapshot's log records, merged with the others by time
                 let mut merged: Vec<LogLine> = self.logs.drain(..).collect();
@@ -712,6 +823,7 @@ impl Node {
             tx_per_second: 0.0,
             traffic: VecDeque::new(),
             traffic_total: 0,
+            check: None,
         }
     }
 }

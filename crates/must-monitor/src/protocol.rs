@@ -126,7 +126,7 @@ pub struct ProcessInfo {
     pub pid: u32,
     /// Executable name, e.g. `LabVIEW.exe`.
     pub name: String,
-    /// Version of the must library serving the endpoint.
+    /// Version of the MUST library serving the endpoint.
     pub library_version: String,
     /// When the process started, as UNIX time in seconds (0 if unknown).
     pub start_time: f64,

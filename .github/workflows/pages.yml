@@ -1,0 +1,51 @@
+name: Pages
+
+# Publishes the guide (mdBook, docs/) with the API docs (cargo doc) under api/ to GitHub
+# Pages on every push to main. CI checks that both build on every push and pull request.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# a deployment in progress finishes; a newer push deploys after it
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      # the published crates, without the build tooling and the C conformance tests
+      - run: cargo doc --workspace --no-deps --exclude xtask --exclude must-ffi-ctests
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - run: mdbook build docs
+      - run: cp -r target/doc target/book/api
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: target/book
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

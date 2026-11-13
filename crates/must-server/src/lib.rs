@@ -17,8 +17,10 @@
 //! `change` and `do`, validates incoming values against their datainfo (including
 //! dynamic limits from `_min`/`_max`/`_limits` parameters), sends updates to activated
 //! clients, and keeps SECoP's ordering rules: updates caused by a request reach clients
-//! before its reply. The optional `check` and `logging` messages are answered with
-//! `ProtocolError`.
+//! before its reply. A `check` of an accessible declared `checkable: true` is validated
+//! like the matching `change` or `do` and then decided by [`ModuleHandler::check`];
+//! other accessibles answer it with `NotCheckable`. Clients can receive log messages
+//! through SECoP's remote logging (`logging`), see below.
 //!
 //! # Example
 //!
@@ -91,10 +93,73 @@
 //!
 //! At each tick the node calls [`ModuleHandler::poll`] once with all parameters of the
 //! module that are due; override it to read them in one hardware transaction.
+//!
+//! With concurrent requests (below) the default hook starts the reads of all due
+//! parameters at once, and a tick does not wait for an earlier tick's reads; otherwise it
+//! reads them one after another. A parameter that is being read is not read again for a
+//! poll, whichever request started that read.
+//!
+//! # Concurrent requests and shared reads
+//!
+//! A node calls a module's handler for one request at a time. A module declared with
+//! [`Module::concurrent_requests`] has its handler called for each request as it arrives
+//! instead, up to 64 running requests; its calls overlap, and requests of different
+//! clients may finish in any order.
+//!
+//! On every module, reads of one parameter share a handler call: their clients get the
+//! same reply, and activated clients one update.
+//!
+//! - When a read starts, it takes all requests still waiting to read that parameter,
+//!   client reads and polls, also those behind a waiting `change` or `do`.
+//! - A request to read a parameter that is being read shares that read: a poll always, a
+//!   client's `read` only if that read started after the module's last `change` or `do`
+//!   that had finished when the client sent it. A client that received `changed` or `done`
+//!   and then reads therefore never receives a value from before it.
+//! - A shared read goes on when the client that started it disconnects.
+//!
+//! A connection handles its requests in order, waiting for each reply, except that while
+//! a `read` of a parameter runs it also takes directly following reads of that parameter,
+//! at most 64, which share the read under these rules. The client gets one reply per
+//! request, in order.
+//!
+//! # Errors
+//!
+//! A handler fails a request with a [`SecopError`](must_types::SecopError), which the
+//! client receives as an error report. Its class is one of SECoP 2.0's
+//! ([`ErrorClass`](must_types::ErrorClass)), or a custom class from
+//! [`SecopError::custom`](must_types::SecopError::custom), e.g. `_Overheated`; SECoP asks
+//! clients to treat classes they do not know as generic errors.
+//!
+//! # Remote logging
+//!
+//! A client sends `logging <module> <level>` (`logging  <level>` for the whole node) with
+//! `"debug"`, `"info"`, `"error"` or `"off"` to receive that module's log records as
+//! `log <module>:<level> "<message>"` events over its connection. Every module starts at
+//! `"off"`; a node-wide request replaces all module levels, a module request overrides
+//! the node-wide level for that module, and a parameter specifier stands for its module.
+//!
+//! The records sent are those the node logs about a module (failed polls and reads,
+//! values that do not fit their datainfo) and what the application logs with
+//! [`Ctx::log`], [`Publisher::log`] or [`RunningNode::log`]. MUST's error and warning
+//! records are sent as `error`, info records as `info`, the application's debug records
+//! as `debug`. Records not tied to a module are not sent, as a `log` event names one.
+//!
+//! Log events are best effort: while a client's unread updates and log events exceed
+//! [`NodeBuilder::max_outgoing_bytes`], its log events are dropped, so logging never
+//! closes a connection. They do count toward that limit, so heavy logging can make a
+//! later update close a client that does not read.
+//!
+//! # Discovery
+//!
+//! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP
+//! port, `equipment_id`, `firmware` and `description`, and announces itself once at
+//! startup, so that clients such as Frappy's `frappy-scan` find it without knowing the
+//! port. [`NodeBuilder::discovery`] with [`Discovery::off`], or `MUST_DISCOVERY=0`, turns
+//! it off. See [`discovery`] for the details.
 
+pub mod discovery;
 pub mod events;
 pub mod handler;
-pub mod launcher;
 pub mod logfiles;
 pub mod model;
 pub mod monitor;
@@ -102,10 +167,12 @@ mod protocol;
 mod report;
 mod runtime;
 
+pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
-pub use launcher::show_status_tui;
 
-pub use handler::{CallResult, Ctx, HandlerResult, ModuleHandler, Reading};
+pub use handler::{
+    AppLogLevel, CallResult, CheckResult, Ctx, HandlerResult, ModuleHandler, Publisher, Reading,
+};
 pub use model::{
     BuildError, Command, ModelError, ModelErrorKind, ModelWarning, Module, Node, NodeBuilder,
     Parameter,

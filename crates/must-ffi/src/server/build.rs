@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::ffi::{CString, c_char, c_int};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use must_server::model::{
@@ -17,6 +18,7 @@ use serde_json::{Map, Value as Json};
 
 use super::codes::err;
 use super::handler::{Accessible, ShallModule};
+use super::state::NODE_TIMEOUT;
 use crate::variant::{self, CSECoPbaseType, Kind};
 
 /// `SECoP_S_getsetFunction`: getter or setter of a parameter.
@@ -36,6 +38,11 @@ pub(crate) type CallFunction = unsafe extern "C" fn(
     *mut *mut CSECoPbaseType,
     *mut f64,
 );
+
+/// `SECoP_S_checkFunction` (a MUST addition): decides a `check` of a parameter or
+/// command.
+pub(crate) type CheckFunction =
+    unsafe extern "C" fn(*const c_char, *const CSECoPbaseType, *mut c_int);
 
 /// The item that `SECoP_S_add*` calls apply to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,9 +77,14 @@ pub(crate) struct DraftAccessible {
     pub props: Map<String, Json>,
     /// The datainfo, as SHALL's variant type (which accepts SECoP 1.0 descriptions).
     pub datainfo: Option<variant::Node>,
+    /// `datainfo` as SECoP 2.0, kept once a running node's parameter is updated (the datainfo
+    /// cannot change then), so that it is not rebuilt for every update.
+    pub info: Option<DataInfo>,
     /// SHALL's `pollinterval` property, if given.
     pub poll: Option<ShallPoll>,
     pub kind: AccessibleKind,
+    /// The function of `SECoP_S_setCheckFunction`.
+    pub check: Option<CheckFunction>,
 }
 
 /// A value of SHALL's `pollinterval` property.
@@ -218,8 +230,10 @@ impl DraftNode {
             name: name.to_owned(),
             props: Map::new(),
             datainfo: None,
+            info: None,
             poll: None,
             kind,
+            check: None,
         });
         self.focus = Focus::Accessible(m, module.accessibles.len() - 1);
         err::SUCCESS
@@ -319,6 +333,22 @@ impl DraftNode {
         }
     }
 
+    /// `SECoP_S_setCheckFunction`: sets the check function of the focused accessible and
+    /// publishes it as `checkable: true`; `None` clears both.
+    pub(crate) fn set_check(&mut self, function: Option<CheckFunction>) -> c_int {
+        let Focus::Accessible(m, a) = self.focus else {
+            return err::INVALID_PARAMETER;
+        };
+        let acc = &mut self.modules[m].accessibles[a];
+        acc.props
+            .retain(|key, _| !key.eq_ignore_ascii_case("checkable"));
+        if function.is_some() {
+            acc.props.insert("checkable".into(), Json::Bool(true));
+        }
+        acc.check = function;
+        err::SUCCESS
+    }
+
     /// Validates the node and turns it into a `must-server` node, with remarks on what
     /// was filled in; on failure all problems are listed.
     pub(crate) fn build(
@@ -389,11 +419,13 @@ impl DraftNode {
         let mut problems = Vec::new();
         let mut props = self.props.clone();
         let description = take_string(&mut props, "description");
-        // the C ABI registers its nodes with the monitor itself, from creation on
         let mut node = NodeBuilder::new(&self.name, &description)
             .bind(self.bind)
             .initial_read(callbacks)
-            .monitored(false);
+            // the C ABI registers its nodes with the monitor itself, from creation on
+            .monitored(false)
+            // SHALL waits 60 s for the application; a `timeout` property of the host wins
+            .timeout(NODE_TIMEOUT);
         for (key, value) in props {
             node = if is_settable(Level::Node, &key) {
                 match node.property(&key, value) {
@@ -434,6 +466,11 @@ impl DraftNode {
         let mut props = draft.props.clone();
         let description = take_string(&mut props, "description");
         let mut module = Module::new(&draft.name, &description);
+        // requests go to the application's queue as they arrive; callbacks of one module
+        // stay one at a time, as SHALL calls them on one thread
+        if !callbacks {
+            module = module.concurrent_requests();
+        }
         // a `pollinterval` parameter replaces SHALL's properties; without either, the
         // library's default tiers apply
         let poll_parameter = draft.has_poll_parameter();
@@ -483,6 +520,18 @@ impl DraftNode {
                 });
                 continue;
             };
+            if callbacks
+                && acc.check.is_none()
+                && acc.props.get("checkable") == Some(&Json::Bool(true))
+            {
+                problems.push(Problem {
+                    code: err::MISSING_MANDATORY,
+                    message: format!(
+                        "{path}: `checkable` is set but no check function was registered \
+                         with SECoP_S_setCheckFunction"
+                    ),
+                });
+            }
             let mut props = acc.props.clone();
             let description = take_string(&mut props, "description");
             match &acc.kind {
@@ -554,6 +603,7 @@ impl DraftNode {
                             proto: proto.clone(),
                             getter: *getter,
                             setter: *setter,
+                            check: acc.check,
                         },
                     );
                 }
@@ -596,6 +646,7 @@ impl DraftNode {
                             argument,
                             result,
                             function: *function,
+                            check: acc.check,
                         },
                     );
                 }
@@ -607,6 +658,7 @@ impl DraftNode {
             context: context.to_owned(),
             callbacks,
             accessibles,
+            gate: Arc::default(),
         }))
     }
 }
@@ -804,6 +856,90 @@ mod tests {
         );
         assert_eq!(node.add_property("visibility", 3.into()), err::SUCCESS);
         assert_eq!(node.modules[0].props["visibility"], "expert");
+    }
+
+    #[test]
+    fn only_polling_mode_has_concurrent_requests() {
+        let mut node = DraftNode::new("n", "a node", "127.0.0.1:0".parse().unwrap());
+        node.add_module("m");
+        let concurrent = |callbacks| {
+            node.build_module(&node.modules[0], "c", callbacks, &mut Vec::new())
+                .expect("the module builds")
+                .has_concurrent_requests()
+        };
+        assert!(concurrent(false));
+        assert!(!concurrent(true));
+    }
+
+    unsafe extern "C" fn accept(_: *const c_char, _: *const CSECoPbaseType, error: *mut c_int) {
+        // SAFETY: called by the library with a valid pointer
+        unsafe { *error = err::SUCCESS };
+    }
+
+    fn checkable_node() -> DraftNode {
+        let mut node = DraftNode::new("n", "a node", "127.0.0.1:0".parse().unwrap());
+        node.add_module("m");
+        node.add_accessible(
+            "p",
+            AccessibleKind::Parameter {
+                writable: false,
+                getter: None,
+                setter: None,
+                initial: None,
+            },
+        );
+        node.add_property("datainfo", serde_json::json!({"type": "double"}));
+        node
+    }
+
+    #[test]
+    fn check_function_needs_an_accessible_in_focus() {
+        let mut node = checkable_node();
+        node.set_focus("m");
+        assert_eq!(node.set_check(Some(accept)), err::INVALID_PARAMETER);
+        assert!(!node.modules[0].props.contains_key("checkable"));
+        assert!(node.modules[0].accessibles[0].check.is_none());
+    }
+
+    #[test]
+    fn check_function_sets_and_clears_checkable() {
+        let mut node = checkable_node();
+        assert_eq!(node.add_property("Checkable", false.into()), err::SUCCESS);
+        assert_eq!(node.set_check(Some(accept)), err::SUCCESS);
+        let acc = &node.modules[0].accessibles[0];
+        assert!(acc.check.is_some());
+        assert_eq!(acc.props.get("checkable"), Some(&Json::Bool(true)));
+        assert!(!acc.props.contains_key("Checkable"));
+        assert_eq!(node.set_check(None), err::SUCCESS);
+        let acc = &node.modules[0].accessibles[0];
+        assert!(acc.check.is_none());
+        assert!(!acc.props.contains_key("checkable"));
+    }
+
+    #[test]
+    fn checkable_without_function_fails_in_callback_mode() {
+        let mut node = checkable_node();
+        assert_eq!(node.add_property("checkable", true.into()), err::SUCCESS);
+        let mut problems = Vec::new();
+        node.build_module(&node.modules[0], "c", true, &mut problems);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.code == err::MISSING_MANDATORY && p.message.starts_with("n:m:p: ")),
+            "{problems:?}"
+        );
+        // polling mode: the property alone is the opt-in
+        let mut problems = Vec::new();
+        node.build_module(&node.modules[0], "c", false, &mut problems);
+        assert!(problems.is_empty(), "{problems:?}");
+        // with a function, callback mode is fine too
+        node.set_check(Some(accept));
+        let mut problems = Vec::new();
+        node.build_module(&node.modules[0], "c", true, &mut problems);
+        assert!(
+            !problems.iter().any(|p| p.code == err::MISSING_MANDATORY),
+            "{problems:?}"
+        );
     }
 
     #[test]

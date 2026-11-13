@@ -1,7 +1,7 @@
 /*
 SPDX-License-Identifier: LGPL-3.0-or-later
 Copyright (c) 2017-2019 Helmholtz-Zentrum Berlin fuer Materialien und Energie GmbH <https://www.helmholtz-berlin.de>
-Modified for must (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
+Modified for MUST (https://github.com/Bilchreis/MUST): Qt-free, C interface only;
 the C++ class interface of CSECoPbaseType is not provided.
 */
 #ifndef __SECOP_EXPORTS_H__81F95F4C_9E08_494D_8073_A68C018A83D1__
@@ -204,6 +204,21 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_addPropertyJSON(const char* szKey, const
 enum SECoP_S_error SHALL_EXPORT SECoP_S_setAddFocus(const char* szKey);
 
 /**
+ * \brief MUST addition, not in SHALL: sets the check function of the focused parameter
+ *        or command and publishes "checkable": true for it, so that clients may send
+ *        SECoP check requests. NULL clears the function and the property. In callback
+ *        mode, \ref SECoP_S_nodeComplete fails with SECoP_S_ERROR_MISSING_MANDATORY for
+ *        an accessible with "checkable": true but no check function. In polling mode the
+ *        property alone enables checks: they are handed out with SECoP_S_ACTION_CHECK.
+ * \ingroup expfunc
+ * \param[in] ptrToCheck  check function, see \ref SECoP_S_checkFunction, or NULL
+ * \param[in] szContextID Context ID of the node being built
+ * \return on success SECoP_S_SUCCESS, SECoP_S_ERROR_INVALID_PARAMETER if the focus is not
+ *         a parameter or command, or another SECoP_S_error
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_setCheckFunction(SECoP_S_checkFunction ptrToCheck, const char* szContextID);
+
+/**
  * \brief Inform the SECoP node that it is complete. This function makes some
  *        checks and on success, it opens the TCP port and marks the node that
  *        you cannot change its structure.
@@ -248,6 +263,31 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_updateParameter(const char* szParameterN
  */
 enum SECoP_S_error SHALL_EXPORT SECoP_S_updateParameter2(const char* szParameterName, const char* szValue, int iValueSize,
                                                            const char* szSigma, int iSigmaSize, double dblTimestamp);
+
+/**
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_updateParameter2, for a
+ *        parameter of type matrix, with the matrix as plain arguments instead of a
+ *        variant or JSON: the length of each dimension and the raw element bytes (first
+ *        dimension varying fastest, in the byte order of the "elementtype"). The bytes
+ *        are base64-encoded once, for the clients. A LabVIEW Call Library node can pass
+ *        a U32 and a U8 array as "Array Data Pointer". The library copies puLen and pData
+ *        before it returns and does not keep them. There is no sigma; use
+ *        \ref SECoP_S_updateParameter2 if one is needed.
+ * \ingroup expfunc
+ * \param[in] szParameterName name of the parameter (<node>:<module>:<parameter>)
+ * \param[in] puLen           length of each dimension, as many as the datainfo has names
+ * \param[in] iDims           number of entries in puLen
+ * \param[in] pData           raw element bytes; may be NULL if iDataSize is 0
+ * \param[in] iDataSize       number of bytes in pData: the product of puLen times the
+ *                            size of one element
+ * \param[in] dblTimestamp    SECoP timestamp of the value or NaN
+ * \return on success SECoP_S_SUCCESS; the codes of \ref SECoP_S_updateParameter2 for an
+ *         unknown name; SECoP_S_ERROR_INVALID_VALUE if the parameter is not a matrix or
+ *         the lengths and bytes do not fit its datainfo (then nothing is sent)
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_updateParameterMatrix(const char* szParameterName, const unsigned int* puLen,
+                                                                int iDims, const void* pData, int iDataSize,
+                                                                double dblTimestamp);
 
 /**
  * \brief When polling is enabled (\ref SECoP_S_createNode) call SECoP_S_getStoredCommand
@@ -323,11 +363,148 @@ enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswer2(unsigned long long llI
                 const char* szValue, int iValueSize, const char* szSigma, int iSigmaSize, double dblTimestamp);
 
 /**
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_putCommandAnswer2, answers a
+ *        request handed out by \ref SECoP_S_getStoredCommand or
+ *        \ref SECoP_S_getStoredCommand2 with a matrix as plain arguments: the read
+ *        value, the value after a change or the command result. See
+ *        \ref SECoP_S_updateParameterMatrix for the arguments; puLen and pData are
+ *        copied before the function returns and not kept. There is no sigma.
+ * \ingroup expfunc
+ * \param[in] llId         id of the request
+ * \param[in] iErrorCode   SECoP_S_SUCCESS or SECoP_S_error for this action; with an
+ *                         error the matrix arguments are not read and may be NULL
+ * \param[in] puLen        length of each dimension
+ * \param[in] iDims        number of entries in puLen
+ * \param[in] pData        raw element bytes; may be NULL if iDataSize is 0
+ * \param[in] iDataSize    number of bytes in pData
+ * \param[in] dblTimestamp SECoP timestamp of the value or NaN
+ * \return on success SECoP_S_SUCCESS; SECoP_S_ERROR_INVALID_NAME for an unknown id;
+ *         SECoP_S_ERROR_INVALID_VALUE if the request's value is not a matrix or the
+ *         lengths and bytes do not fit its datainfo, and the request stays handed out,
+ *         so it can still be answered
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_putCommandAnswerMatrix(unsigned long long llId, enum SECoP_S_error iErrorCode,
+                                                                 const unsigned int* puLen, int iDims, const void* pData,
+                                                                 int iDataSize, double dblTimestamp);
+
+/**
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_getStoredCommand, but hands out
+ *        only the oldest stored request of the context that matches the filter, and
+ *        leaves the others stored. Answer it with \ref SECoP_S_putCommandAnswer.
+ *        Note the argument order: the filter comes first, as in SHALL-LabVIEW's
+ *        SECoP-filterStoredCommand.vi, and szContextID last (the VI has to pass it).
+ * \ingroup expfunc
+ * \param[in]     szFilterAccessibles entries "node", "node:module" or
+ *                                    "node:module:accessible" (case is ignored),
+ *                                    separated by commas, semicolons or whitespace;
+ *                                    NULL or empty: every accessible
+ * \param[in]     iFilterAction    0: any action, or a SECoP_S_action
+ * \param[out]    pllId            id to use with \ref SECoP_S_putCommandAnswer
+ * \param[out]    piAction         what is to do: read or change parameter, do command invokation
+ * \param[out]    szAccessible     buffer which gets the parameter/command name
+ * \param[in,out] piAccessibleSize input: maximum buffer size, out: needed buffer size
+ * \param[out]    ppValue          on "change": set value, on "do": function call argument
+ * \param[in]     szContextID      Context ID that the the retrieved command should belong to
+ * \return on success SECoP_S_SUCCESS or a SECoP_S_error: SECoP_S_ERROR_NO_DATA when no
+ *         request matches, SECoP_S_ERROR_INVALID_NAME for a malformed filter,
+ *         SECoP_S_ERROR_INVALID_VALUE for an unknown action
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_filterStoredCommand(const char* szFilterAccessibles, int iFilterAction,
+                                                            unsigned long long* pllId, enum SECoP_S_action *piAction,
+                                                            char* szAccessible, int* piAccessibleSize,
+                                                            CSECoPbaseType** ppValue, const char* szContextID);
+
+/**
+ * \brief MUST addition, not in SHALL: like \ref SECoP_S_getStoredCommand2, but hands out
+ *        only the oldest stored request of the context that matches the filter, see
+ *        \ref SECoP_S_filterStoredCommand. Answer it with \ref SECoP_S_putCommandAnswer2.
+ * \ingroup expfunc
+ * \param[in]     szFilterAccessibles see \ref SECoP_S_filterStoredCommand
+ * \param[in]     iFilterAction    0: any action, or a SECoP_S_action
+ * \param[out]    pllId            id to use with \ref SECoP_S_putCommandAnswer2
+ * \param[out]    piAction         what is to do: read or change parameter, do command invokation
+ * \param[out]    szAccessible     buffer which gets the parameter/command name
+ * \param[in,out] piAccessibleSize input: maximum name buffer size, out: needed name buffer size
+ * \param[out]    szValue          buffer which gets the set value or command argument as json
+ * \param[in,out] piValueSize      input: maximum value buffer size, out: needed value buffer size
+ * \param[in]     szContextID      Context ID that the the retrieved command should belong to
+ * \return see \ref SECoP_S_filterStoredCommand
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_filterStoredCommand2(const char* szFilterAccessibles, int iFilterAction,
+                                                             unsigned long long* pllId, enum SECoP_S_action *piAction,
+                                                             char* szAccessible, int* piAccessibleSize,
+                                                             char* szValue, int* piValueSize, const char* szContextID);
+
+/**
+ * \brief MUST addition, not in SHALL: registers an own SECoP error class with a text
+ *        for a context and returns a new code (-1000 or below). For requests of that
+ *        context, the application can return it from a getter, setter or command
+ *        function, or pass it to \ref SECoP_S_putCommandAnswer or
+ *        \ref SECoP_S_putCommandAnswer2; the client then gets an error report with this
+ *        class and text. Other contexts treat the code as unknown. Registering a name
+ *        again for the context returns its code and replaces the text; another context
+ *        registering the same name gets a code of its own. Codes are never reused.
+ *        \ref SECoP_S_doneLibrary with bNodeOnly=0 removes the context's codes.
+ *        Note: szContextID is an argument SHALL-LabVIEW's SECoP-registerUserError.vi
+ *        has to add at the end.
+ * \ingroup expfunc
+ * \param[in] szSECoPerror  error class: a SECoP identifier, e.g. "_Overheated" (custom
+ *                          names should start with an underscore) or a SECoP class
+ *                          such as "HardwareError"
+ * \param[in] szMessageText text of the error
+ * \param[in] szContextID   Context ID the code belongs to
+ * \return the new code, or SECoP_S_ERROR_INVALID_CONTEXT_ID, SECoP_S_ERROR_INVALID_NAME,
+ *         or SECoP_S_ERROR_NAME_ALREADY_USED for a name differing only in case
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_registerUserError(const char* szSECoPerror, const char* szMessageText,
+                                                          const char* szContextID);
+
+/**
+ * \brief MUST addition, not in SHALL: unregisters a code that the context registered
+ *        with \ref SECoP_S_registerUserError.
+ *        Note: szContextID is an argument SHALL-LabVIEW's SECoP-unregisterUserError.vi
+ *        has to add at the end.
+ * \ingroup expfunc
+ * \param[in] iError      code to unregister
+ * \param[in] szContextID Context ID that registered the code
+ * \return on success SECoP_S_SUCCESS, SECoP_S_ERROR_INVALID_VALUE for a code that the
+ *         context has not registered
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_unregisterUserError(int iError, const char* szContextID);
+
+/**
+ * \brief MUST addition, not in SHALL: logs a message for a module of a running node.
+ *        SECoP clients that asked for the module's log messages with the "logging"
+ *        request receive it as a "log" event if their level admits it
+ *        (SECoP_S_LOG_ERROR and SECoP_S_LOG_WARNING as "error", SECoP_S_LOG_INFO as
+ *        "info", SECoP_S_LOG_DEBUG as "debug"). Error, warning and info messages also
+ *        appear in the status display (must-tui) and the node's log files; debug
+ *        messages only reach remote clients, so that debug output does not fill the
+ *        log files.
+ *        Log events are best effort: a client that does not read its messages misses
+ *        them instead of being disconnected. They do count toward its unread updates,
+ *        so logging much at debug level can make a later update disconnect such a
+ *        client.
+ *        Can be called from any thread, also from a getter, setter or command
+ *        function; it never waits for the node.
+ * \ingroup expfunc
+ * \param[in] szModule  name of the module (<node>:<module>); the node must be complete
+ * \param[in] iLevel    a SECoP_S_logLevel
+ * \param[in] szMessage text of the message (UTF-8; invalid bytes are replaced)
+ * \return on success SECoP_S_SUCCESS, SECoP_S_ERROR_INVALID_NODE for an unknown node or
+ *         one that is not complete, SECoP_S_ERROR_INVALID_MODULE for an unknown module,
+ *         SECoP_S_ERROR_INVALID_VALUE for an invalid level or a NULL szMessage
+ */
+enum SECoP_S_error SHALL_EXPORT SECoP_S_logMessage(const char* szModule, enum SECoP_S_logLevel iLevel,
+                                                   const char* szMessage);
+
+/**
  * \brief Call SECoP_S_getErrorString to convert a SECoP_S_error value into a human
  *        readable text, which describes the error.
  * \ingroup expfunc
  * \param[in] iError SECoP_S_error to convert
- * \return a constant static string pointer to the description
+ * \return a constant static string pointer to the description; for a code of
+ *         \ref SECoP_S_registerUserError (MUST addition) "<class>: <text>"
  */
 const char SHALL_EXPORT * SECoP_S_getErrorString(enum SECoP_S_error iError);
 

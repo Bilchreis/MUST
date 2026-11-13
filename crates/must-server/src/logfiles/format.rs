@@ -2,11 +2,11 @@
 
 //! Node folders, file names and the text of the lines.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Display, Write as _};
-use std::net::SocketAddr;
 
-use chrono::{DateTime, NaiveDate, TimeZone};
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
 
 use crate::events::{ConnectionId, NodeEvent};
 
@@ -69,15 +69,58 @@ where
     time.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()
 }
 
+/// The time of a node's lines: the text of [`timestamp`], made once per second, because
+/// formatting a local time for every line is a large part of what logging costs.
+#[derive(Default)]
+pub(crate) struct LineClock {
+    second: Option<i64>,
+    date: NaiveDate,
+    text: String,
+}
+
+impl LineClock {
+    /// The current [`timestamp`] and local date.
+    pub(crate) fn now(&mut self) -> (&str, NaiveDate) {
+        self.at(Utc::now(), &Local)
+    }
+
+    fn at<Tz: TimeZone>(&mut self, time: DateTime<Utc>, zone: &Tz) -> (&str, NaiveDate)
+    where
+        Tz::Offset: Display,
+    {
+        let second = time.timestamp();
+        if self.second != Some(second) {
+            let local = time.with_timezone(zone);
+            self.text = timestamp(&local);
+            self.date = local.date_naive();
+            self.second = Some(second);
+        }
+        // the digits before the offset, which is always `+hh:mm`
+        let start = self.text.len() - "123+01:00".len();
+        let millis = time.timestamp_subsec_millis().min(999);
+        #[allow(clippy::cast_possible_truncation, reason = "digits")]
+        let digits = [
+            b'0' + (millis / 100) as u8,
+            b'0' + (millis / 10 % 10) as u8,
+            b'0' + (millis % 10) as u8,
+        ];
+        self.text.replace_range(
+            start..start + digits.len(),
+            std::str::from_utf8(&digits).unwrap_or("000"),
+        );
+        (&self.text, self.date)
+    }
+}
+
 /// The line stating that `n` lines were dropped (without time).
 pub(crate) fn dropped(n: u64) -> String {
     format!("* dropped {n} lines")
 }
 
-/// Turns node events into line texts (without time); remembers the clients' addresses.
+/// Turns node events into line texts (without time); remembers how to name the clients.
 #[derive(Default)]
 pub(crate) struct LineFormatter {
-    peers: HashMap<ConnectionId, SocketAddr>,
+    clients: HashMap<ConnectionId, String>,
 }
 
 impl LineFormatter {
@@ -85,17 +128,17 @@ impl LineFormatter {
     pub(crate) fn format(&mut self, event: &NodeEvent) -> Option<String> {
         match event {
             NodeEvent::Started { addr } => Some(format!(
-                "* node started on {addr} (must {})",
+                "* node started on {addr} (MUST {})",
                 env!("CARGO_PKG_VERSION")
             )),
             NodeEvent::Stopped => Some("* node stopped".to_owned()),
             NodeEvent::ClientConnected { id, peer } => {
-                self.peers.insert(*id, *peer);
+                self.clients.insert(*id, format!("[{id} {peer}]"));
                 Some(format!("* {} connected", self.client(*id)))
             }
             NodeEvent::ClientDisconnected { id, reason } => {
                 let line = format!("* {} disconnected: {reason}", self.client(*id));
-                self.peers.remove(id);
+                self.clients.remove(id);
                 Some(line)
             }
             NodeEvent::MessageReceived { id, line } => {
@@ -132,16 +175,17 @@ impl LineFormatter {
         }
     }
 
-    fn client(&self, id: ConnectionId) -> String {
-        match self.peers.get(&id) {
-            Some(peer) => format!("[{id} {peer}]"),
-            None => format!("[{id}]"),
+    fn client(&self, id: ConnectionId) -> Cow<'_, str> {
+        match self.clients.get(&id) {
+            Some(client) => client.into(),
+            None => format!("[{id}]").into(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
     use std::sync::Arc;
 
     use chrono::FixedOffset;
@@ -186,6 +230,33 @@ mod tests {
             .with_ymd_and_hms(2026, 10, 27, h, m, s)
             .unwrap()
             + chrono::Duration::milliseconds(i64::from(ms))
+    }
+
+    #[test]
+    fn clock_matches_timestamp() {
+        let mut clock = LineClock::default();
+        // within a second, across seconds and days, with the clock going back
+        for time in [
+            at(16, 42, 10, 0),
+            at(16, 42, 10, 7),
+            at(16, 42, 10, 45),
+            at(16, 42, 10, 999),
+            at(16, 42, 11, 123),
+            at(23, 59, 59, 999),
+            at(23, 59, 59, 999) + chrono::Duration::milliseconds(1),
+            at(16, 42, 10, 500),
+        ] {
+            let (text, date) = clock.at(time.to_utc(), time.offset());
+            assert_eq!(text, timestamp(&time));
+            assert_eq!(date, time.date_naive());
+        }
+        // the offset changes with the second it applies to
+        let summer = FixedOffset::east_opt(7200).unwrap();
+        let time = at(16, 42, 12, 5).to_utc();
+        assert_eq!(
+            clock.at(time, &summer).0,
+            timestamp(&time.with_timezone(&summer))
+        );
     }
 
     #[test]

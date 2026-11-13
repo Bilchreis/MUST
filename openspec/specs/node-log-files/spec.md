@@ -99,7 +99,7 @@ The default log directory SHALL be `$XDG_STATE_HOME/must/logs` (falling back to 
 - **THEN** its log goes under `%LOCALAPPDATA%\must\logs`
 
 ### Requirement: Never affect the node
-File logging SHALL never block or slow a node: lines are handed to a background writer through a bounded buffer; when the buffer is full, lines are dropped and the next written line is preceded by a line stating how many were dropped; when the directory cannot be created or written, a warning is logged, file logging stops for that node, and the node keeps working.
+File logging SHALL never make a node wait for the disk: lines are handed to a background writer through a bounded buffer; when the buffer is full, lines are dropped and the next written line is preceded by a line stating how many were dropped; when the directory cannot be created or written, a warning is logged, file logging stops for that node, and the node keeps working.
 
 #### Scenario: Slow disk
 - **WHEN** the disk stalls while a node answers requests

@@ -6,10 +6,9 @@ use async_trait::async_trait;
 use must_types::{ErrorClass, SecopError, Value};
 use serde_json::Value as Json;
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use crate::events::LogLevel;
-use crate::runtime::Hub;
+use crate::runtime::{Hub, ModuleShared};
 
 /// A value obtained from the hardware, with optional qualifiers.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,14 +53,35 @@ impl From<Value> for Reading {
     }
 }
 
+/// Severity of an application log record, see [`Ctx::log`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AppLogLevel {
+    /// Something failed. Sent to remote clients as `error`.
+    Error,
+    /// Something is wrong but the module goes on. Sent to remote clients as `error`, as
+    /// SECoP has no warning level.
+    Warning,
+    /// Normal operation worth noting. Sent to remote clients as `info`.
+    Info,
+    /// Details for debugging. Sent to remote clients as `debug` and to `tracing`, but not
+    /// to the status display, monitoring or the log files.
+    Debug,
+}
+
 /// The result of a handler call.
 pub type HandlerResult = Result<Reading, SecopError>;
 
 /// Context passed to handler calls. Updates sent through it reach activated clients
 /// before the reply to the request being handled.
+///
+/// A `Ctx` keeps its node alive. Do not store one in the handler (or in a task the handler
+/// owns): the node owns its handlers, so the node would never be freed. To publish values
+/// from a background task, store a [`Publisher`] from [`Ctx::publisher`] instead.
+#[derive(Clone)]
 pub struct Ctx {
     pub(crate) hub: Arc<Hub>,
     pub(crate) module: String,
+    pub(crate) shared: Arc<ModuleShared>,
 }
 
 impl Ctx {
@@ -83,12 +103,99 @@ impl Ctx {
     pub fn update_error(&self, parameter: &str, error: SecopError) {
         self.hub.publish_error(&self.module, parameter, error);
     }
+
+    /// Reads a parameter of this module the way a poll does and publishes the result: it
+    /// shares a running read of the parameter if there is one, otherwise it calls
+    /// [`ModuleHandler::read`] once, also for every request waiting to read the parameter.
+    ///
+    /// The read goes on when this future is dropped. Do not await it from the handler's
+    /// read of the same parameter, which would wait for itself until the node's timeout.
+    pub async fn read(&self, parameter: &str) -> Result<Reading, SecopError> {
+        self.shared.read_for_poll(parameter).await
+    }
+
+    /// Logs a message for this module, as the node logs its own records.
+    ///
+    /// Clients that asked for this module's log messages with SECoP's `logging` request
+    /// receive it as a `log` event if their level admits it. Error, warning and info
+    /// records also reach the status display, monitoring and the log files (as
+    /// [`NodeEvent::Log`](crate::NodeEvent::Log)) and `tracing`; debug records only
+    /// remote clients and `tracing`.
+    ///
+    /// Log events are best effort: a client that does not read its messages misses them
+    /// rather than being disconnected. They count toward the client's unread updates,
+    /// though, so heavy logging can make a later update exceed the slow-client limit.
+    pub fn log(&self, level: AppLogLevel, message: impl Into<String>) {
+        self.hub.app_log(&self.module, level, message.into());
+    }
+
+    /// Whether the module's handler accepts overlapping calls, see
+    /// [`Module::concurrent_requests`](crate::Module::concurrent_requests).
+    pub fn concurrent_requests(&self) -> bool {
+        self.shared.concurrent()
+    }
+
+    /// A handle for publishing values of this module from outside handler calls, e.g. from
+    /// a background task, that does not keep the node alive.
+    pub fn publisher(&self) -> Publisher {
+        Publisher {
+            hub: Arc::downgrade(&self.hub),
+            module: self.module.clone(),
+        }
+    }
+}
+
+/// Publishes values of one module from anywhere, e.g. a background task reading the
+/// hardware. Unlike [`Ctx`], it does not keep the node alive, so a handler may store it;
+/// once the node is gone, publishing fails.
+#[derive(Clone, Debug)]
+pub struct Publisher {
+    hub: Weak<Hub>,
+    module: String,
+}
+
+impl Publisher {
+    /// Name of the module.
+    pub fn module(&self) -> &str {
+        &self.module
+    }
+
+    /// Publishes a new value of a parameter of the module, see [`Ctx::update`]. Also fails
+    /// if the node is gone.
+    pub fn update(&self, parameter: &str, reading: impl Into<Reading>) -> Result<(), SecopError> {
+        self.hub()?
+            .publish_value(&self.module, parameter, reading.into())
+            .map(|_| ())
+    }
+
+    /// Publishes that a parameter of the module could not be obtained, see
+    /// [`Ctx::update_error`]. Fails if the node is gone.
+    pub fn update_error(&self, parameter: &str, error: SecopError) -> Result<(), SecopError> {
+        self.hub()?.publish_error(&self.module, parameter, error);
+        Ok(())
+    }
+
+    /// Logs a message for the module, see [`Ctx::log`]. Fails if the node is gone.
+    pub fn log(&self, level: AppLogLevel, message: impl Into<String>) -> Result<(), SecopError> {
+        self.hub()?.app_log(&self.module, level, message.into());
+        Ok(())
+    }
+
+    fn hub(&self) -> Result<Arc<Hub>, SecopError> {
+        self.hub
+            .upgrade()
+            .ok_or_else(|| SecopError::new(ErrorClass::InternalError, "the node is gone"))
+    }
 }
 
 /// Hardware access for one module. Every method has a default that reports the action as
 /// not implemented, so a module implements only what it supports.
 ///
-/// The node calls the handler of a module for one request at a time.
+/// The node calls the handler of a module for one request at a time, unless the module
+/// is declared with [`Module::concurrent_requests`](crate::Module::concurrent_requests).
+///
+/// A handler logs messages for its module with [`Ctx::log`] (or, from a background task,
+/// [`Publisher::log`]); clients receive them through SECoP's remote logging.
 #[async_trait]
 pub trait ModuleHandler: Send + Sync {
     /// The module's `implementation` property unless the module sets one: by default the
@@ -117,25 +224,39 @@ pub trait ModuleHandler: Send + Sync {
         Err(not_implemented("do", command))
     }
 
+    /// Decides whether a `check` of `accessible` (a parameter or a command) with `value`
+    /// would be accepted, without doing anything: the dry run of a `change` or `do`. The
+    /// node calls it only for accessibles declared `checkable: true`, after checking the
+    /// value against the datainfo and the dynamic limits as for `change` (or the argument
+    /// as for `do`), and answers `checked` with that value if it returns `Ok`. `value` is
+    /// `None` for a command without argument.
+    ///
+    /// A check must not change anything: no hardware state, no parameter, no published
+    /// value. It must also not depend on the module's `status`: it answers whether the
+    /// request would be accepted in principle, not whether it could run right now.
+    async fn check(&self, ctx: &Ctx, accessible: &str, value: Option<Value>) -> CheckResult {
+        let _ = (ctx, value);
+        Err(not_implemented("check", accessible))
+    }
+
     /// Polls the parameters `due` at this tick of the module's polling, in declaration
-    /// order. The node sends only what is published through `ctx`: the default reads
-    /// each parameter with [`read`](Self::read) and publishes the value or error.
-    /// Override it to obtain several parameters in one hardware transaction.
+    /// order. The node sends only what is published through `ctx`: the default reads each
+    /// parameter with [`Ctx::read`], which publishes the value or error, one after another
+    /// or, on a module with concurrent requests, all at once. Override it to obtain several
+    /// parameters in one hardware transaction.
     async fn poll(&self, ctx: &Ctx, due: &[&str]) {
-        for &parameter in due {
-            match self.read(ctx, parameter).await {
-                Ok(reading) => {
-                    // an invalid value is logged and published as an error by the node
-                    let _ = ctx.update(parameter, reading);
-                }
-                Err(error) => {
-                    ctx.hub.log(
-                        LogLevel::Warn,
-                        Some(&ctx.module),
-                        format!("reading `{parameter}` failed: {error}"),
-                    );
-                    ctx.update_error(parameter, error);
-                }
+        if ctx.concurrent_requests() {
+            let mut reads = tokio::task::JoinSet::new();
+            for &parameter in due {
+                let (ctx, parameter) = (ctx.clone(), parameter.to_owned());
+                reads.spawn(async move {
+                    let _ = ctx.read(&parameter).await;
+                });
+            }
+            while reads.join_next().await.is_some() {}
+        } else {
+            for &parameter in due {
+                let _ = ctx.read(parameter).await;
             }
         }
     }
@@ -143,6 +264,9 @@ pub trait ModuleHandler: Send + Sync {
 
 /// The result of a command call: its result value, `None` for a command without result.
 pub type CallResult = Result<Option<Reading>, SecopError>;
+
+/// The result of a check: `Ok` if the value would be accepted.
+pub type CheckResult = Result<(), SecopError>;
 
 fn not_implemented(action: &str, accessible: &str) -> SecopError {
     SecopError::new(

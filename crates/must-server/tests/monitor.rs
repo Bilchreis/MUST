@@ -300,8 +300,8 @@ async fn coalesced_and_every_update() {
     let _serial = serial();
     let n = start(Arc::new(Sim::default()));
     let mut m = monitor(Options {
-        client: "test".into(),
         update_interval: Some(0.3),
+        ..Options::new("test")
     })
     .await;
     let node = m.snapshot().nodes[0].id;
@@ -379,6 +379,39 @@ async fn stalled_monitor_does_not_delay_the_node() {
     .await;
     assert!(dropped > 0);
     n.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_stop_still_removes_the_node() {
+    let _serial = serial();
+    let n = start(Arc::new(Sim::default()));
+    let mut m = monitor(Options::new("test")).await;
+    let mut events = n.subscribe();
+
+    // a read that never answers keeps the node's tasks busy until its timeout (10 s)
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send("read t1:hang").await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), n.stop())
+            .await
+            .is_err(),
+        "the stop is still waiting for the read"
+    );
+
+    // the cancelled stop has announced itself all the same
+    let mut stopped = false;
+    while let Ok(event) = events.try_recv() {
+        stopped |= event == must_server::NodeEvent::Stopped;
+    }
+    assert!(stopped, "no Stopped event");
+    // it was the only node: the endpoint closes, ending the connection
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while m.next().await.ok().flatten().is_some() {}
+    })
+    .await
+    .expect("the endpoint closed");
+    assert!(own_registration().is_none(), "registration removed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

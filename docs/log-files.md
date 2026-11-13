@@ -1,6 +1,6 @@
 # Log files
 
-Every running must SEC node (a Rust program using `must-server`, or a C or LabVIEW program
+Every running MUST SEC node (a Rust program using `must-server`, or a C or LabVIEW program
 using the SHALL C ABI) writes a rolling log of what it exchanged with its clients and what
 it reported, so that problems can be investigated afterwards. File logging is on by
 default and needs no setup.
@@ -32,7 +32,7 @@ Each node writes one file per day:
 One line per event, in UTF-8:
 
 ```text
-2026-10-27T16:42:10.120+01:00 * node started on 0.0.0.0:2055 (must 0.1.0)
+2026-10-27T16:42:10.120+01:00 * node started on 0.0.0.0:2055 (MUST 0.1.0)
 2026-10-27T16:42:10.122+01:00 * [3 192.168.1.20:51234] connected
 2026-10-27T16:42:10.123+01:00 > [3 192.168.1.20:51234] change t1:target 300
 2026-10-27T16:42:10.125+01:00 U update t1:status [[300,"ramping"],{"t":1793118130.124}]
@@ -51,11 +51,15 @@ Each line starts with the local time (milliseconds, UTC offset), then the kind:
 | `<` | a message sent to a client (complete, including `describing` replies) |
 | `U` | a parameter value or error the node published (`update` / `error_update`) |
 | `*` | node started or stopped, client connected or disconnected (with the reason), lines dropped |
-| `INFO`, `WARN`, `ERROR` | what the node logs about itself, with the module when known (`WARN t1: ...`) |
+| `INFO`, `WARN`, `ERROR` | what the node logs about itself, with the module when known (`WARN t1: ...`), and what the application logs for a module (`Ctx::log`, `Publisher::log`, `RunningNode::log`, `SECoP_S_logMessage`) |
 
 Updates are logged **once**, when the node publishes them, however many clients are
 activated, and also while no client is activated; the copies sent to the individual
-clients (including the initial updates after `activate`) are not logged again. Messages are
+clients (including the initial updates after `activate`) are not logged again. Likewise, the
+`log` events sent to clients that asked for them with SECoP's `logging` request are not
+logged as `<` lines: their records are already in the file once, as `INFO`, `WARN` or
+`ERROR`. Debug records of the application are not written at all; they only reach remote
+clients at level `"debug"` and `tracing`, so that a chatty host does not fill the disk. Messages are
 written unchanged, so the files can be read with `less`, searched with `grep` and opened in
 any editor.
 
@@ -107,9 +111,14 @@ let node = NodeBuilder::new("cryo", "cryostat")
 
 ## Behavior
 
-- **Never slows a node.** Lines go through a bounded queue to one background writer thread
-  per process. When the disk is too slow and the queue is full, lines are dropped and
-  the gap is marked with a line `* dropped <n> lines`.
+- **Never waits for the disk.** Lines go through a bounded queue to one background writer
+  thread per process. When the disk is too slow and the queue is full, lines are dropped
+  and the gap is marked with a line `* dropped <n> lines`. Formatting the lines does take
+  CPU: a node under full load, far above typical lab rates, handles about 60% of the
+  requests per second with log files and monitoring on that it does with both off (see
+  [bench/README.md](https://github.com/Bilchreis/MUST/blob/main/bench/README.md)). The
+  thread runs while any node of the process logs and ends when the last one stops, so a
+  stopped program (e.g. after `SECoP_S_doneLibrary`) has no logging thread left.
 - **Flushing.** Files are flushed at least once per second and when a node stops, so a log
   is complete up to about one second before a crash of the program, and up to the
   `* node stopped` line after a normal stop.

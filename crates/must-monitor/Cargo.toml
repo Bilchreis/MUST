@@ -1,6 +1,6 @@
 [package]
 name = "must-monitor"
-description = "Monitoring of must SEC nodes: protocol, per-user registry, local transport and client library"
+description = "Monitoring of MUST SEC nodes: protocol, per-user registry, local transport and client library"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

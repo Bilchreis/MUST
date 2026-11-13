@@ -40,6 +40,55 @@ fn at_ref<R>(p: *const CSECoPbaseType, position: c_uint, f: impl FnOnce(&Node) -
     .flatten()
 }
 
+/// Runs `f` on the node at `position` of a handle, allowing changes; returns 1 if `f`
+/// returned `true`, 0 if it returned `false` or the handle or position is unknown.
+fn modify(p: *const CSECoPbaseType, position: c_uint, f: impl FnOnce(&mut Node) -> bool) -> c_int {
+    c_int::from(at_mut(p, position, f) == Some(true))
+}
+
+/// Runs `f` on the node at `position` of a handle, read-only; `None` if the handle or
+/// position is unknown or `f` found nothing.
+fn read<R>(
+    p: *const CSECoPbaseType,
+    position: c_uint,
+    f: impl FnOnce(&Node) -> Option<R>,
+) -> Option<R> {
+    at_ref(p, position, f).flatten()
+}
+
+/// Writes `value` through `ptr` (if not NULL); returns 1 if there is a value, else 0.
+///
+/// # Safety
+/// `ptr` must be NULL or writable.
+unsafe fn out<T>(ptr: *mut T, value: Option<T>) -> c_int {
+    match value {
+        Some(v) => {
+            // SAFETY: forwarded caller contract
+            unsafe { put(ptr, v) };
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Writes the limits `(min, max)` through `pmin` and `pmax`, like [`out`].
+///
+/// # Safety
+/// `pmin` and `pmax` must be NULL or writable.
+unsafe fn out_limits<T>(pmin: *mut T, pmax: *mut T, limits: Option<(T, T)>) -> c_int {
+    match limits {
+        Some((min, max)) => {
+            // SAFETY: forwarded caller contract
+            unsafe {
+                put(pmin, min);
+                put(pmax, max);
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
 fn handle(node: Option<Node>) -> *mut CSECoPbaseType {
     node.map_or(std::ptr::null_mut(), new_handle)
 }
@@ -444,14 +493,13 @@ pub unsafe extern "C" fn SECoP_V_modifyMinMaxDouble(
         if !dblMinimum.is_nan() && !dblMaximum.is_nan() && dblMinimum > dblMaximum {
             return 0;
         }
-        let ok = at_mut(pData, uPosition, |n| match scalar_type_mut(n) {
+        modify(pData, uPosition, |n| match scalar_type_mut(n) {
             Some(Scalar::Double { min, max }) => {
                 (*min, *max) = (dblMinimum, dblMaximum);
                 true
             }
             _ => false,
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -470,14 +518,13 @@ pub unsafe extern "C" fn SECoP_V_modifyMinMaxInteger(
         if llMinimum > llMaximum {
             return 0;
         }
-        let ok = at_mut(pData, uPosition, |n| match scalar_type_mut(n) {
+        modify(pData, uPosition, |n| match scalar_type_mut(n) {
             Some(Scalar::Int { min, max } | Scalar::Scaled { min, max, .. }) => {
                 (*min, *max) = (llMinimum, llMaximum);
                 true
             }
             _ => false,
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -507,17 +554,12 @@ pub unsafe extern "C" fn SECoP_V_getMinMaxDouble(
     pdblMaximum: *mut f64,
 ) -> c_int {
     guard(0, || {
-        match at_ref(pData, uPosition, |n| scalar_type(n).cloned()) {
-            Some(Some(Scalar::Double { min, max })) => {
-                // SAFETY: forwarded caller contract
-                unsafe {
-                    put(pdblMinimum, min);
-                    put(pdblMaximum, max);
-                }
-                1
-            }
-            _ => 0,
-        }
+        let limits = read(pData, uPosition, |n| match scalar_type(n) {
+            Some(Scalar::Double { min, max }) => Some((*min, *max)),
+            _ => None,
+        });
+        // SAFETY: forwarded caller contract
+        unsafe { out_limits(pdblMinimum, pdblMaximum, limits) }
     })
 }
 
@@ -533,17 +575,12 @@ pub unsafe extern "C" fn SECoP_V_getMinMaxInteger(
     pllMaximum: *mut c_longlong,
 ) -> c_int {
     guard(0, || {
-        match at_ref(pData, uPosition, |n| scalar_type(n).cloned()) {
-            Some(Some(Scalar::Int { min, max } | Scalar::Scaled { min, max, .. })) => {
-                // SAFETY: forwarded caller contract
-                unsafe {
-                    put(pllMinimum, min);
-                    put(pllMaximum, max);
-                }
-                1
-            }
-            _ => 0,
-        }
+        let limits = read(pData, uPosition, |n| match scalar_type(n) {
+            Some(Scalar::Int { min, max } | Scalar::Scaled { min, max, .. }) => Some((*min, *max)),
+            _ => None,
+        });
+        // SAFETY: forwarded caller contract
+        unsafe { out_limits(pllMinimum, pllMaximum, limits) }
     })
 }
 
@@ -560,7 +597,7 @@ pub unsafe extern "C" fn SECoP_V_getArrayLength(
     puMaximumLength: *mut c_uint,
 ) -> c_int {
     guard(0, || {
-        let lengths = at_ref(pData, uPosition, |n| match &n.kind {
+        let lengths = read(pData, uPosition, |n| match &n.kind {
             Kind::ScalarArray {
                 values,
                 minlen,
@@ -581,7 +618,7 @@ pub unsafe extern "C" fn SECoP_V_getArrayLength(
             } => Some((items.len(), *minlen, *maxlen)),
             _ => None,
         });
-        let Some(Some((len, min, max))) = lengths else {
+        let Some((len, min, max)) = lengths else {
             return 0;
         };
         // SAFETY: forwarded caller contract
@@ -609,7 +646,7 @@ pub unsafe extern "C" fn SECoP_V_modifyArrayLength(
     uMaximumLength: c_uint,
 ) -> c_int {
     guard(0, || {
-        let ok = at_mut(pData, uPosition, |n| {
+        modify(pData, uPosition, |n| {
             let set_limits = uMinimumLength <= uMaximumLength;
             let len = uLength as usize;
             let fits = |min: &mut u32, max: &mut u32| {
@@ -659,8 +696,7 @@ pub unsafe extern "C" fn SECoP_V_modifyArrayLength(
                 }
                 _ => false,
             }
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -675,14 +711,12 @@ pub unsafe extern "C" fn SECoP_V_getScale(
     pdblValue: *mut f64,
 ) -> c_int {
     guard(0, || {
-        match at_ref(pData, uPosition, |n| scalar_type(n).cloned()) {
-            Some(Some(Scalar::Scaled { scale, .. })) => {
-                // SAFETY: forwarded caller contract
-                unsafe { put(pdblValue, scale) };
-                1
-            }
-            _ => 0,
-        }
+        let scale = read(pData, uPosition, |n| match scalar_type(n) {
+            Some(Scalar::Scaled { scale, .. }) => Some(*scale),
+            _ => None,
+        });
+        // SAFETY: forwarded caller contract
+        unsafe { out(pdblValue, scale) }
     })
 }
 
@@ -700,14 +734,13 @@ pub unsafe extern "C" fn SECoP_V_modifyScale(
         if !(dblScaleFactor.is_finite() && dblScaleFactor > 0.0) {
             return 0;
         }
-        let ok = at_mut(pData, uPosition, |n| match scalar_type_mut(n) {
+        modify(pData, uPosition, |n| match scalar_type_mut(n) {
             Some(Scalar::Scaled { scale, .. }) => {
                 *scale = dblScaleFactor;
                 true
             }
             _ => false,
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -751,19 +784,13 @@ pub unsafe extern "C" fn SECoP_V_getDouble(
 ) -> c_int {
     guard(0, || {
         #[allow(clippy::cast_precision_loss)]
-        let value = at_ref(pData, uPosition, |n| match number_at(n, uIndex as usize) {
+        let value = read(pData, uPosition, |n| match number_at(n, uIndex as usize) {
             Some((Scalar::Double { .. }, Num::F(f))) => Some(f),
             Some((Scalar::Scaled { scale, .. }, Num::I(i))) => Some(i as f64 * scale),
             _ => None,
         });
-        match value {
-            Some(Some(v)) => {
-                // SAFETY: forwarded caller contract
-                unsafe { put(pdblValue, v) };
-                1
-            }
-            _ => 0,
-        }
+        // SAFETY: forwarded caller contract
+        unsafe { out(pdblValue, value) }
     })
 }
 
@@ -780,7 +807,7 @@ pub unsafe extern "C" fn SECoP_V_modifyDouble(
     dblValue: f64,
 ) -> c_int {
     guard(0, || {
-        let ok = at_mut(pData, uPosition, |n| {
+        modify(pData, uPosition, |n| {
             let new = match number_at(n, uIndex as usize) {
                 Some((Scalar::Double { .. }, _)) => Num::F(dblValue),
                 #[allow(clippy::cast_possible_truncation)]
@@ -794,8 +821,7 @@ pub unsafe extern "C" fn SECoP_V_modifyDouble(
                 _ => return false,
             };
             set_number_at(n, uIndex as usize, new)
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -811,18 +837,12 @@ pub unsafe extern "C" fn SECoP_V_getInteger(
     pllValue: *mut c_longlong,
 ) -> c_int {
     guard(0, || {
-        let value = at_ref(pData, uPosition, |n| match number_at(n, uIndex as usize) {
+        let value = read(pData, uPosition, |n| match number_at(n, uIndex as usize) {
             Some((_, Num::I(i))) => Some(i),
             _ => None,
         });
-        match value {
-            Some(Some(v)) => {
-                // SAFETY: forwarded caller contract
-                unsafe { put(pllValue, v) };
-                1
-            }
-            _ => 0,
-        }
+        // SAFETY: forwarded caller contract
+        unsafe { out(pllValue, value) }
     })
 }
 
@@ -839,11 +859,10 @@ pub unsafe extern "C" fn SECoP_V_modifyInteger(
     llValue: c_longlong,
 ) -> c_int {
     guard(0, || {
-        let ok = at_mut(pData, uPosition, |n| match number_at(n, uIndex as usize) {
+        modify(pData, uPosition, |n| match number_at(n, uIndex as usize) {
             Some((_, Num::I(_))) => set_number_at(n, uIndex as usize, Num::I(llValue)),
             _ => false,
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -865,13 +884,14 @@ pub unsafe extern "C" fn SECoP_V_getString(
         if uBufferSize > 0 && pszValue.is_null() {
             return 0;
         }
-        let bytes = at_ref(pData, uPosition, |n| match &n.kind {
-            Kind::Bytes { bytes, .. } => Some(bytes.clone()),
+        read(pData, uPosition, |n| match &n.kind {
+            Kind::Bytes { bytes, .. } => {
+                // SAFETY: forwarded caller contract
+                Some(unsafe { copy_out(bytes, pszValue, uBufferSize as usize) })
+            }
             _ => None,
-        });
-        let Some(Some(bytes)) = bytes else { return 0 };
-        // SAFETY: forwarded caller contract
-        to_c_uint(unsafe { copy_out(&bytes, pszValue, uBufferSize as usize) })
+        })
+        .map_or(0, to_c_uint)
     })
 }
 
@@ -892,7 +912,7 @@ pub unsafe extern "C" fn SECoP_V_modifyString(
         let new = unsafe { sized_bytes(szValue, iSize) }
             .unwrap_or_default()
             .to_vec();
-        let ok = at_mut(pData, uPosition, |n| match &mut n.kind {
+        modify(pData, uPosition, |n| match &mut n.kind {
             Kind::Bytes {
                 blob,
                 bytes,
@@ -912,8 +932,7 @@ pub unsafe extern "C" fn SECoP_V_modifyString(
                 true
             }
             _ => false,
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 
@@ -953,14 +972,14 @@ pub unsafe extern "C" fn SECoP_V_getEnumeration(
     pllEnumVal: *mut c_longlong,
 ) -> *const c_char {
     guard(std::ptr::null(), || {
-        let member = at_ref(pData, uPosition, |n| match scalar_type(n) {
+        let member = read(pData, uPosition, |n| match scalar_type(n) {
             Some(Scalar::Enum { members }) => members
                 .get(uIndex as usize)
                 .map(|(name, v)| (name.as_ptr(), *v)),
             _ => None,
         });
         match member {
-            Some(Some((name, value))) => {
+            Some((name, value)) => {
                 // SAFETY: forwarded caller contract
                 unsafe { put(pllEnumVal, value) };
                 name
@@ -990,7 +1009,7 @@ pub unsafe extern "C" fn SECoP_V_putEnumeration(
         else {
             return 0;
         };
-        let ok = at_mut(pData, uPosition, |n| match scalar_type_mut(n) {
+        modify(pData, uPosition, |n| match scalar_type_mut(n) {
             Some(Scalar::Enum { members }) => {
                 if members.iter().any(|(m, v)| *v == llEnumVal && m != &name) {
                     return false;
@@ -1002,8 +1021,7 @@ pub unsafe extern "C" fn SECoP_V_putEnumeration(
                 true
             }
             _ => false,
-        });
-        c_int::from(ok == Some(true))
+        })
     })
 }
 

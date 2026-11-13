@@ -1,6 +1,6 @@
 [package]
 name = "must-ffi"
-description = "SHALL-compatible C ABI of must (built as SHALLserver32/64)"
+description = "SHALL-compatible C ABI of MUST (built as SHALLserver32/64)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 base64.workspace = true
+must-launch.workspace = true
 must-server.workspace = true
 must-types.workspace = true
 serde_json.workspace = true

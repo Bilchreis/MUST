@@ -1,10 +1,18 @@
 /* SPDX-License-Identifier: LGPL-3.0-or-later */
-/* Compiles SHALL's documentation example against must's headers, as C99 and C++11.
+/* Compiles SHALL's documentation example against MUST's headers, as C99 and C++11.
    Only checked for compiling here; the C conformance tests run it. */
 
 #include "SECoP.h"
 
 #include <string.h>
+
+/* MUST addition: a check function that accepts everything */
+static void header_check_accept(const char* name, const CSECoPbaseType* pValue, enum SECoP_S_error* piError)
+{
+    (void)name;
+    (void)pValue;
+    *piError = SECoP_S_SUCCESS;
+}
 
 int run_header_example(int allowed_to_loop)
 {
@@ -31,6 +39,39 @@ int run_header_example(int allowed_to_loop)
         }
     }
     SECoP_S_doneLibrary(0, "example");
+
+    /* MUST additions */
+    {
+        unsigned long long id;
+        enum SECoP_S_action action;
+        char accessible[50], value[1000];
+        int accessible_size = 50, value_size = 1000;
+        CSECoPbaseType* p = 0;
+        enum SECoP_S_error code = SECoP_S_registerUserError("_HeaderCheck", "from the header check", "example");
+        SECoP_S_filterStoredCommand("my_node:mod1", 0, &id, &action, accessible, &accessible_size, &p, "example");
+        SECoP_S_filterStoredCommand2("my_node:mod1:value", SECoP_S_ACTION_READ, &id, &action, accessible,
+                                     &accessible_size, value, &value_size, "example");
+        SECoP_S_unregisterUserError(code, "example");
+        SECoP_S_filterStoredCommand2("my_node:mod1", SECoP_S_ACTION_CHECK, &id, &action, accessible,
+                                     &accessible_size, value, &value_size, "example");
+        {
+            SECoP_S_checkFunction check = header_check_accept;
+            SECoP_S_setCheckFunction(check, "example");
+            SECoP_S_setCheckFunction(0, "example");
+        }
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_INFO, "from the header check");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_ERROR, "e");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_WARNING, "w");
+        SECoP_S_logMessage("my_node:mod1", SECoP_S_LOG_DEBUG, "d");
+    }
+
+    /* MUST additions for matrices */
+    {
+        const unsigned int len[2] = {1, 1};
+        const float data[1] = {1.0f};
+        SECoP_S_updateParameterMatrix("my_node:mod1:image", len, 2, data, (int)sizeof data, 0.0);
+        SECoP_S_putCommandAnswerMatrix(1, SECoP_S_SUCCESS, len, 2, data, (int)sizeof data, 0.0);
+    }
 
     {
         CSECoPbaseType* p = SECoP_V_createSimpleDouble(1.5);

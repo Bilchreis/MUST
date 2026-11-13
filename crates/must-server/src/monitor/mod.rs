@@ -195,7 +195,9 @@ fn parameters(node: &RunningNode) -> Vec<ParameterState> {
 
 fn parameter_state(module: &str, parameter: &str, entry: &CacheEntry) -> ParameterState {
     let (report, error) = match entry {
-        CacheEntry::Value { report, .. } => (report.clone(), false),
+        CacheEntry::Value { report, .. } => {
+            (serde_json::from_str(report).unwrap_or(Json::Null), false)
+        }
         CacheEntry::Error { error, t } => (must_types::error_report(error, Some(*t)), true),
     };
     ParameterState {
@@ -313,6 +315,9 @@ fn remove(id: NodeId) {
             if let Some(entry) = inner.nodes.shift_remove(&id) {
                 if let Some(follower) = entry.follower {
                     follower.abort();
+                }
+                for peer in &inner.peers {
+                    peer.forget(id);
                 }
                 inner.event(Event::NodeRemoved { node: id });
             }

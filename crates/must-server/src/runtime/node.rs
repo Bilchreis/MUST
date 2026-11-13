@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use must_types::SecopError;
@@ -22,12 +23,13 @@ use super::Hub;
 use super::actor::{ActorHandle, Job, spawn_actor};
 use super::connection;
 use crate::events::{LogLevel, NodeEvent};
-use crate::handler::Reading;
+use crate::handler::{AppLogLevel, Reading};
 use crate::logfiles::LogHandle;
 use crate::model::{Node, PollSource};
 
 /// A node could not be started.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StartError {
     /// The listening address could not be bound, e.g. because the port is in use.
     #[error("cannot listen on {addr}: {source}")]
@@ -37,10 +39,18 @@ pub enum StartError {
         /// The operating system's error.
         source: io::Error,
     },
+    /// The runtime [`Node::start`] runs nodes on could not be created, e.g. because
+    /// the operating system refused to create its worker threads.
+    #[error("cannot create the MUST runtime: {0}")]
+    Runtime(#[source] io::Error),
 }
 
 /// A node serving clients. Dropping the handle does not stop the node; call
 /// [`stop`](Self::stop).
+///
+/// The handle keeps the node's state alive. A handler that stores it, or a
+/// [`Ctx`](crate::Ctx), keeps its own node from being freed; store a
+/// [`Publisher`](crate::Publisher) instead.
 #[derive(Clone)]
 pub struct RunningNode {
     hub: Arc<Hub>,
@@ -51,25 +61,49 @@ pub struct RunningNode {
     monitor_id: Option<u64>,
     /// The node's file logging, if on.
     log: Option<LogHandle>,
+    /// The runtime the node runs on.
+    runtime: Handle,
+    /// Set once the node has announced that it stopped; shared by all clones.
+    finished: Arc<AtomicBool>,
 }
 
-/// The runtime used by [`Node::start`], created on first use.
-fn shared_runtime() -> &'static Runtime {
+/// The runtime used by [`Node::start`], created on first use and never shut down: its
+/// worker threads stay (idle) until the process exits.
+///
+/// Creation can fail (the operating system may refuse threads); the error is returned
+/// and the next call tries again.
+fn shared_runtime() -> Result<&'static Runtime, StartError> {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_name("must-node")
-            .build()
-            .expect("cannot create the must runtime")
-    })
+    // serialises creation, so two first callers never both build (and one then drop) a
+    // runtime; dropping one inside an async context would panic
+    static CREATING: Mutex<()> = Mutex::new(());
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let _creating = CREATING.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("must-node")
+        .build()
+        .map_err(StartError::Runtime)?;
+    Ok(RUNTIME.get_or_init(|| runtime))
 }
 
 impl Node {
     /// Starts serving on a runtime owned by the library, shared by all nodes started
     /// this way. Callable from any thread, also outside of any async runtime.
+    ///
+    /// The shared runtime is created by the first call and lives until the process
+    /// exits: its worker threads (one per core) stay, idle, after every node has
+    /// stopped, and so do tasks that handlers spawned on it. Where that matters, for
+    /// example in a library that is unloaded or a program that must not keep idle
+    /// threads, run nodes on a runtime you control with [`spawn`](Self::spawn) and shut
+    /// it down after [`RunningNode::stop`].
     pub fn start(self) -> Result<RunningNode, StartError> {
-        self.spawn(shared_runtime().handle())
+        self.spawn(shared_runtime()?.handle())
     }
 
     /// Starts serving on the given tokio runtime.
@@ -114,6 +148,7 @@ impl Node {
             stop.clone(),
             tracker.clone(),
         ));
+        crate::discovery::start(&hub, addr, &tracker, &stop);
 
         info!(%addr, equipment_id = %self.model.equipment_id, "node started");
         hub.emit(NodeEvent::Started { addr });
@@ -124,6 +159,8 @@ impl Node {
             tracker,
             monitor_id: None,
             log,
+            runtime: runtime.clone(),
+            finished: Arc::new(AtomicBool::new(false)),
         };
         if self.model.options.monitored {
             running.monitor_id = crate::monitor::register_running(&running);
@@ -173,19 +210,21 @@ fn start_polling(
 ) {
     for (mname, module) in &hub.model.modules {
         let actor = &actors[mname];
+        let mut startup = Vec::new();
         let mut polled = Vec::new();
         for (pname, param) in module.parameters() {
             if param.constant.is_some() || param.cached {
                 continue;
             }
             if hub.model.options.initial_read && param.initial.is_none() {
-                let _ = actor.try_send(Job::Refresh {
-                    parameter: pname.clone(),
-                });
+                startup.push(pname.clone());
             }
             if param.poll != PollSource::None {
                 polled.push((pname.clone(), param.poll));
             }
+        }
+        if !startup.is_empty() {
+            tracker.spawn(startup_reads(actor.clone(), startup, stop.clone()));
         }
         if polled.is_empty() {
             continue;
@@ -194,6 +233,21 @@ fn start_polling(
         let initial_fast = fast.as_ref().map_or(module.poll.fast, |rx| *rx.borrow());
         let schedule = Schedule::new(polled, initial_fast, module.poll.slow, Instant::now());
         tracker.spawn(poll_module(actor.clone(), schedule, fast, stop.clone()));
+    }
+}
+
+/// Sends the startup reads of a module, waiting for room when the module holds as many
+/// jobs as it can: a module may have more parameters than that.
+async fn startup_reads(actor: ActorHandle, parameters: Vec<String>, stop: CancellationToken) {
+    for parameter in parameters {
+        tokio::select! {
+            () = stop.cancelled() => break,
+            sent = actor.jobs.send(Job::Refresh { parameter }) => {
+                if sent.is_err() {
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -295,7 +349,7 @@ async fn poll_module(
                 let due = schedule.take_due(Instant::now());
                 if !due.is_empty() {
                     // skip this tick if the module is busy with a backlog
-                    let _ = actor.try_send(Job::Poll { parameters: due });
+                    let _ = actor.jobs.try_send(Job::Poll { parameters: due });
                 }
             }
             ok = retimed => {
@@ -346,6 +400,24 @@ impl RunningNode {
         self.hub.publish_error(module, parameter, error);
     }
 
+    /// Logs a message for a module, see [`Ctx::log`](crate::Ctx::log). Fails if the node
+    /// has no such module.
+    pub fn log(
+        &self,
+        module: &str,
+        level: AppLogLevel,
+        message: impl Into<String>,
+    ) -> Result<(), SecopError> {
+        if !self.hub.model.modules.contains_key(module) {
+            return Err(SecopError::new(
+                must_types::ErrorClass::NoSuchModule,
+                format!("`{module}` is not configured on this node"),
+            ));
+        }
+        self.hub.app_log(module, level, message.into());
+        Ok(())
+    }
+
     /// Subscribes to the node's events.
     pub fn subscribe(&self) -> broadcast::Receiver<NodeEvent> {
         self.hub.events.subscribe()
@@ -353,15 +425,37 @@ impl RunningNode {
 
     /// Stops the node: closes the port and all connections and ends polling. Resolves
     /// once everything has finished.
+    ///
+    /// Dropping the future before then (e.g. through a timeout) still announces the stop:
+    /// the monitor forgets the node and its log file is closed, while the node's remaining
+    /// tasks end in the background.
     pub async fn stop(&self) {
+        /// Announces the stop when dropped: after the wait, or when it is cancelled.
+        struct Finish<'a>(&'a RunningNode);
+        impl Drop for Finish<'_> {
+            fn drop(&mut self) {
+                self.0.finish();
+            }
+        }
+
         self.stop.cancel();
         self.tracker.close();
+        let finish = Finish(self);
         self.tracker.wait().await;
-        info!(addr = %self.addr, "node stopped");
-        self.hub.emit(NodeEvent::Stopped);
+        drop(finish);
         if let Some(log) = &self.log {
             log.finished().await;
         }
+    }
+
+    /// Announces that the node stopped, once: the `Stopped` event, which also ends its
+    /// file logging, and its removal from the monitor.
+    fn finish(&self) {
+        if self.finished.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        info!(addr = %self.addr, "node stopped");
+        self.hub.emit(NodeEvent::Stopped);
         if let Some(id) = self.monitor_id {
             crate::monitor::unregister_running(id);
         }
@@ -376,6 +470,8 @@ impl RunningNode {
     ///
     /// Must not be called from within an async runtime.
     pub fn stop_blocking(&self) {
-        shared_runtime().block_on(self.stop());
+        // on the node's own runtime: the shared one is not created for a node spawned
+        // elsewhere
+        self.runtime.block_on(self.stop());
     }
 }

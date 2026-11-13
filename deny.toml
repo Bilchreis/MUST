@@ -1,5 +1,5 @@
-# cargo-deny configuration: only dependency licenses that can be combined
-# with must's LGPL-3.0-or-later license are allowed.
+# cargo-deny configuration. Only dependency licenses that can be combined
+# with MUST's LGPL-3.0-or-later license are allowed.
 
 [graph]
 targets = [
@@ -24,3 +24,19 @@ allow = [
 confidence-threshold = 0.9
 # The allow list covers licenses expected in future dependencies.
 unused-allowed-license = "allow"
+
+# RustSec advisories: vulnerable, unmaintained, unsound and yanked crates. CI checks them in
+# the Advisories workflow, on dependency changes and weekly, so that a newly published
+# advisory does not fail unrelated pull requests.
+[advisories]
+yanked = "deny"
+
+# A second version of a crate is reported (warning) but allowed: syn 2 and 3 are both
+# pulled in by proc macros.
+[bans]
+multiple-versions = "warn"
+
+# Dependencies come from crates.io only.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

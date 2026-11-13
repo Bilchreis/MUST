@@ -148,6 +148,13 @@ fn plain(info: &DataInfo, value: &Json) -> String {
             None => n.to_string(),
         },
         (DataInfo::Blob(_), Json::String(s)) => format!("<{} bytes>", s.len() * 3 / 4),
+        (DataInfo::Matrix(m), Json::Object(map)) => match map.get("len").and_then(Json::as_array) {
+            Some(len) => {
+                let len: Vec<String> = len.iter().map(Json::to_string).collect();
+                format!("<{} matrix of {}>", len.join("×"), m.elementtype())
+            }
+            None => value.to_string(),
+        },
         (DataInfo::Array(a), Json::Array(items)) => {
             let inner: Vec<String> = items.iter().map(|v| with_unit(a.members(), v)).collect();
             format!("[{}]", inner.join(", "))
@@ -292,6 +299,16 @@ mod tests {
         );
         let list = info(&json!({"type": "array", "maxlen": 9, "members": {"type": "double"}}));
         assert_eq!(value(Some(&list), &json!([1.0, 2.5])), "[1, 2.5]");
+        let image = info(
+            &json!({"type": "matrix", "elementtype": "<f4", "names": ["x", "y"], "maxlen": [9, 9]}),
+        );
+        assert_eq!(
+            value(
+                Some(&image),
+                &json!({"len": [2, 3], "blob": "AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA"})
+            ),
+            "<2×3 matrix of <f4>"
+        );
         assert_eq!(value(None, &json!([1, "a"])), "[1,\"a\"]");
         let long = "x".repeat(100);
         assert_eq!(value(None, &json!(long)).chars().count(), MAX_VALUE_CHARS);

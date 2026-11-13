@@ -16,6 +16,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Row, Table, Wrap};
 use serde_json::Value as Json;
 
 use crate::app::{App, Link, Node, Process, View};
+use crate::checker::{Diagnostic, Severity};
 use crate::format::{self, StatusGroup};
 
 /// Every key binding, as the help overlay lists it. None of them changes a node.
@@ -33,6 +34,7 @@ pub const BINDINGS: &[(&str, &str)] = &[
     ("Esc", "back to the overview"),
     ("/", "filter (traffic, logs): Enter keeps it, Esc clears it"),
     ("p", "pause / resume the traffic view"),
+    ("c", "check the node's description again (detail)"),
     ("l", "log level: all, INFO+, WARN+, ERROR"),
     ("n", "logs of the selected node only, or of all"),
     ("o", "logs of the selected process only, or of all"),
@@ -185,7 +187,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     } else {
         let hints = match app.view {
             View::Overview => "↑↓ select · Enter details · Tab views · P pin · ? help · q quit",
-            View::Detail => "↑↓ scroll · ←→ node · Tab views · ? help · q quit",
+            View::Detail => "↑↓ scroll · ←→ node · c check · Tab views · ? help · q quit",
             View::Traffic => "/ filter · p pause · ←→ node · ↑↓ scroll · ? help · q quit",
             View::Logs => "/ filter · l level · n node · o process · ↑↓ scroll · ? help · q quit",
         };
@@ -248,7 +250,7 @@ fn draw_overview(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     }
     if app.processes.is_empty() {
         lines.push(Line::styled(
-            "No must nodes are running for this user.",
+            "No MUST nodes are running for this user.",
             theme.dim(),
         ));
     }
@@ -273,7 +275,7 @@ fn process_line(process: &Process, now: f64, theme: Theme) -> Line<'static> {
     )];
     if !process.library_version.is_empty() {
         spans.push(Span::styled(
-            format!("  must {}", process.library_version),
+            format!("  MUST {}", process.library_version),
             theme.dim(),
         ));
     }
@@ -398,8 +400,22 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     } else {
         u16::try_from(clients.min(5)).unwrap_or(5) + 3
     };
-    let [top, bottom] =
-        Layout::vertical([Constraint::Min(5), Constraint::Length(clients_height)]).areas(area);
+    // the section gets what the modules (at least 5 rows) and the clients leave, up to
+    // MAX_CHECK_ROWS rows inside its borders
+    let free = usize::from(area.height.saturating_sub(5 + clients_height + 2));
+    // no room for a single row: no section (the overview still shows the node)
+    let check = check_lines(node, area.width, free.min(MAX_CHECK_ROWS), theme).filter(|_| free > 0);
+    let inner = usize::from(area.width.saturating_sub(2)).max(1);
+    let check_height = check.as_ref().map_or(0, |(_, lines)| {
+        let rows: usize = lines.iter().map(|l| rows_of(l, inner)).sum();
+        u16::try_from(rows.min(free.min(MAX_CHECK_ROWS))).unwrap_or(0) + 2
+    });
+    let [top, middle, bottom] = Layout::vertical([
+        Constraint::Min(5),
+        Constraint::Length(check_height),
+        Constraint::Length(clients_height),
+    ])
+    .areas(area);
 
     let mut lines = header_lines(node, process, area.width, theme);
     lines.push(Line::default());
@@ -412,7 +428,146 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
             .scroll((scroll, 0)),
         top,
     );
+    if let Some((title, lines)) = check {
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(theme.block(&title))
+                .wrap(Wrap { trim: false }),
+            middle,
+        );
+    }
     frame.render_widget(clients_table(node, app.now, theme), bottom);
+}
+
+/// Most rows of the SECoP check section; further findings are left out, and its title
+/// has the counts.
+const MAX_CHECK_ROWS: usize = 8;
+
+/// Rows `line` takes when wrapped at `width` columns, as the section draws it.
+fn rows_of(line: &Line, width: usize) -> usize {
+    let width = u16::try_from(width).unwrap_or(u16::MAX).max(1);
+    Paragraph::new(line.clone())
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .max(1)
+}
+
+/// The SECoP check section of the detail view: title and lines; none without a
+/// structure report.
+fn check_lines(
+    node: &Node,
+    width: u16,
+    max_rows: usize,
+    theme: Theme,
+) -> Option<(String, Vec<Line<'static>>)> {
+    node.info.structure.as_ref()?;
+    let title = "SECoP check";
+    let Some(check) = &node.check else {
+        return Some((
+            title.to_owned(),
+            vec![Line::styled("not checked", theme.dim())],
+        ));
+    };
+    let diagnostics = match &check.outcome {
+        None => {
+            return Some((
+                title.to_owned(),
+                vec![Line::styled("checking the description…", theme.dim())],
+            ));
+        }
+        Some(Err(reason)) => {
+            return Some((
+                format!("{title}: not run"),
+                vec![Line::styled(reason.clone(), theme.warn())],
+            ));
+        }
+        Some(Ok(diagnostics)) => diagnostics,
+    };
+    if diagnostics.is_empty() {
+        return Some((
+            format!("{title}: ok"),
+            vec![Line::styled(
+                "The description conforms to SECoP 2.0.",
+                theme.fg(Color::Green),
+            )],
+        ));
+    }
+    let room = usize::from(width.saturating_sub(2)).max(1);
+    let all: Vec<Line> = diagnostics
+        .iter()
+        .map(|d| diagnostic_line(d, theme))
+        .collect();
+    let total: usize = all.iter().map(|l| rows_of(l, room)).sum();
+    let lines = if total <= max_rows {
+        all
+    } else {
+        // as many findings as fit, and a row saying how many are left out
+        let mut lines = Vec::new();
+        let mut rows = 0;
+        for line in all.iter().take_while(|l| {
+            rows += rows_of(l, room);
+            rows < max_rows
+        }) {
+            lines.push(line.clone());
+        }
+        if lines.is_empty() {
+            // the most severe finding is shown, cut if it alone is too long
+            lines.push(all[0].clone());
+        }
+        let more = all.len() - lines.len();
+        if more > 0 {
+            lines.push(Line::styled(format!("… {more} more"), theme.dim()));
+        }
+        lines
+    };
+    Some((format!("{title}: {}", check_counts(diagnostics)), lines))
+}
+
+/// `2 errors, 1 warning`.
+fn check_counts(diagnostics: &[Diagnostic]) -> String {
+    let mut parts = Vec::new();
+    for severity in [
+        Severity::Catastrophic,
+        Severity::Error,
+        Severity::Warning,
+        Severity::Hint,
+    ] {
+        let count = diagnostics
+            .iter()
+            .filter(|d| d.severity == severity)
+            .count();
+        if count > 0 {
+            let plural = if count == 1 { "" } else { "s" };
+            parts.push(format!("{count} {}{plural}", severity.label()));
+        }
+    }
+    parts.join(", ")
+}
+
+/// `error    Module t / Parameter value: expected …`.
+fn diagnostic_line(diagnostic: &Diagnostic, theme: Theme) -> Line<'static> {
+    let style = match diagnostic.severity {
+        Severity::Hint => theme.dim(),
+        Severity::Warning => theme.warn(),
+        Severity::Error => theme.error(),
+        Severity::Catastrophic => theme.error().add_modifier(Modifier::BOLD),
+    };
+    let label = format!("{:<8} ", diagnostic.severity.label());
+    let location = diagnostic.location();
+    let location = if location.is_empty() {
+        String::new()
+    } else {
+        format!("{location}: ")
+    };
+    let message = diagnostic
+        .message
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Line::from(vec![
+        Span::styled(label, style),
+        Span::raw(format!("{location}{message}")),
+    ])
 }
 
 fn header_lines(node: &Node, process: &Process, width: u16, theme: Theme) -> Vec<Line<'static>> {

@@ -850,3 +850,29 @@ fn integer_pollinterval_is_ordinary() {
     assert!(!module.poll.driven);
     assert_eq!(module.parameter("pollinterval").unwrap().initial, None);
 }
+
+#[test]
+fn discovery_is_on_by_default() {
+    let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
+    assert!(node.model.options.discovery.is_enabled());
+    let node = NodeBuilder::new("HZB-vm4", "test node")
+        .discovery(Discovery::off())
+        .build()
+        .unwrap();
+    assert!(!node.model.options.discovery.is_enabled());
+}
+
+#[test]
+fn concurrent_requests_are_opt_in() {
+    let built = node()
+        .module(sensor("plain"))
+        .unwrap()
+        .module(sensor("overlapping").concurrent_requests())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(!built.model.modules["plain"].concurrent);
+    assert!(built.model.modules["overlapping"].concurrent);
+    assert!(!sensor("m").has_concurrent_requests());
+    assert!(sensor("m").concurrent_requests().has_concurrent_requests());
+}

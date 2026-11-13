@@ -67,6 +67,8 @@ pub async fn run(
                         let _ = link.requests.send(Traffic { node, enabled });
                     }
                 }
+                // run by the main loop
+                Some(Effect::Check { .. }) => {}
                 None => break,
             },
         }
@@ -152,9 +154,8 @@ async fn follow(
     tx: mpsc::UnboundedSender<Msg>,
     mut requests: mpsc::UnboundedReceiver<Traffic>,
 ) -> Outcome {
-    let send = |msg| {
-        let _ = tx.send(Msg::Endpoint { key, msg });
-    };
+    // false once the app is gone
+    let send = |msg| tx.send(Msg::Endpoint { key, msg }).is_ok();
     let connection = match tokio::time::timeout(
         Duration::from_secs(5),
         client::connect(&registration, &options),
@@ -178,29 +179,17 @@ async fn follow(
     let (process, snapshot, mut events, mut writer) = connection.into_parts();
     send(EndpointMsg::Connected { process, snapshot });
 
-    // reading in its own task: a read must not be cancelled halfway through a line
-    let reader_tx = tx.clone();
-    let mut reader = tokio::spawn(async move {
-        while let Ok(Some(message)) = events.next().await {
-            if reader_tx
-                .send(Msg::Endpoint {
-                    key,
-                    msg: EndpointMsg::Message(message),
-                })
-                .is_err()
-            {
-                break;
-            }
-        }
-    });
+    // `Events::next` is cancellation safe, so a request may interrupt a read
     loop {
         tokio::select! {
-            _ = &mut reader => break,
-            request = requests.recv() => {
-                let Some(Traffic { node, enabled }) = request else {
-                    reader.abort();
+            message = events.next() => {
+                let Ok(Some(message)) = message else { break };
+                if !send(EndpointMsg::Message(message)) {
                     break;
-                };
+                }
+            }
+            request = requests.recv() => {
+                let Some(Traffic { node, enabled }) = request else { break };
                 let _ = writer.subscribe_traffic(node, enabled).await;
             }
         }
