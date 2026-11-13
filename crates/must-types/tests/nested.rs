@@ -452,8 +452,8 @@ fn reports_are_not_checked_against_limits_deep_inside() {
         2,
     ))
     .unwrap();
-    let out_of_limits = json!([{"x": 500.0, "samples": []}, {"x": -1.0, "samples": [10, 11, 12]},
-                               {"x": 0.0, "samples": [0]}]);
+    // array lengths fit, only the values inside break their limits
+    let out_of_limits = json!([{"x": 500.0, "samples": [10]}, {"x": -1.0, "samples": [0, 11]}]);
     assert_eq!(
         info.decode(&out_of_limits, Mode::Request)
             .unwrap_err()
