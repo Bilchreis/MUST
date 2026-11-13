@@ -315,6 +315,65 @@ mod tests {
     }
 
     #[test]
+    fn nested_values() {
+        let metres = json!({"type": "double", "min": 0.0, "max": 100.0, "unit": "m"});
+        // a ragged 2d array: units on every element, inner arrays of any length
+        let ragged = info(
+            &json!({"type": "array", "maxlen": 4, "members": {"type": "array",
+            "minlen": 0, "maxlen": 3, "members": {"type": "double", "unit": "K"}}}),
+        );
+        assert_eq!(
+            value(Some(&ragged), &json!([[1.0], [2.0, 3.0, 4.0], []])),
+            "[[1 K], [2 K, 3 K, 4 K], []]"
+        );
+        let tuple_of_array = info(&json!({"type": "tuple", "members": [
+            {"type": "array", "maxlen": 50, "members": {"type": "double"}}, {"type": "string"}]}));
+        assert_eq!(
+            value(Some(&tuple_of_array), &json!([[1.0, 2.0, 3.0], "blah"])),
+            "([1, 2, 3], blah)"
+        );
+        let struct_of_tuples = info(&json!({"type": "struct", "members": {
+            "limits": {"type": "tuple", "members": [metres, metres]},
+            "status": {"type": "tuple", "members": [
+                {"type": "enum", "members": {"IDLE": 100, "BUSY": 300}}, {"type": "string"}]}}}));
+        assert_eq!(
+            value(
+                Some(&struct_of_tuples),
+                &json!({"limits": [0.0, 100.0], "status": [300, "ramping"]})
+            ),
+            "{limits: (0 m, 100 m), status: (BUSY, ramping)}"
+        );
+        // a struct with an array of structs soon reaches MAX_VALUE_CHARS
+        let path = info(
+            &json!({"type": "struct", "members": {"name": {"type": "string"},
+            "points": {"type": "array", "maxlen": 5, "members": {"type": "struct", "members": {
+                "x": metres, "y": metres,
+                "tags": {"type": "array", "maxlen": 3, "members": {"type": "string"}}}}}}}),
+        );
+        let shown = value(
+            Some(&path),
+            &json!({"name": "loop", "points": [{"x": 0.0, "y": 0.0, "tags": []},
+                                             {"x": 1.5, "y": 2.5, "tags": ["start", "fast"]}]}),
+        );
+        assert_eq!(
+            shown,
+            "{name: loop, points: [{x: 0 m, y: 0 m, tags: []}, {x: 1.5 m…"
+        );
+        assert_eq!(shown.chars().count(), MAX_VALUE_CHARS);
+        // a left-out optional member is not shown; a value of the wrong shape as JSON
+        let optional = info(
+            &json!({"type": "struct", "members": {"x": metres, "t": {"type": "double"}},
+            "optional": ["t"]}),
+        );
+        assert_eq!(value(Some(&optional), &json!({"x": 1.0})), "{x: 1 m}");
+        let points = info(
+            &json!({"type": "array", "maxlen": 4, "members": {"type": "struct",
+            "members": {"x": metres}}}),
+        );
+        assert_eq!(value(Some(&points), &json!({"x": 1.0})), r#"{"x":1.0}"#);
+    }
+
+    #[test]
     fn statuses_errors_ages() {
         assert_eq!(StatusGroup::of(300), StatusGroup::Busy);
         assert_eq!(StatusGroup::of(0).label(), "DISABLED");

@@ -79,8 +79,13 @@ fn matrix() -> impl Strategy<Value = DataInfo> {
 fn datainfo() -> impl Strategy<Value = DataInfo> {
     leaf().prop_recursive(3, 24, 4, |inner| {
         prop_oneof![
-            (inner.clone(), 0..5u64)
-                .prop_map(|(member, maxlen)| DataInfo::array(&member, maxlen).build().unwrap()),
+            (inner.clone(), 0..5u64, 0..5u64).prop_map(|(member, a, b)| DataInfo::array(
+                &member,
+                a.max(b)
+            )
+            .prop("minlen", a.min(b))
+            .build()
+            .unwrap()),
             prop::collection::vec(inner.clone(), 0..4).prop_map(|members| DataInfo::tuple(
                 &members
             )
@@ -119,8 +124,9 @@ fn value_for(info: &DataInfo) -> BoxedStrategy<Value> {
                 .boxed()
         }
         DataInfo::Array(a) => {
+            let min = usize::try_from(a.minlen()).unwrap();
             let max = usize::try_from(a.maxlen()).unwrap();
-            prop::collection::vec(value_for(a.members()), 0..=max)
+            prop::collection::vec(value_for(a.members()), min..=max)
                 .prop_map(Value::Array)
                 .boxed()
         }

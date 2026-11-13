@@ -364,6 +364,110 @@ fn detail_failed_node_and_no_log_file() {
     assert!(screen(&app, 100, 20).contains("no log file"));
 }
 
+/// A node with parameters of nested datainfos, after secop-ophyd's test modules.
+fn nested() -> NodeInfo {
+    let metres = json!({"type": "double", "min": 0.0, "max": 100.0, "unit": "m"});
+    let structure = json!({"equipment_id": "geo", "modules": {"geo": {"accessibles": {
+        "status": {"datainfo": {"type": "tuple", "members": [
+            {"type": "enum", "members": {"IDLE": 100, "BUSY": 300}}, {"type": "string"}]}},
+        "value": {"datainfo": {"type": "array", "maxlen": 4, "members": {"type": "array",
+            "minlen": 0, "maxlen": 3, "members": {"type": "double", "unit": "K"}}}},
+        "arr3d": {"datainfo": {"type": "array", "maxlen": 2, "members": {"type": "array", "maxlen": 2,
+            "members": {"type": "array", "maxlen": 2, "members": {"type": "int", "min": 0, "max": 100}}}}},
+        "tuple_arr": {"datainfo": {"type": "tuple", "members": [
+            {"type": "array", "maxlen": 50, "members": {"type": "double"}}, {"type": "string"}]}},
+        "tuple_struct": {"datainfo": {"type": "tuple", "members": [
+            {"type": "struct", "members": {"x": metres, "y": metres}},
+            {"type": "struct", "members": {"name": {"type": "string"}, "on": {"type": "bool"}}}]}},
+        "nested_struct": {"datainfo": {"type": "struct", "members": {
+            "number": {"type": "double", "unit": "s"}, "string": {"type": "string"},
+            "tupl": {"type": "tuple", "members": [metres, metres, metres]},
+            "pos_struct": {"type": "struct", "members": {"x": metres, "y": metres, "z": metres,
+                "col": {"type": "string"},
+                "enum": {"type": "enum", "members": {"mode_zero": 0, "mode_one": 1, "mode_max": 2}}}}}}},
+        "points": {"datainfo": {"type": "array", "maxlen": 5, "members": {"type": "struct",
+            "members": {"a": {"type": "double"}, "b": {"type": "string"},
+                        "c": {"type": "tuple", "members": [{"type": "double"}, {"type": "double"}]}}}}},
+        "struct_tuple": {"datainfo": {"type": "struct", "members": {
+            "limits": {"type": "tuple", "members": [metres, metres]},
+            "mode": {"type": "enum", "members": {"off": 0, "on": 1}}}}},
+        "path": {"datainfo": {"type": "struct", "members": {"name": {"type": "string"},
+            "points": {"type": "array", "maxlen": 5, "members": {"type": "struct", "members": {
+                "x": metres, "y": metres,
+                "tags": {"type": "array", "maxlen": 3, "members": {"type": "string"}}}}}}}},
+        "spectrum": {"datainfo": {"type": "struct", "members": {
+            "mass": {"type": "array", "maxlen": 100, "members": {"type": "double", "unit": "u"}},
+            "pressure": {"type": "array", "maxlen": 100, "members": {"type": "double", "unit": "mbar"}}}}},
+    }}}});
+    let at = |value: Json| json!([value, {"t": NOW - 2.0}]);
+    let parameters = [
+        ("status", json!([100, "ok"])),
+        ("value", json!([[1.0], [2.0, 3.0, 4.0], []])),
+        ("arr3d", json!([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])),
+        ("tuple_arr", json!([[1.0, 2.0, 3.0], "blah"])),
+        (
+            "tuple_struct",
+            json!([{"x": 1.5, "y": 2.5}, {"name": "probe", "on": true}]),
+        ),
+        (
+            "nested_struct",
+            json!({"number": 5.0, "string": "blue", "tupl": [1.0, 2.0, 3.0],
+            "pos_struct": {"x": 1.0, "y": 2.0, "z": 3.0, "col": "red", "enum": 2}}),
+        ),
+        (
+            "points",
+            json!([{"a": 1.0, "b": "x", "c": [1.0, 2.0]}, {"a": 2.0, "b": "", "c": [3.0, 4.0]}]),
+        ),
+        ("struct_tuple", json!({"limits": [0.0, 50.0], "mode": 1})),
+        (
+            "path",
+            json!({"name": "a, b", "points": [{"x": 0.0, "y": 0.0, "tags": []},
+                                                   {"x": 1.5, "y": 2.5, "tags": ["start", "fast"]}]}),
+        ),
+        (
+            "spectrum",
+            json!({"mass": [1.0, 2.0, 4.0, 18.0, 28.0, 32.0, 44.0],
+                            "pressure": [1e-9, 2.5e-10, 3e-11, 1.2e-8, 4e-9, 1e-9, 5e-10]}),
+        ),
+    ];
+    NodeInfo {
+        address: Some("0.0.0.0:2060".into()),
+        structure: Some(structure),
+        parameters: parameters
+            .into_iter()
+            .map(|(name, value)| parameter("geo", name, at(value), false))
+            .collect(),
+        ..node(1, "geo", NodeState::Running, None)
+    }
+}
+
+/// How the detail view shows values of nested datainfos: one line each, cut at
+/// `MAX_VALUE_CHARS`, units on every element, strings without quotes.
+#[test]
+fn detail_nested_datainfos() {
+    let mut app = App::new(NOW, None);
+    let snapshot = Snapshot {
+        process: process("python3", 777),
+        nodes: vec![nested()],
+        logs: vec![],
+    };
+    app.update(connected(PYTHON, snapshot.process.clone(), snapshot));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.view, View::Detail);
+    let shown = screen(&app, 120, 30);
+    assert!(shown.contains("[[1 K], [2 K, 3 K, 4 K], []]"), "{shown}");
+    assert!(
+        shown.contains("[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("({x: 1.5 m, y: 2.5 m}, {name: probe, on: true})"),
+        "{shown}"
+    );
+    assert!(shown.contains("{limits: (0 m, 50 m), mode: on}"), "{shown}");
+    insta::assert_snapshot!("detail_nested", shown);
+}
+
 /// The `Effect::Check` among `effects`: its id and structure report.
 fn check_of(effects: &[Effect]) -> Option<(u64, Json)> {
     effects.iter().find_map(|e| match e {

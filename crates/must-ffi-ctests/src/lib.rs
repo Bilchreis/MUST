@@ -18,6 +18,7 @@ unsafe extern "C" {
     fn ctest_variant_enum_struct() -> c_int;
     fn ctest_variant_additional() -> c_int;
     fn ctest_variant_compare_print() -> c_int;
+    fn ctest_variant_nested() -> c_int;
     fn ctest_variant_matrix() -> c_int;
 }
 
@@ -38,6 +39,7 @@ pub fn run(test: &str) -> c_int {
             "variant_enum_struct" => ctest_variant_enum_struct(),
             "variant_additional" => ctest_variant_additional(),
             "variant_compare_print" => ctest_variant_compare_print(),
+            "variant_nested" => ctest_variant_nested(),
             "variant_matrix" => ctest_variant_matrix(),
             other => panic!("unknown C test {other}"),
         }
