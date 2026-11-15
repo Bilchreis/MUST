@@ -823,3 +823,10 @@ fn integer_pollinterval_is_ordinary() {
     assert!(!module.poll.driven);
     assert_eq!(module.parameter("pollinterval").unwrap().initial, None);
 }
+
+/// No UDP test can use the default port, so the default is checked in the model.
+#[test]
+fn discovery_is_on_by_default() {
+    let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
+    assert!(node.model.options.discovery.is_enabled());
+}
