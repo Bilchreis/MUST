@@ -184,7 +184,8 @@ async fn ignores_other_datagrams() {
     // a valid request, made too long with trailing spaces
     let mut long = DISCOVER.to_vec();
     long.resize(1100, b' ');
-    for datagram in [&b"hello"[..], b"[1,2]", b"\xff\xfe", announcement, &long] {
+    // what is no discover request is tested with `is_discover` in src/discovery.rs
+    for datagram in [&b"hello"[..], announcement, &long] {
         ignored(&c, port, datagram).await;
     }
     assert!(discover(&c, Ipv4Addr::LOCALHOST, port).await.is_some());

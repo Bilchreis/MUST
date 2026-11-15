@@ -199,23 +199,16 @@ async fn bad_values_deep_inside_are_rejected_with_their_path() {
     let n = start();
     let mut c = Client::connect(n.local_addr()).await;
     let point = |x: f64, tags: Json| json!({"x": x, "y": 0.0, "tags": tags});
+    // the limits themselves are tested in must-types (tests/nested.rs): one case for
+    // each kind of nesting here
     let cases = [
-        // an inner array of a ragged array below its minlen, above its maxlen
-        ("geo:ragged", json!([[1.0], []]), "RangeError", "[1]"),
-        (
-            "geo:ragged",
-            json!([[1.0, 2.0, 3.0, 4.0]]),
-            "RangeError",
-            "[0]",
-        ),
+        ("geo:ragged", json!([[1.0], ["x"]]), "WrongType", "[1][0]"),
         (
             "geo:ragged",
             json!([[1.0], [1.0], [1.0], [1.0], [1.0]]),
             "RangeError",
             "",
         ),
-        ("geo:ragged", json!([[1.0], ["x"]]), "WrongType", "[1][0]"),
-        // a struct in an array in a struct
         (
             "geo:path",
             json!({"name": "p", "points": [point(1.0, json!([])), point(101.0, json!([]))]}),
@@ -223,47 +216,10 @@ async fn bad_values_deep_inside_are_rejected_with_their_path() {
             "points[1].x",
         ),
         (
-            "geo:path",
-            json!({"name": "p", "points": [point(1.0, json!(["a", "b", "c"]))]}),
-            "RangeError",
-            "points[0].tags",
-        ),
-        (
-            "geo:path",
-            json!({"name": "p", "points": [point(1.0, json!(["too long a tag"]))]}),
-            "RangeError",
-            "points[0].tags[0]",
-        ),
-        (
-            "geo:path",
-            json!({"name": "p", "points": [{"x": 1.0, "tags": []}]}),
-            "WrongType",
-            "points[0]",
-        ),
-        (
-            "geo:path",
-            json!({"name": "p", "points": []}),
-            "RangeError",
-            "points",
-        ),
-        // a struct of tuples in a tuple
-        (
             "geo:pair",
             json!([[], {"limits": [0.0, 200.0], "mode": 0}]),
             "RangeError",
             "[1].limits[1]",
-        ),
-        (
-            "geo:pair",
-            json!([[], {"limits": [0.0, 1.0], "mode": 2}]),
-            "RangeError",
-            "[1].mode",
-        ),
-        (
-            "geo:pair",
-            json!([[], {"limits": [0.0], "mode": 0}]),
-            "WrongType",
-            "[1].limits",
         ),
     ];
     for (specifier, value, class, path) in cases {

@@ -357,12 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn non_ascii_is_utf8() {
-        let packet = packet(2055, "eq", "fw", "Kühler 4 K").unwrap();
-        assert!(String::from_utf8(packet).unwrap().contains("Kühler 4 K"));
-    }
-
-    #[test]
     fn empty_overhead() {
         // as in Frappy's test: the most a packet adds to its three strings
         assert_eq!(packet(65535, "", "", "").unwrap().len(), 78);

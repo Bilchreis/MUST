@@ -243,6 +243,8 @@ async fn one_call_at_a_time_by_default() {
 #[tokio::test]
 async fn concurrent_requests() {
     let hw = Arc::new(Hw::default());
+    assert!(module(&hw, true).has_concurrent_requests());
+    assert!(!module(&hw, false).has_concurrent_requests());
     let n = start(module(&hw, true));
     let gate = hw.hold("value", 1);
     let (mut a, mut b) = (client(&n).await, client(&n).await);

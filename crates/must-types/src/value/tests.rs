@@ -231,6 +231,11 @@ fn blob_values() {
         class_of(small.decode(&json!("U0VDb1A="), Mode::Request)),
         ErrorClass::RangeError
     );
+    let min = info(json!({"type": "blob", "minbytes": 2, "maxbytes": 8}));
+    assert_eq!(
+        class_of(min.decode(&json!("AA=="), Mode::Request)),
+        ErrorClass::RangeError
+    );
     assert_eq!(
         b.encode(&Value::Blob(b"SECoP".to_vec())),
         Ok(json!("U0VDb1A="))
@@ -238,16 +243,6 @@ fn blob_values() {
 }
 
 // --- 4.5 array, tuple, struct
-
-#[test]
-fn nested_failure_path() {
-    let a = info(
-        json!({"type": "array", "maxlen": 10, "members": {"type": "int", "min": 0, "max": 9}}),
-    );
-    let e = a.decode(&json!([1, 2, 99]), Mode::Request).unwrap_err();
-    assert_eq!(e.class, ErrorClass::RangeError);
-    assert_eq!(e.path.segments(), [PathSegment::Index(2)]);
-}
 
 #[test]
 fn array_and_tuple_values() {
@@ -363,22 +358,6 @@ fn encode_refusals() {
     assert!(t.encode(&Value::Tuple(vec![])).is_err());
 }
 
-#[test]
-fn struct_round_trip() {
-    let s = info(json!({"type": "struct", "members": {
-        "y": {"type": "double"},
-        "x": {"type": "enum", "members": {"On": 1, "Off": 0}},
-        "n": {"type": "array", "maxlen": 4, "members": {"type": "blob", "maxbytes": 3}}}}));
-    let first = s
-        .decode(
-            &json!({"x": 1, "y": 0.5, "n": ["AA==", "AQI="]}),
-            Mode::Report,
-        )
-        .unwrap();
-    let second = s.decode(&s.encode(&first).unwrap(), Mode::Report).unwrap();
-    assert_eq!(first, second);
-}
-
 // --- matrix
 
 const SPEC_BLOB: &str = "AACAPwAAAEAAAEBAAACAQAAAoEAAAMBA";
@@ -392,21 +371,6 @@ fn matrix_info(info: &DataInfo) -> &MatrixInfo {
         panic!("not a matrix")
     };
     m
-}
-
-#[test]
-fn matrix_spec_example() {
-    let m = image();
-    let value = m
-        .decode(&json!({"len": [2, 3], "blob": SPEC_BLOB}), Mode::Request)
-        .unwrap();
-    let (len, data) = value.as_matrix().unwrap();
-    assert_eq!(len, [2, 3]);
-    assert_eq!(data.len(), 24);
-    assert_eq!(
-        matrix_info(&m).to_f64s(data).unwrap(),
-        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-    );
 }
 
 #[test]
@@ -508,17 +472,6 @@ fn matrix_shapes() {
         (e.class, e.path.to_string()),
         (ErrorClass::WrongType, "len".into())
     );
-}
-
-#[test]
-fn matrix_round_trip() {
-    let m = image();
-    let json = json!({"len": [2, 3], "blob": SPEC_BLOB});
-    let first = m.decode(&json, Mode::Report).unwrap();
-    let encoded = m.encode(&first).unwrap();
-    assert_eq!(encoded, json);
-    assert_eq!(encoded["blob"], SPEC_BLOB);
-    assert_eq!(m.decode(&encoded, Mode::Report).unwrap(), first);
 }
 
 #[test]

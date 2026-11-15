@@ -8,8 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use common::{Client, Sim, error_class, node, parse};
-use must_server::{AppLogLevel, RunningNode};
+use common::{Client, Sim, error_class, kelvin, node, parse};
+use must_server::logfiles::LogFiles;
+use must_server::{AppLogLevel, Discovery, Module, NodeBuilder, Parameter, RunningNode};
+use must_types::Value;
 use serde_json::json;
 use tokio::runtime::Handle;
 
@@ -50,6 +52,45 @@ async fn unknown_action() {
         line.starts_with("error_meas:volt?  [\"ProtocolError\""),
         "{line}"
     );
+    // a custom message (leading underscore) this node does not implement
+    let line = c.request("_help me").await;
+    assert!(line.starts_with("error__help me "), "{line}");
+    assert_eq!(error_class(&line), "ProtocolError");
+}
+
+/// The parts the specification's "must accept" grammar calls `ignored-value`.
+#[tokio::test]
+async fn ignored_values() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    assert!(
+        c.request("describe . extra")
+            .await
+            .starts_with("describing . {")
+    );
+    assert!(
+        c.request("ping tok extra")
+            .await
+            .starts_with("pong tok [null,")
+    );
+    assert!(
+        c.request("read t1:value 5")
+            .await
+            .starts_with("reply t1:value [295.0,")
+    );
+    c.send("activate t2 extra").await;
+    while c.line().await != "active t2" {}
+    assert_eq!(c.request("deactivate t2 extra").await, "inactive t2");
+}
+
+/// A message is ASCII: other bytes get an error reply and the connection keeps working.
+#[tokio::test]
+async fn non_ascii_bytes() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send_raw(b"read t1:val\xff\xfe\n").await;
+    assert!(c.line().await.starts_with("error_read t1:val"));
+    assert!(c.request("ping 1").await.starts_with("pong 1 "));
 }
 
 #[tokio::test]
@@ -171,6 +212,9 @@ async fn module_wise_deactivation() {
     n.update("t2", "value", must_types::Value::Double(2.0))
         .unwrap();
     assert!(c.line().await.starts_with("update t2:value [2.0,"));
+    let line = c.request("deactivate nope").await;
+    assert!(line.starts_with("error_deactivate nope "), "{line}");
+    assert_eq!(error_class(&line), "NoSuchModule");
     assert_eq!(c.request("deactivate").await, "inactive");
     n.update("t2", "value", must_types::Value::Double(3.0))
         .unwrap();
@@ -184,6 +228,7 @@ async fn heartbeat() {
     let (action, token, data) = parse(&c.request("ping 42").await);
     assert_eq!((action.as_str(), token.as_str()), ("pong", "42"));
     assert!(data[0].is_null() && data[1]["t"].is_f64());
+    assert_eq!(data[1].as_object().unwrap().len(), 1, "only the timestamp");
     let line = c.request("ping").await;
     assert!(line.starts_with("pong  [null,{\"t\":"), "{line}");
 }
@@ -201,7 +246,26 @@ async fn read_errors() {
         error_class(&c.request("read tx:value").await),
         "NoSuchModule"
     );
-    assert_eq!(error_class(&c.request("read t1").await), "ProtocolError");
+    for malformed in ["read t1", "read :value", "read t1:", "read"] {
+        assert_eq!(
+            error_class(&c.request(malformed).await),
+            "ProtocolError",
+            "{malformed}"
+        );
+    }
+}
+
+/// A data report carries the timestamp `t` and, if the handler gives one, the
+/// uncertainty `e`.
+#[tokio::test]
+async fn qualifiers() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    let (_, _, data) = parse(&c.request("read t1:value").await);
+    assert!(data[1]["t"].is_f64());
+    assert_eq!(data[1]["e"], json!(0.01));
+    let (_, _, data) = parse(&c.request("read t1:target").await);
+    assert_eq!(data[1].as_object().unwrap().len(), 1, "no uncertainty");
 }
 
 #[tokio::test]
@@ -214,6 +278,11 @@ async fn change_readonly_and_dynamic_limit() {
     assert_eq!(
         error_class(&c.request("change t1:serial \"x\"").await),
         "ReadOnly"
+    );
+
+    assert_eq!(
+        error_class(&c.request("change t1:stop 1").await),
+        "NoSuchParameter"
     );
 
     // t1:target_max is 200
@@ -254,6 +323,73 @@ async fn change_readonly_and_dynamic_limit() {
     );
 }
 
+/// The dynamic limits of the postfixed parameters `_min` and `_limits` (`_max` is part of
+/// the test node), which a client can change.
+#[tokio::test]
+async fn dynamic_min_and_limits() {
+    let limits = common::di(json!({"type": "tuple", "members": [
+        {"type": "double", "min": 0, "max": 300, "unit": "K"},
+        {"type": "double", "min": 0, "max": 300, "unit": "K"}]}));
+    let cached = |name: &str, info, value| {
+        Parameter::new(name, info, name)
+            .writable()
+            .cached()
+            .initial_value(value)
+    };
+    let pair = |low, high| Value::Tuple(vec![Value::Double(low), Value::Double(high)]);
+    let module = Module::new("m", "dynamic limits")
+        .interface_classes([])
+        .parameter(Parameter::new("setpoint", kelvin(), "setpoint").writable())
+        .unwrap()
+        .parameter(cached("setpoint_min", kelvin(), Value::Double(10.0)))
+        .unwrap()
+        .parameter(Parameter::new("ramp", kelvin(), "ramp").writable())
+        .unwrap()
+        .parameter(cached("ramp_limits", limits, pair(1.0, 5.0)))
+        .unwrap()
+        .no_polling()
+        .handler(Sim::default());
+    let n = NodeBuilder::new("must-limits", "test node")
+        .bind(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .initial_read(false)
+        .log_files(LogFiles::off())
+        .discovery(Discovery::off())
+        .module(module)
+        .unwrap()
+        .build()
+        .unwrap()
+        .spawn(&Handle::current())
+        .unwrap();
+    let mut c = Client::connect(n.local_addr()).await;
+
+    let line = c.request("change m:setpoint 5").await;
+    assert_eq!(error_class(&line), "RangeError");
+    assert!(line.contains("dynamic lower limit 10"), "{line}");
+    assert!(
+        c.request("change m:setpoint 10")
+            .await
+            .starts_with("changed m:setpoint [10.0,")
+    );
+
+    for outside in ["0.5", "6"] {
+        let line = c.request(&format!("change m:ramp {outside}")).await;
+        assert_eq!(error_class(&line), "RangeError", "{line}");
+        assert!(line.contains("dynamic"), "{line}");
+    }
+    assert!(
+        c.request("change m:ramp 5")
+            .await
+            .starts_with("changed m:ramp [5.0,")
+    );
+    // the node's own value of the limits moves them
+    n.update("m", "ramp_limits", pair(1.0, 8.0)).unwrap();
+    assert!(
+        c.request("change m:ramp 6")
+            .await
+            .starts_with("changed m:ramp [6.0,")
+    );
+}
+
 #[tokio::test]
 async fn do_commands() {
     let (n, _) = start();
@@ -270,6 +406,8 @@ async fn do_commands() {
         "RangeError"
     );
     assert_eq!(error_class(&c.request("do t1:stop 5").await), "WrongType");
+    // a command with an argument needs one
+    assert_eq!(error_class(&c.request("do t1:echo").await), "WrongType");
 
     let line = c.request("do t1:value").await;
     assert!(line.starts_with("error_do t1:value "));
@@ -490,6 +628,7 @@ async fn logging_invalid_level() {
     assert_eq!(error_class(&line), "WrongType");
     assert_eq!(error_class(&c.request("logging t1 {oops").await), "BadJSON");
     assert_eq!(error_class(&c.request("logging t1").await), "ProtocolError");
+    assert_eq!(error_class(&c.request("logging").await), "ProtocolError");
     // the levels are unchanged
     log_all(&n, "t1");
     assert_eq!(

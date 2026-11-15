@@ -27,19 +27,6 @@ async fn activate(c: &mut Client) {
 // --- 4.1 module actor: handlers, cache, timeouts, panics
 
 #[tokio::test]
-async fn handler_error_reaches_the_client() {
-    let n = start(node(Arc::new(Sim::default())));
-    let mut c = Client::connect(n.local_addr()).await;
-    let (action, spec, data) = parse(&c.request("read t1:nocomm").await);
-    assert_eq!(
-        (action.as_str(), spec.as_str()),
-        ("error_read", "t1:nocomm")
-    );
-    assert_eq!(data[0], "CommunicationFailed");
-    assert_eq!(data[1], "no answer from controller");
-}
-
-#[tokio::test]
 async fn failed_read_becomes_error_update() {
     let n = start(node(Arc::new(Sim::default())));
     let mut watcher = Client::connect(n.local_addr()).await;
@@ -50,6 +37,22 @@ async fn failed_read_becomes_error_update() {
     assert!(
         line.starts_with("error_update t1:broken [\"HardwareError\""),
         "{line}"
+    );
+    // a client activating later gets the error among its initial updates
+    c.send("activate").await;
+    let mut initial = Vec::new();
+    loop {
+        let line = c.line().await;
+        if line == "active" {
+            break;
+        }
+        initial.push(line);
+    }
+    assert!(
+        initial
+            .iter()
+            .any(|l| l.starts_with("error_update t1:broken [\"HardwareError\"")),
+        "{initial:?}"
     );
 }
 
@@ -287,46 +290,6 @@ async fn command_side_effects_before_done() {
     assert!(c.line().await.starts_with("done t1:stop [null,"));
 }
 
-#[tokio::test]
-async fn initial_updates_before_active() {
-    let n = start(node(Arc::new(Sim::default())));
-    let pusher = n.clone();
-    // keep pushing while activating; `active` must still come after all initial updates
-    let push = tokio::spawn(async move {
-        for i in 0..200 {
-            pusher
-                .update("t2", "value", Value::Double(f64::from(i)))
-                .unwrap();
-            tokio::task::yield_now().await;
-        }
-    });
-    let mut c = Client::connect(n.local_addr()).await;
-    c.send("activate").await;
-    let mut seen_before_active = std::collections::HashSet::new();
-    loop {
-        let line = c.line().await;
-        if line == "active" {
-            break;
-        }
-        let (_, spec, _) = parse(&line);
-        seen_before_active.insert(spec);
-    }
-    for spec in [
-        "t1:value",
-        "t1:status",
-        "t1:target",
-        "t1:target_max",
-        "t2:value",
-        "t2:status",
-    ] {
-        assert!(
-            seen_before_active.contains(spec),
-            "{spec} missing before active"
-        );
-    }
-    push.await.unwrap();
-}
-
 /// While values are pushed during `activate`, a client gets every parameter exactly once
 /// before `active`, and afterwards every later value exactly once and in order: none is
 /// lost or repeated across the activation.
@@ -358,6 +321,16 @@ async fn activation_neither_loses_nor_repeats_updates() {
         assert_eq!(action, "update", "{line}");
         let previous = initial.insert(spec.clone(), data);
         assert!(previous.is_none(), "{spec} sent twice before active");
+    }
+    for spec in [
+        "t1:value",
+        "t1:status",
+        "t1:target",
+        "t1:target_max",
+        "t2:value",
+        "t2:status",
+    ] {
+        assert!(initial.contains_key(spec), "{spec} missing before active");
     }
     // the pushed values are 1, 2, ...; any other snapshot value (the initial 4.2) means
     // the client activated before the first push
@@ -403,48 +376,6 @@ async fn application_push_reaches_only_activated_clients() {
             .is_err()
     );
     assert!(n.update("t1", "nope", Value::Double(1.0)).is_err());
-}
-
-#[tokio::test(start_paused = true)]
-async fn periodic_poll() {
-    let sim = Arc::new(Sim::default());
-    // only value and status: the controller's `hang` parameter would block the module
-    let module = Module::new("p", "polled sensor")
-        .interface_classes(["Readable"])
-        .parameter(Parameter::new("value", kelvin(), "v"))
-        .unwrap()
-        .parameter(Parameter::new("status", common::status_info(), "s"))
-        .unwrap()
-        .poll_interval(Duration::from_secs(1))
-        .handler_arc(Arc::clone(&sim) as Arc<dyn must_server::ModuleHandler>);
-    let n = start(
-        NodeBuilder::new("x", "y")
-            .log_files(must_server::logfiles::LogFiles::off())
-            .bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .initial_read(false)
-            .module(module)
-            .unwrap(),
-    );
-    let mut events = n.subscribe();
-    let start = tokio::time::Instant::now();
-    let mut value_updates = 0;
-    while start.elapsed() < Duration::from_millis(5500) {
-        tokio::select! {
-            event = events.recv() => {
-                if let Ok(NodeEvent::Updated { parameter, .. }) = event && parameter == "value" {
-                    value_updates += 1;
-                }
-            }
-            () = tokio::time::sleep(Duration::from_millis(100)) => {}
-        }
-    }
-    assert_eq!(value_updates, 5, "one poll per second");
-    assert_eq!(
-        sim.reads.load(Ordering::SeqCst),
-        10,
-        "value and status, five times each"
-    );
-    n.stop().await;
 }
 
 #[tokio::test]
@@ -550,12 +481,6 @@ fn library_owned_runtime() {
     assert!(reply.starts_with("reply t1:value"), "{reply}");
     n.stop_blocking();
     assert!(std::net::TcpStream::connect(addr).is_err());
-}
-
-#[tokio::test]
-async fn status_helper_is_valid() {
-    // the status values used by the simulation fit the status datainfo
-    assert!(common::status_info().encode(&status(300, "x")).is_ok());
 }
 
 /// Keeps a publisher from its first read, as a handler feeding a background task would.

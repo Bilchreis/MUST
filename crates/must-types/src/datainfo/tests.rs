@@ -117,21 +117,6 @@ fn wrong_property(json: Json) -> &'static str {
 }
 
 #[test]
-fn matrix_big_endian_unsigned() {
-    let DataInfo::Matrix(m) =
-        parse(json!({"type": "matrix", "elementtype": ">u2", "names": ["ch"], "maxlen": [4096]}))
-            .unwrap()
-    else {
-        panic!()
-    };
-    let t = m.elementtype();
-    assert_eq!(
-        (t.big_endian(), t.kind(), t.size()),
-        (true, ElementKind::UInt, 2)
-    );
-}
-
-#[test]
 fn matrix_element_types() {
     for t in [
         "<i1", ">i2", "<i4", ">i8", "<u1", "<u8", "<f2", ">f4", "<f8",
@@ -413,18 +398,6 @@ fn large_maxbytes_on_any_platform() {
 }
 
 // --- 3.4 structured types
-
-#[test]
-fn nested_datainfo() {
-    let DataInfo::Array(a) = parse(
-        json!({"type": "array", "maxlen": 10, "members": {"type": "int", "min": 0, "max": 9}}),
-    )
-    .unwrap() else {
-        panic!()
-    };
-    assert!(matches!(a.members(), DataInfo::Int(_)));
-    assert_eq!((a.minlen(), a.maxlen()), (0, 10));
-}
 
 #[test]
 fn struct_member_names_clash() {

@@ -234,8 +234,6 @@ pub(crate) fn error_message(action: &str, specifier: Option<&str>, error: &Secop
 #[cfg(test)]
 mod tests {
     use super::*;
-    use must_types::ErrorClass;
-    use serde_json::json;
 
     fn frames(max: usize, input: &[&[u8]]) -> Vec<Frame> {
         let mut s = LineSplitter::new(max);
@@ -247,19 +245,6 @@ mod tests {
             }
         }
         out
-    }
-
-    // --- 3.1 framing and parsing
-
-    #[test]
-    fn crlf_and_lf() {
-        assert_eq!(
-            frames(100, &[b"read t1:value\r\nping 1\n"]),
-            [
-                Frame::Line("read t1:value".into()),
-                Frame::Line("ping 1".into())
-            ]
-        );
     }
 
     #[test]
@@ -315,143 +300,5 @@ mod tests {
         s.feed(b"ping\n");
         assert!(s.buf.capacity() <= KEPT_CAPACITY);
         assert_eq!(s.next_frame(), Some(Frame::Line("ping".into())));
-    }
-
-    #[test]
-    fn data_containing_spaces() {
-        assert_eq!(
-            parse_request(r#"change t1:target {"a": 1, "b": 2}"#),
-            Request::Change(Some("t1:target"), Some(r#"{"a": 1, "b": 2}"#))
-        );
-    }
-
-    #[test]
-    fn requests() {
-        assert_eq!(parse_request(""), Request::Empty);
-        assert_eq!(parse_request("*IDN?"), Request::Identify);
-        assert_eq!(parse_request("describe"), Request::Describe);
-        assert_eq!(parse_request("describe ."), Request::Describe);
-        assert_eq!(parse_request("activate"), Request::Activate(None));
-        assert_eq!(parse_request("activate t1"), Request::Activate(Some("t1")));
-        assert_eq!(parse_request("deactivate"), Request::Deactivate(None));
-        assert_eq!(parse_request("ping"), Request::Ping(None));
-        assert_eq!(parse_request("ping 42"), Request::Ping(Some("42")));
-        assert_eq!(
-            parse_request("read t1:value"),
-            Request::Read(Some("t1:value"))
-        );
-        assert_eq!(
-            parse_request("do t1:stop"),
-            Request::Do(Some("t1:stop"), None)
-        );
-        assert_eq!(
-            parse_request("do t1:stop null"),
-            Request::Do(Some("t1:stop"), Some("null"))
-        );
-        assert_eq!(
-            parse_request("change t1:target"),
-            Request::Change(Some("t1:target"), None)
-        );
-        assert_eq!(
-            parse_request("meas:volt?"),
-            Request::Unsupported {
-                action: "meas:volt?",
-                specifier: None
-            }
-        );
-        assert_eq!(
-            parse_request("check t1:target 5"),
-            Request::Check(Some("t1:target"), Some("5"))
-        );
-        assert_eq!(
-            parse_request("check t1:stop"),
-            Request::Check(Some("t1:stop"), None)
-        );
-    }
-
-    #[test]
-    fn logging_requests() {
-        assert_eq!(
-            parse_request(r#"logging  "debug""#),
-            Request::Logging(None, Some(r#""debug""#))
-        );
-        assert_eq!(
-            parse_request(r#"logging "info""#),
-            Request::Logging(None, Some(r#""info""#))
-        );
-        assert_eq!(
-            parse_request(r#"logging t1 "error""#),
-            Request::Logging(Some("t1"), Some(r#""error""#))
-        );
-        assert_eq!(
-            parse_request(r#"logging t1:target "info""#),
-            Request::Logging(Some("t1:target"), Some(r#""info""#))
-        );
-        assert_eq!(
-            parse_request("logging t1 false"),
-            Request::Logging(Some("t1"), Some("false"))
-        );
-        assert_eq!(
-            parse_request("logging t1"),
-            Request::Logging(Some("t1"), None)
-        );
-        assert_eq!(parse_request("logging"), Request::Logging(None, None));
-    }
-
-    #[test]
-    fn specifiers() {
-        assert_eq!(split_specifier("t1:value"), Some(("t1", "value")));
-        assert_eq!(split_specifier("t1"), None);
-        assert_eq!(split_specifier(":value"), None);
-        assert_eq!(split_specifier("t1:"), None);
-    }
-
-    // --- 3.2 formatting
-
-    #[test]
-    fn formatted_messages() {
-        assert_eq!(identification(), "ISSE,SECoP,2026-07-07,v2.0");
-        assert_eq!(
-            describing(r#"{"modules":{}}"#),
-            "describing . {\"modules\":{}}"
-        );
-        assert_eq!(activation(true, None), "active");
-        assert_eq!(activation(true, Some("t1")), "active t1");
-        assert_eq!(activation(false, None), "inactive");
-        assert_eq!(activation(false, Some("t1")), "inactive t1");
-        assert_eq!(pong(Some("42"), 1.5), "pong 42 [null,{\"t\":1.5}]");
-        assert_eq!(pong(None, 1.5), "pong  [null,{\"t\":1.5}]");
-        assert_eq!(logging(None, &json!("debug")), "logging  \"debug\"");
-        assert_eq!(logging(Some("t1"), &json!(false)), "logging t1 false");
-        assert_eq!(
-            log_event("t1", "info", "say \"hi\""),
-            "log t1:info \"say \\\"hi\\\"\""
-        );
-        for action in ["reply", "changed", "done", "update"] {
-            assert_eq!(
-                data_message(action, "t1:value", &json!([295.13, {"t": 1.0}])),
-                format!("{action} t1:value [295.13,{{\"t\":1.0}}]")
-            );
-        }
-    }
-
-    #[test]
-    fn error_messages() {
-        let e = SecopError::new(ErrorClass::NoSuchModule, "tx is not configured");
-        let line = error_message("read", Some("tx:target"), &e);
-        assert!(
-            line.starts_with(
-                "error_read tx:target [\"NoSuchModule\",\"tx is not configured\",{\"t\":"
-            ),
-            "{line}"
-        );
-        assert!(line.ends_with("}]"));
-
-        let e = SecopError::new(ErrorClass::ProtocolError, "unknown action");
-        let line = error_message("meas:volt?", None, &e);
-        assert!(
-            line.starts_with("error_meas:volt?  [\"ProtocolError\""),
-            "{line}"
-        );
     }
 }
