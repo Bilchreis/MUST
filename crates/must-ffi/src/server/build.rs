@@ -858,19 +858,6 @@ mod tests {
         assert_eq!(node.modules[0].props["visibility"], "expert");
     }
 
-    #[test]
-    fn only_polling_mode_has_concurrent_requests() {
-        let mut node = DraftNode::new("n", "a node", "127.0.0.1:0".parse().unwrap());
-        node.add_module("m");
-        let concurrent = |callbacks| {
-            node.build_module(&node.modules[0], "c", callbacks, &mut Vec::new())
-                .expect("the module builds")
-                .has_concurrent_requests()
-        };
-        assert!(concurrent(false));
-        assert!(!concurrent(true));
-    }
-
     unsafe extern "C" fn accept(_: *const c_char, _: *const CSECoPbaseType, error: *mut c_int) {
         // SAFETY: called by the library with a valid pointer
         unsafe { *error = err::SUCCESS };

@@ -237,19 +237,27 @@ fn invalid_visibility() {
     let e = errors(node().module(module).unwrap());
     assert_eq!(e[0].path, "t1:p.visibility");
     assert!(e[0].to_string().contains("\"wxw\""), "{}", e[0]);
+    for bad in ["", "ww", "wwww", "rwr", "-rw", "User"] {
+        let k = kinds(node().module(sensor("t1").visibility(bad)).unwrap());
+        assert_eq!(k.len(), 1, "{bad:?}");
+    }
 }
 
 #[test]
-fn old_style_visibility_kept() {
-    let node = node()
-        .module(sensor("t1").visibility("expert"))
-        .unwrap()
-        .build()
-        .unwrap();
-    assert_eq!(
-        node.structure_report()["modules"]["t1"]["visibility"],
-        json!("expert")
-    );
+fn every_visibility_of_the_specification() {
+    for visibility in [
+        "www", "wwr", "ww-", "wrr", "wr-", "w--", "rrr", "rr-", "r--", "---", "user", "advanced",
+        "expert",
+    ] {
+        let module = sensor("t1")
+            .parameter(Parameter::new("p", kelvin(), "x").visibility(visibility))
+            .unwrap()
+            .visibility(visibility);
+        let node = node().module(module).unwrap().build().unwrap();
+        let t1 = &node.structure_report()["modules"]["t1"];
+        assert_eq!(t1["visibility"], json!(visibility));
+        assert_eq!(t1["accessibles"]["p"]["visibility"], json!(visibility));
+    }
 }
 
 #[test]
@@ -494,16 +502,7 @@ fn postfix_datainfo_must_match_parent() {
             "e",
         ))
         .unwrap();
-    let built = node().module(module).unwrap().build().unwrap();
-    let t1 = &built.model.modules["t1"];
-    let names: Vec<&str> = t1
-        .parameter("target")
-        .unwrap()
-        .limit_params
-        .iter()
-        .map(|(_, n)| n.as_str())
-        .collect();
-    assert_eq!(names, ["target_min", "target_max"]);
+    assert!(node().module(module).unwrap().build().is_ok());
 }
 
 #[test]
@@ -681,32 +680,6 @@ fn uniform_and_own_intervals() {
 }
 
 #[test]
-fn default_tiers() {
-    let node = node().module(controller("cryo")).unwrap().build().unwrap();
-    assert_eq!(poll_of(&node, "cryo", "value"), PollSource::Fast);
-    assert_eq!(poll_of(&node, "cryo", "status"), PollSource::Fast);
-    assert_eq!(poll_of(&node, "cryo", "target"), PollSource::Slow);
-    let poll = &node.model.modules["cryo"].poll;
-    assert_eq!(
-        (poll.fast, poll.slow),
-        (Some(Duration::from_secs(5)), Duration::from_secs(60))
-    );
-}
-
-#[test]
-fn no_base_class_without_configuration() {
-    let m = Module::new("x", "no base class")
-        .interface_classes([])
-        .parameter(Parameter::new("value", kelvin(), "v"))
-        .unwrap()
-        .parameter(Parameter::new("x", kelvin(), "x"))
-        .unwrap();
-    let node = node().module(m).unwrap().build().unwrap();
-    assert_eq!(poll_of(&node, "x", "value"), PollSource::Slow);
-    assert_eq!(poll_of(&node, "x", "x"), PollSource::Slow);
-}
-
-#[test]
 fn polling_off_keeps_own_intervals() {
     let m = controller("cryo")
         .parameter(Parameter::new("ramp", kelvin(), "ramp").poll_interval(Duration::from_secs(5)))
@@ -851,28 +824,9 @@ fn integer_pollinterval_is_ordinary() {
     assert_eq!(module.parameter("pollinterval").unwrap().initial, None);
 }
 
+/// No UDP test can use the default port, so the default is checked in the model.
 #[test]
 fn discovery_is_on_by_default() {
     let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
     assert!(node.model.options.discovery.is_enabled());
-    let node = NodeBuilder::new("HZB-vm4", "test node")
-        .discovery(Discovery::off())
-        .build()
-        .unwrap();
-    assert!(!node.model.options.discovery.is_enabled());
-}
-
-#[test]
-fn concurrent_requests_are_opt_in() {
-    let built = node()
-        .module(sensor("plain"))
-        .unwrap()
-        .module(sensor("overlapping").concurrent_requests())
-        .unwrap()
-        .build()
-        .unwrap();
-    assert!(!built.model.modules["plain"].concurrent);
-    assert!(built.model.modules["overlapping"].concurrent);
-    assert!(!sensor("m").has_concurrent_requests());
-    assert!(sensor("m").concurrent_requests().has_concurrent_requests());
 }

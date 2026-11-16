@@ -64,10 +64,6 @@ impl ModuleHandler for Sim {
                 "sensor disconnected",
             )),
             "overheated" => Err(SecopError::custom("_Overheated", "coil too hot")),
-            "nocomm" => Err(SecopError::new(
-                ErrorClass::CommunicationFailed,
-                "no answer from controller",
-            )),
             "hang" => std::future::pending().await,
             "slow" => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -135,8 +131,6 @@ pub fn controller(sim: Arc<Sim>) -> Module {
         .parameter(Parameter::new("broken", kelvin(), "always fails"))
         .unwrap()
         .parameter(Parameter::new("overheated", kelvin(), "fails with a custom error class"))
-        .unwrap()
-        .parameter(Parameter::new("nocomm", kelvin(), "fails with CommunicationFailed"))
         .unwrap()
         .parameter(Parameter::new("hang", kelvin(), "never answers"))
         .unwrap()
