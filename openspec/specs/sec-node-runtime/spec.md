@@ -28,6 +28,8 @@ The library SHALL keep the last value, timestamp and uncertainty (or last error)
 - **WHEN** a client sends `activate`
 - **THEN** the initial updates come from the cache and no handler read is made
 
+A `read` of a parameter with a `constant` property SHALL be answered with the constant value and the current time, without calling the handler. This deviates on purpose from SECoP, which says such a parameter "can neither be read nor written" but names no error for the read: the reply is harmless to a client, and Frappy answers the same way. A `change` of a constant SHALL fail with `ReadOnly`, and constants SHALL not be part of initial updates.
+
 #### Scenario: Constant parameter
 - **WHEN** a client reads a parameter that has a `constant` property
 - **THEN** it receives the constant value without a handler call, and the parameter is not part of initial updates

@@ -73,6 +73,7 @@ async fn cached_and_constant_parameters() {
     let sim = Arc::new(Sim::default());
     let n = start(node(Arc::clone(&sim)));
     let mut c = Client::connect(n.local_addr()).await;
+    // answered on purpose, though SECoP says a constant cannot be read (#75)
     let (action, _, data) = parse(&c.request("read t1:serial").await);
     assert_eq!((action.as_str(), &data[0]), ("reply", &json!("SN-1")));
     let (_, _, data) = parse(&c.request("read t1:target_max").await);

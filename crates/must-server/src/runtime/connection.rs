@@ -316,6 +316,8 @@ impl Connection {
                 no_such_parameter(&hub.model.modules[module], parameter),
             );
         };
+        // SECoP: a constant "can neither be read nor written". The read is still answered,
+        // as Frappy does: the specification names no error for it (sec-node-runtime spec)
         if let Some(constant) = &param.constant {
             let json = param.datainfo.encode(constant).unwrap_or(Json::Null);
             let report = data_report(json, &Qualifiers::at(now()));
