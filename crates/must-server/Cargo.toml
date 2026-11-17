@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 chrono.workspace = true
 if-addrs.workspace = true
 indexmap.workspace = true

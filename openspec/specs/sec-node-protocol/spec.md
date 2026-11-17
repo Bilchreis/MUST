@@ -17,6 +17,17 @@ The node SHALL read messages as lines ending in LF with an optional preceding CR
 - **WHEN** a client sends `change t1:target {"a": 1, "b": 2}`
 - **THEN** the data part is `{"a": 1, "b": 2}`
 
+### Requirement: WebSockets
+The node SHALL treat a connection whose first bytes are `GET /` as a WebSocket connection (SECoP transport, RFC 6455) on the same port as raw TCP: it SHALL answer a valid upgrade request (`Upgrade: websocket`, `Sec-WebSocket-Version: 13`, `Sec-WebSocket-Key`) with `101 Switching Protocols`, and any other `GET /` request with `400 Bad Request` before closing. After the handshake it SHALL read each TEXT (or BINARY) message as SECoP messages with an optional line ending, apply the maximum line length to them, send every message in its own TEXT frame without a line ending, answer pings with pongs and a close with a close, and close the connection with status 1002 when the client breaks the WebSocket protocol (for example with an unmasked frame).
+
+#### Scenario: Request in a frame
+- **WHEN** a WebSocket client sends a TEXT frame `*IDN?`
+- **THEN** it receives a TEXT frame with the identification
+
+#### Scenario: Raw TCP is unaffected
+- **WHEN** a raw TCP client sends `*IDN?\n` one byte at a time
+- **THEN** it receives the identification line
+
 ### Requirement: Oversized and malformed messages
 The node SHALL reply with a `ProtocolError` to a message longer than the configured maximum line length (default 1 MiB) or with an unknown action, and SHALL reply with `BadJSON` when the data part is not valid JSON.
 

@@ -149,6 +149,14 @@
 //! closes a connection. They do count toward that limit, so heavy logging can make a
 //! later update close a client that does not read.
 //!
+//! # WebSockets
+//!
+//! A connection whose first bytes are `GET /` is a WebSocket (SECoP's transport section,
+//! RFC 6455), on the same port as raw TCP: browser clients can talk to the node directly.
+//! After the HTTP handshake every message travels in a TEXT frame. The line ending is
+//! optional in received frames and not sent; requests, replies, updates and the
+//! line-length limit ([`NodeBuilder::max_line_length`]) are the same as over raw TCP.
+//!
 //! # Discovery
 //!
 //! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP
@@ -166,6 +174,7 @@ pub mod monitor;
 mod protocol;
 mod report;
 mod runtime;
+mod websocket;
 
 pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};

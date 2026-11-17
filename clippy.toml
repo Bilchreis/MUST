@@ -1,1 +1,1 @@
-doc-valid-idents = ["SECoP", "LabVIEW", ".."]
+doc-valid-idents = ["SECoP", "LabVIEW", "WebSocket", "WebSockets", ".."]
