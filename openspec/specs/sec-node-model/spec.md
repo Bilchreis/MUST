@@ -60,6 +60,16 @@ The library SHALL require module, accessible and property names to be valid iden
 ### Requirement: Property values
 The library SHALL check SECoP-defined property values: `visibility` must be one of the new-style or old-style values listed by the spec, `interface_classes` and `features` must be lists of strings, `timeout` a positive number, and `meaning` an object.
 
+`meaning`, of a module or an accessible, SHALL be checked against the specification's rules: `function`, `belongs_to`, `link` and `key` are strings, `importance` is an integer from 0 to 50; the object contains `function` or `link`; `importance` and `function` come together; `belongs_to` needs `function`; and `key` needs `link`. These allow exactly the eight key combinations the specification lists. Any `function` and `belongs_to` string SHALL be accepted, since both lists are open. Other keys SHALL be reported as completion warnings unless they start with `_`. SECoP 1.0's tuple form `[name, importance]` SHALL be rejected.
+
+#### Scenario: Importance without function
+- **WHEN** a module has `meaning` `{"importance": 20}`
+- **THEN** completion fails with an error for `meaning`
+
+#### Scenario: Meaning with a link only
+- **WHEN** a parameter has `meaning` `{"link": "https://w3id.org/nfdi4cat/voc4cat_0000051"}`
+- **THEN** it is accepted
+
 #### Scenario: Invalid visibility
 - **WHEN** a parameter has `visibility` `"wxw"`
 - **THEN** completion fails with an error naming the visibility value
