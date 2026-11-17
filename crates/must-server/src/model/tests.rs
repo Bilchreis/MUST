@@ -286,6 +286,90 @@ fn property_value_checks() {
     assert_eq!(props, ["timeout", "schemata", "features", "meaning"]);
 }
 
+/// A module and its `value`, both with the same `meaning`.
+fn with_meaning(meaning: &Json) -> NodeBuilder {
+    let module = Module::new("t1", "a temperature sensor")
+        .interface_classes(["Readable"])
+        .property("meaning", meaning.clone())
+        .unwrap()
+        .parameter(
+            Parameter::new("value", kelvin(), "temperature")
+                .property("meaning", meaning.clone())
+                .unwrap(),
+        )
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap();
+    node().module(module).unwrap()
+}
+
+#[test]
+fn meaning_combinations_of_the_specification() {
+    let allowed = [
+        "function importance belongs_to",
+        "function importance",
+        "key link",
+        "link",
+        "function importance link",
+        "function importance key link",
+        "function importance belongs_to link",
+        "function importance belongs_to key link",
+    ];
+    for keys in allowed {
+        let meaning: serde_json::Map<String, Json> = keys
+            .split(' ')
+            .map(|key| {
+                let value = if key == "importance" {
+                    json!(20)
+                } else {
+                    json!("x")
+                };
+                (key.to_owned(), value)
+            })
+            .collect();
+        let node = with_meaning(&Json::Object(meaning)).build().unwrap();
+        assert_eq!(node.warnings(), [], "{keys:?}");
+    }
+    // an unknown function and belongs_to are fine: both lists are open
+    let open = json!({"function": "_mine_regulation", "importance": 0, "belongs_to": "x"});
+    assert!(with_meaning(&open).build().is_ok());
+}
+
+#[test]
+fn invalid_meanings() {
+    let invalid = [
+        json!({}),
+        json!({"importance": 20}),
+        json!({"key": "k"}),
+        json!({"function": "temperature", "importance": 99}),
+        json!({"function": "temperature", "importance": -1}),
+        json!({"function": "temperature"}),
+        json!({"link": "https://w3id.org/x", "belongs_to": "sample"}),
+        json!({"function": 3, "importance": "x"}),
+        json!({"link": 1}),
+        json!(["temperature", 10]),
+    ];
+    for meaning in invalid {
+        let e = errors(with_meaning(&meaning));
+        let paths: Vec<&str> = e.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"t1.meaning"), "{meaning}: {paths:?}");
+        assert!(paths.contains(&"t1:value.meaning"), "{meaning}: {paths:?}");
+        assert!(
+            e.iter().all(|e| matches!(&e.kind,
+                ModelErrorKind::InvalidProperty { property, .. } if property == "meaning")),
+            "{meaning}: {e:?}"
+        );
+    }
+}
+
+#[test]
+fn unknown_meaning_key_warns() {
+    let meaning = json!({"link": "https://w3id.org/x", "colour": "red", "_mine": 1});
+    let node = with_meaning(&meaning).build().unwrap();
+    let paths: Vec<&str> = node.warnings().iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(paths, ["t1.meaning", "t1:value.meaning"]);
+}
+
 #[test]
 fn several_problems_at_once() {
     let e = errors(

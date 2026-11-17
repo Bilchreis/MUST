@@ -326,10 +326,8 @@ impl Validator {
                 format!("{v} is not a SECoP visibility like \"www\", \"wr-\" or \"expert\""),
             ));
         }
-        if let Some(meaning) = p.get("meaning")
-            && !meaning.is_object()
-        {
-            self.error(ModelError::property(path, "meaning", "must be an object"));
+        if let Some(meaning) = p.get("meaning") {
+            self.check_meaning(meaning, path);
         }
         self.check_string(p, path, "group");
         if let Some(group) = p.str("group") {
@@ -344,6 +342,67 @@ impl Validator {
                         },
                     ));
                 }
+            }
+        }
+    }
+
+    /// `meaning` of a module or an accessible: the key types and the key combinations of
+    /// the specification. Any `function` and `belongs_to` string is accepted, since both
+    /// lists are open.
+    fn check_meaning(&mut self, meaning: &Json, path: &str) {
+        let Some(m) = meaning.as_object() else {
+            return self.error(ModelError::property(path, "meaning", "must be an object"));
+        };
+        for (key, value) in m {
+            let valid = match key.as_str() {
+                "function" | "belongs_to" | "link" | "key" => value.is_string(),
+                "importance" => value.as_u64().is_some_and(|i| i <= 50),
+                _ => {
+                    if !key.starts_with('_') {
+                        self.warnings.push(ModelWarning {
+                            path: format!("{path}.meaning").trim_start_matches('.').to_owned(),
+                            message: format!("`{key}` is not a key of SECoP's `meaning`"),
+                        });
+                    }
+                    continue;
+                }
+            };
+            if !valid {
+                let expected = if key == "importance" {
+                    "an integer from 0 to 50"
+                } else {
+                    "a string"
+                };
+                self.error(ModelError::property(
+                    path,
+                    "meaning",
+                    format!("`{key}` must be {expected}"),
+                ));
+            }
+        }
+        let has = |key| m.contains_key(key);
+        let rules = [
+            (
+                !has("function") && !has("link"),
+                "must contain `function` or `link`",
+            ),
+            (
+                has("function") && !has("importance"),
+                "`function` needs `importance`",
+            ),
+            (
+                has("importance") && !has("function"),
+                "`importance` needs `function`",
+            ),
+            (
+                has("belongs_to") && !has("function"),
+                "`belongs_to` needs `function`",
+            ),
+            (has("key") && !has("link"), "`key` needs `link`"),
+        ];
+        for (broken, reason) in rules {
+            if broken {
+                self.error(ModelError::property(path, "meaning", reason));
             }
         }
     }
