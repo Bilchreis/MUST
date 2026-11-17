@@ -270,6 +270,7 @@ impl Validator {
         self.check_interface_classes(m);
         self.check_status(m);
         self.check_postfixes(m);
+        self.check_predefined(m, module_names);
         self.check_polling(m);
     }
 
@@ -510,6 +511,77 @@ impl Validator {
                         ));
                     }
                 }
+            }
+        }
+    }
+
+    /// `controlled_by`, `control_active` and `mode`, whose names SECoP reserves with a
+    /// fixed data type. `controlled_by` is required with "must", so it gives errors; the
+    /// other two are only described, so they give warnings.
+    fn check_predefined(&mut self, m: &Module, module_names: &[&str]) {
+        let param = |name: &str| m.accessibles.get(name);
+        let path = |name: &str| format!("{}:{name}", m.name);
+        if let Some(accessible) = param("controlled_by") {
+            let mut wrong = |what| {
+                self.errors.push(ModelError::new(
+                    path("controlled_by"),
+                    ModelErrorKind::PredefinedAccessible {
+                        name: "controlled_by",
+                        what,
+                    },
+                ));
+            };
+            match accessible {
+                Accessible::Command(_) => wrong("a readonly enum parameter"),
+                Accessible::Parameter(p) => {
+                    if p.props.get("readonly") == Some(&Json::Bool(false)) {
+                        wrong("readonly");
+                    }
+                    match &p.datainfo {
+                        DataInfo::Enum(e) if e.value_of("self") == Some(0) => {
+                            let others = e.members().keys().filter(|n| *n != "self");
+                            for other in others {
+                                if !module_names.contains(&other.as_str()) {
+                                    self.warnings.push(ModelWarning {
+                                        path: path("controlled_by"),
+                                        message: format!(
+                                            "member `{other}` is no module of this node"
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        DataInfo::Enum(_) => wrong("an enum with the member `self` = 0"),
+                        _ => wrong("an enum of module names and `self` = 0"),
+                    }
+                }
+            }
+        }
+        let parameter = |name| match param(name) {
+            Some(Accessible::Parameter(p)) => Some(p),
+            _ => None,
+        };
+        let checks = [
+            (
+                "control_active",
+                "a readonly bool",
+                parameter("control_active").is_some_and(|p| {
+                    matches!(p.datainfo, DataInfo::Bool(_))
+                        && p.props.get("readonly") != Some(&Json::Bool(false))
+                }),
+            ),
+            (
+                "mode",
+                "an enum",
+                parameter("mode").is_some_and(|p| matches!(p.datainfo, DataInfo::Enum(_))),
+            ),
+        ];
+        for (name, what, fits) in checks {
+            if param(name).is_some() && !fits {
+                self.warnings.push(ModelWarning {
+                    path: path(name),
+                    message: format!("`{name}` is predefined by SECoP as {what} parameter"),
+                });
             }
         }
     }

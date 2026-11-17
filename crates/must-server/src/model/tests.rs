@@ -830,3 +830,111 @@ fn discovery_is_on_by_default() {
     let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
     assert!(node.model.options.discovery.is_enabled());
 }
+
+// --- predefined accessibles with a fixed data type
+
+fn enum_info(members: &Json) -> DataInfo {
+    di(json!({"type": "enum", "members": members}))
+}
+
+/// A Drivable `name` with the extra parameter.
+fn controller_with(name: &str, extra: Parameter) -> Module {
+    controller(name).parameter(extra).unwrap()
+}
+
+#[test]
+fn controlled_by() {
+    let good = Parameter::new(
+        "controlled_by",
+        enum_info(&json!({"self": 0, "t2": 1})),
+        "who controls t1",
+    );
+    let built = node()
+        .module(controller_with("t1", good))
+        .unwrap()
+        .module(controller("t2"))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings(), []);
+
+    let bad = [
+        Parameter::new("controlled_by", DataInfo::string().build().unwrap(), "x"),
+        Parameter::new("controlled_by", enum_info(&json!({"t2": 0})), "x"),
+        Parameter::new(
+            "controlled_by",
+            enum_info(&json!({"self": 1, "t2": 0})),
+            "x",
+        ),
+        Parameter::new("controlled_by", enum_info(&json!({"self": 0})), "x").writable(),
+    ];
+    for param in bad {
+        let e = errors(node().module(controller_with("t1", param)).unwrap());
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].path, "t1:controlled_by");
+        assert!(matches!(
+            e[0].kind,
+            ModelErrorKind::PredefinedAccessible {
+                name: "controlled_by",
+                ..
+            }
+        ));
+    }
+
+    // a member that is no module of this node may be on another node: a warning
+    let elsewhere = Parameter::new(
+        "controlled_by",
+        enum_info(&json!({"self": 0, "remote": 1})),
+        "x",
+    );
+    let built = node()
+        .module(controller_with("t1", elsewhere))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings().len(), 1);
+    assert_eq!(built.warnings()[0].path, "t1:controlled_by");
+}
+
+#[test]
+fn control_active_and_mode() {
+    let bool_info = DataInfo::bool().build().unwrap();
+    let int_info = di(json!({"type": "int", "min": 0, "max": 1}));
+    let mode = enum_info(&json!({"off": 0, "on": 1}));
+    let fitting = [
+        Parameter::new("control_active", bool_info.clone(), "x"),
+        Parameter::new("mode", mode.clone(), "x"),
+        Parameter::new("mode", mode, "x").writable(),
+    ];
+    for param in fitting {
+        let built = node()
+            .module(controller_with("t1", param))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(built.warnings(), []);
+    }
+    let unfitting = [
+        (
+            "control_active",
+            Parameter::new("control_active", int_info, "x"),
+        ),
+        (
+            "control_active",
+            Parameter::new("control_active", bool_info, "x").writable(),
+        ),
+        (
+            "mode",
+            Parameter::new("mode", DataInfo::string().build().unwrap(), "x"),
+        ),
+    ];
+    for (name, param) in unfitting {
+        let built = node()
+            .module(controller_with("t1", param))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(built.warnings().len(), 1, "{name}");
+        assert_eq!(built.warnings()[0].path, format!("t1:{name}"));
+    }
+}

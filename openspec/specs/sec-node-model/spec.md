@@ -108,6 +108,13 @@ The library SHALL require a `status` parameter to be a tuple of an enum (all mem
 - **WHEN** the status enum contains a member with value 500
 - **THEN** completion fails
 
+### Requirement: Predefined accessibles with a fixed data type
+The library SHALL reject a `controlled_by` that is not a readonly enum parameter with the member `self` = 0, and SHALL report as a completion warning a member of it that names no module of the node (it may name a module of another SEC node). It SHALL report as completion warnings a `control_active` that is not a readonly `bool` parameter and a `mode` that is not an enum parameter, since the specification describes these two without requiring them.
+
+#### Scenario: controlled_by without self
+- **WHEN** a module has a parameter `controlled_by` with datainfo `{"type": "enum", "members": {"t2": 0}}`
+- **THEN** completion fails with an error for `controlled_by`
+
 ### Requirement: Module-level postfix rules
 The library SHALL require a postfixed parameter (`_min`, `_max`, `_limits`, `_enable`) to have its parent parameter in the same module with a matching datainfo, and SHALL reject a module that has both `<p>_limits` and `<p>_min` or `<p>_max` for the same parent.
 

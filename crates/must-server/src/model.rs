@@ -171,6 +171,14 @@ pub enum ModelErrorKind {
     /// The module's or a parameter's poll settings are invalid.
     #[error("{0}")]
     Polling(&'static str),
+    /// An accessible whose name SECoP reserves is declared another way.
+    #[error("`{name}` is predefined by SECoP and must be {what}")]
+    PredefinedAccessible {
+        /// The accessible name.
+        name: &'static str,
+        /// What SECoP requires of it.
+        what: &'static str,
+    },
 }
 
 impl ModelError {
