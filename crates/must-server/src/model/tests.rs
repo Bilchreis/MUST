@@ -286,6 +286,128 @@ fn property_value_checks() {
     assert_eq!(props, ["timeout", "schemata", "features", "meaning"]);
 }
 
+fn go() -> Command {
+    Command::new("go", DataInfo::command().build().unwrap(), "start")
+}
+
+/// A module with `value` and `status` and the given classes.
+fn acquisition(name: &str, classes: &[&str]) -> Module {
+    Module::new(name, "an acquisition module")
+        .interface_classes(classes.iter().copied())
+        .parameter(Parameter::new("value", kelvin(), "counts"))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap()
+}
+
+/// What each `InterfaceClass` error of a failed build requires.
+fn class_requirements(builder: NodeBuilder) -> Vec<(String, String)> {
+    kinds(builder)
+        .into_iter()
+        .filter_map(|k| match k {
+            ModelErrorKind::InterfaceClass { class, what } => Some((class, what)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn acquisition_classes() {
+    let controller = Module::new("ctrl", "a controller")
+        .interface_classes(["AcquisitionController"])
+        .property("acquisition_channels", json!({"t": "timer"}))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap()
+        .command(go())
+        .unwrap();
+    let channel = acquisition("timer", &["AcquisitionChannel", "Readable"]);
+    let single = acquisition("single", &["Acquisition", "Readable"])
+        .command(go())
+        .unwrap();
+    let built = node()
+        .module(controller)
+        .unwrap()
+        .module(channel)
+        .unwrap()
+        .module(single)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings(), []);
+
+    // a controller without status, go and acquisition_channels
+    let bare = Module::new("ctrl", "a controller").interface_classes(["AcquisitionController"]);
+    let reqs = class_requirements(node().module(bare).unwrap());
+    let reqs: Vec<&str> = reqs.iter().map(|(_, what)| what.as_str()).collect();
+    assert_eq!(
+        reqs,
+        [
+            "a parameter `status`",
+            "a command `go`",
+            "the module property `acquisition_channels`"
+        ]
+    );
+
+    // a channel without value or status (checked even though `Readable` would be too)
+    let channel = Module::new("ch", "a channel").interface_classes(["AcquisitionChannel"]);
+    let reqs = class_requirements(node().module(channel).unwrap());
+    assert_eq!(reqs.len(), 2, "{reqs:?}");
+    assert!(reqs.iter().all(|(class, _)| class == "AcquisitionChannel"));
+
+    // an Acquisition without go, and with acquisition_channels
+    let single = acquisition("single", &["Acquisition", "Readable"])
+        .property("acquisition_channels", json!({"t": "single"}))
+        .unwrap();
+    let reqs = class_requirements(node().module(single).unwrap());
+    let reqs: Vec<&str> = reqs.iter().map(|(_, what)| what.as_str()).collect();
+    assert_eq!(
+        reqs,
+        [
+            "a command `go`",
+            "no module property `acquisition_channels`"
+        ]
+    );
+}
+
+#[test]
+fn acquisition_channels_name_modules_of_the_node() {
+    let controller = Module::new("ctrl", "a controller")
+        .interface_classes(["AcquisitionController"])
+        .property("acquisition_channels", json!({"t": "timer", "m": "nope"}))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap()
+        .command(go())
+        .unwrap();
+    let channel = acquisition("timer", &["AcquisitionChannel", "Readable"]);
+    let e = errors(node().module(controller).unwrap().module(channel).unwrap());
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert_eq!(e[0].path, "ctrl.acquisition_channels");
+    assert!(e[0].to_string().contains("`nope`"), "{}", e[0]);
+}
+
+#[test]
+fn communicator_without_communicate_warns() {
+    let bare = Module::new("io", "serial line").interface_classes(["Communicator"]);
+    let built = node().module(bare).unwrap().build().unwrap();
+    assert_eq!(built.warnings().len(), 1);
+    assert_eq!(built.warnings()[0].path, "io");
+
+    let string = DataInfo::string().build().unwrap();
+    let communicate = DataInfo::command()
+        .argument(&string)
+        .result(&string)
+        .build()
+        .unwrap();
+    let io = Module::new("io", "serial line")
+        .interface_classes(["Communicator"])
+        .command(Command::new("communicate", communicate, "send and receive"))
+        .unwrap();
+    let built = node().module(io).unwrap().build().unwrap();
+    assert_eq!(built.warnings(), []);
+}
+
 #[test]
 fn several_problems_at_once() {
     let e = errors(
@@ -361,10 +483,16 @@ fn non_standard_class_without_underscore() {
         ModelErrorKind::UnknownInterfaceClass("MyHeater".into())
     );
     assert!(e[0].to_string().contains("`_MyHeater`"), "{}", e[0]);
-    // every SECoP 2.0 class is accepted
+    // every SECoP 2.0 class name is known (the acquisition classes need more accessibles)
     for class in INTERFACE_CLASSES {
         let module = sensor("t1").interface_classes([*class, "Readable"]);
-        assert!(node().module(module).unwrap().build().is_ok(), "{class}");
+        if let Err(BuildError(e)) = node().module(module).unwrap().build() {
+            assert!(
+                e.iter()
+                    .all(|e| !matches!(e.kind, ModelErrorKind::UnknownInterfaceClass(_))),
+                "{class}: {e:?}"
+            );
+        }
     }
 }
 

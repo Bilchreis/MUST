@@ -82,6 +82,12 @@ The library SHALL accept in `interface_classes` only the SECoP 2.0 interface cla
 ### Requirement: Interface class rules
 The library SHALL check the module's base class (the last entry of `interface_classes`): `Readable` needs parameters `value` and `status`; `Writable` additionally a writable `target`; `Drivable` additionally a `stop` command.
 
+It SHALL also check the acquisition classes wherever they appear in `interface_classes`: `AcquisitionController` needs a parameter `status`, a command `go` and the module property `acquisition_channels`; `AcquisitionChannel` needs parameters `value` and `status`; `Acquisition` needs `value`, `status` and `go` and must not have `acquisition_channels`. Each value of `acquisition_channels` SHALL name a module of the node. A `Communicator` without a command `communicate` SHALL be reported as a completion warning, since the specification says it should have one but does not require it.
+
+#### Scenario: Acquisition controller without go
+- **WHEN** a module with `interface_classes` `["AcquisitionController"]` has `status` and `acquisition_channels` but no `go`
+- **THEN** completion fails with an error naming the missing command `go`
+
 #### Scenario: Drivable without stop
 - **WHEN** a module with `interface_classes` `["Drivable"]` has `value`, `status` and `target` but no `stop`
 - **THEN** completion fails with an error naming the missing command `stop`

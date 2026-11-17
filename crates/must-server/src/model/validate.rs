@@ -268,6 +268,7 @@ impl Validator {
             }
         }
         self.check_interface_classes(m);
+        self.check_acquisition_classes(m, module_names);
         self.check_status(m);
         self.check_postfixes(m);
         self.check_polling(m);
@@ -453,6 +454,87 @@ impl Validator {
         if base == "Drivable" && !matches!(m.accessibles.get("stop"), Some(Accessible::Command(_)))
         {
             missing("a command `stop`");
+        }
+    }
+
+    /// The acquisition classes and `Communicator`, wherever they are in
+    /// `interface_classes`: `AcquisitionChannel` and `Acquisition` come before `Readable`,
+    /// which is the base class then.
+    fn check_acquisition_classes(&mut self, m: &Module, module_names: &[&str]) {
+        let classes: Vec<&str> = m
+            .props
+            .get("interface_classes")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .collect();
+        let has = |name: &str| matches!(m.accessibles.get(name), Some(Accessible::Parameter(_)));
+        let command = |name: &str| matches!(m.accessibles.get(name), Some(Accessible::Command(_)));
+        let channels = m.props.get("acquisition_channels");
+        for class in classes {
+            let mut what = Vec::new();
+            match class {
+                "AcquisitionController" => {
+                    if !has("status") {
+                        what.push("a parameter `status`");
+                    }
+                    if !command("go") {
+                        what.push("a command `go`");
+                    }
+                    if channels.is_none() {
+                        what.push("the module property `acquisition_channels`");
+                    }
+                }
+                "AcquisitionChannel" | "Acquisition" => {
+                    for (name, needed) in [
+                        ("value", "a parameter `value`"),
+                        ("status", "a parameter `status`"),
+                    ] {
+                        if !has(name) {
+                            what.push(needed);
+                        }
+                    }
+                    if class == "Acquisition" {
+                        if !command("go") {
+                            what.push("a command `go`");
+                        }
+                        if channels.is_some() {
+                            what.push("no module property `acquisition_channels`");
+                        }
+                    }
+                }
+                // "should", not "must": `communicate` is meant for Communicators
+                "Communicator" if !command("communicate") => {
+                    self.warnings.push(ModelWarning {
+                        path: m.name.clone(),
+                        message: "a `Communicator` should have a command `communicate`".into(),
+                    });
+                }
+                _ => {}
+            }
+            for what in what {
+                self.errors.push(ModelError::new(
+                    m.name.clone(),
+                    ModelErrorKind::InterfaceClass {
+                        class: class.to_owned(),
+                        what: what.to_owned(),
+                    },
+                ));
+            }
+        }
+        // the channels are modules of this node
+        let names = channels.and_then(Json::as_object).into_iter().flatten();
+        for (role, channel) in names {
+            if let Some(channel) = channel.as_str()
+                && !module_names.contains(&channel)
+            {
+                self.error(ModelError::property(
+                    &m.name,
+                    "acquisition_channels",
+                    format!("`{role}` names `{channel}`, which is no module of this node"),
+                ));
+            }
         }
     }
 
