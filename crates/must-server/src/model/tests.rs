@@ -368,6 +368,57 @@ fn non_standard_class_without_underscore() {
     }
 }
 
+// --- systems
+
+fn with_systems(systems: &Json) -> NodeBuilder {
+    node()
+        .property("systems", systems.clone())
+        .unwrap()
+        .module(sensor("cryo1_T"))
+        .unwrap()
+        .module(sensor("mag5t_x"))
+        .unwrap()
+}
+
+#[test]
+fn systems_of_the_specification() {
+    // a system with a subsystem, as in the specification's examples
+    let systems = json!({
+        "cryo1": {"description": "A cryo", "system": "OrangeCryostat",
+                  "modules": {"T": "cryo1_T", "X": "mag5t"}},
+        "mag5t": {"description": "A magnet", "system": "Magnet",
+                  "modules": {"X": "mag5t_x"}},
+    });
+    let built = with_systems(&systems).build().unwrap();
+    assert_eq!(built.warnings(), []);
+}
+
+#[test]
+fn invalid_systems() {
+    let entry = |modules: Json| json!({"description": "x", "system": "S", "modules": modules});
+    let invalid = [
+        json!([]),
+        json!({"cryo1": 5}),
+        json!({"cryo1": {}}),
+        json!({"cryo1": {"description": 1, "system": "S", "modules": {}}}),
+        json!({"cryo1": entry(json!({"T": "nope"}))}),
+        json!({"cryo1": entry(json!({"T": 3}))}),
+        json!({"cryo1_T": entry(json!({}))}),
+        json!({"cryo1": entry(json!({"X": "cryo1"}))}),
+        json!({"a": entry(json!({"X": "b"})), "b": entry(json!({"X": "a"}))}),
+    ];
+    for systems in invalid {
+        let e = errors(with_systems(&systems));
+        assert!(!e.is_empty(), "{systems}");
+        assert!(
+            e.iter().all(|e| e.path == "systems"
+                && matches!(&e.kind, ModelErrorKind::InvalidProperty { property, .. }
+                    if property == "systems")),
+            "{systems}: {e:?}"
+        );
+    }
+}
+
 // --- default module properties
 
 struct MyDriver;

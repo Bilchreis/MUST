@@ -196,16 +196,14 @@ impl Validator {
                 "must be a positive number of seconds",
             ));
         }
-        if let Some(s) = p.get("systems")
-            && !s.is_object()
-        {
-            self.error(ModelError::property("", "systems", "must be an object"));
-        }
         self.check_string_list(p, "", "schemata");
         self.warn_non_standard(p, "");
 
         // names for group checks: module names, and module plus accessible names
         let module_names: Vec<&str> = node.modules.keys().map(String::as_str).collect();
+        if let Some(systems) = p.get("systems") {
+            self.check_systems(systems, &module_names);
+        }
         let mut all_names = module_names.clone();
         for m in node.modules.values() {
             all_names.extend(m.accessibles.keys().map(String::as_str));
@@ -213,6 +211,72 @@ impl Validator {
 
         for module in node.modules.values() {
             self.check_module(module, &module_names, &all_names);
+        }
+    }
+
+    /// `systems`: what can be checked without the systems' schemata. Each entry has a
+    /// string `description` and `system` and an object `modules` of strings, each naming a
+    /// module or another system of the node; no system is named like a module, and none
+    /// contains itself through subsystems.
+    fn check_systems(&mut self, systems: &Json, module_names: &[&str]) {
+        let Some(systems) = systems.as_object() else {
+            return self.error(ModelError::property("", "systems", "must be an object"));
+        };
+        let invalid = |reason: String| ModelError::property("", "systems", reason);
+        for (name, system) in systems {
+            if module_names.contains(&name.as_str()) {
+                self.error(invalid(format!("`{name}` is also the name of a module")));
+            }
+            let Some(system) = system.as_object() else {
+                self.error(invalid(format!("`{name}` must be an object")));
+                continue;
+            };
+            for key in ["description", "system"] {
+                if !system.get(key).is_some_and(Json::is_string) {
+                    self.error(invalid(format!("`{name}` needs a string `{key}`")));
+                }
+            }
+            let Some(modules) = system.get("modules").and_then(Json::as_object) else {
+                self.error(invalid(format!("`{name}` needs an object `modules`")));
+                continue;
+            };
+            for (role, member) in modules {
+                match member.as_str() {
+                    Some(m) if module_names.contains(&m) || systems.contains_key(m) => {}
+                    Some(m) => self.error(invalid(format!(
+                        "`{name}.modules.{role}` names `{m}`, which is neither a module nor a \
+                         system of this node"
+                    ))),
+                    None => {
+                        self.error(invalid(format!("`{name}.modules.{role}` must be a string")));
+                    }
+                }
+            }
+        }
+        // subsystems: follow the members that name systems
+        let subsystems = |name: &str| -> Vec<&str> {
+            systems
+                .get(name)
+                .and_then(|s| s.get("modules"))
+                .and_then(Json::as_object)
+                .into_iter()
+                .flat_map(|m| m.values().filter_map(Json::as_str))
+                .filter(|m| systems.contains_key(*m))
+                .collect()
+        };
+        for name in systems.keys() {
+            let mut seen = vec![name.as_str()];
+            let mut todo = subsystems(name);
+            while let Some(next) = todo.pop() {
+                if next == name {
+                    self.error(invalid(format!("`{name}` contains itself")));
+                    break;
+                }
+                if !seen.contains(&next) {
+                    seen.push(next);
+                    todo.extend(subsystems(next));
+                }
+            }
         }
     }
 
