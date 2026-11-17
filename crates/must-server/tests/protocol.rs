@@ -83,6 +83,42 @@ async fn ignored_values() {
     assert_eq!(c.request("deactivate t2 extra").await, "inactive t2");
 }
 
+/// Compatibility rule 5: a specifier with more `:` parts than the action takes is treated
+/// as its leading part, and the reply names that part.
+#[tokio::test]
+async fn longer_specifiers() {
+    let (n, _) = start();
+    let mut c = Client::connect(n.local_addr()).await;
+    c.send("activate t2:value").await;
+    let mut updates = Vec::new();
+    loop {
+        let line = c.line().await;
+        if line == "active t2" {
+            break;
+        }
+        updates.push(parse(&line).1);
+    }
+    assert!(updates.contains(&"t2:value".to_owned()), "{updates:?}");
+    assert!(updates.iter().all(|s| s.starts_with("t2:")), "{updates:?}");
+    assert_eq!(c.request("deactivate t2:value").await, "inactive t2");
+
+    let line = c.request("read t1:value:x").await;
+    assert!(line.starts_with("reply t1:value [295.0,"), "{line}");
+    let line = c.request("change t1:target:x 5").await;
+    assert!(line.starts_with("changed t1:target [5.0,"), "{line}");
+    let line = c.request("do t1:stop:x").await;
+    assert!(line.starts_with("done t1:stop [null,"), "{line}");
+    let plain = c.request("check t1:target 1").await;
+    let longer = c.request("check t1:target:x 1").await;
+    assert_eq!(longer.split(' ').next(), plain.split(' ').next());
+    assert_eq!(parse(&longer).1, "t1:target");
+    assert_eq!(error_class(&longer), error_class(&plain));
+    // the part understood still has to name something
+    let line = c.request("read t1:nope:x").await;
+    assert!(line.starts_with("error_read t1:nope "), "{line}");
+    assert_eq!(error_class(&line), "NoSuchParameter");
+}
+
 /// A message is ASCII: other bytes get an error reply and the connection keeps working.
 #[tokio::test]
 async fn non_ascii_bytes() {
