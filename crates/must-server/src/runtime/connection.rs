@@ -21,7 +21,10 @@ use super::actor::{ActorHandle, Job, JobResult};
 use super::{CacheEntry, Hub, Outgoing, QueueStats, RemoteLevel};
 use crate::events::{ConnectionId, NodeEvent};
 use crate::model::{AccessibleModel, CommandModel, ModuleModel, ParameterModel};
-use crate::protocol::{self, Frame, LineSplitter, Request, now, parse_request, split_specifier};
+use crate::protocol::{
+    self, Frame, LineSplitter, Request, accessible_part, module_part, now, parse_request,
+    split_specifier,
+};
 
 /// `line` and its LF, in `buf`.
 fn with_lf<'b>(buf: &'b mut Vec<u8>, line: &str) -> &'b [u8] {
@@ -233,13 +236,15 @@ impl Connection {
             Request::Identify => self.hub.identify(self.id),
             Request::Describe => self.reply(protocol::describing(&self.hub.report)),
             Request::Ping(token) => self.reply(protocol::pong(token, now())),
-            Request::Activate(module) => {
-                if self.known_module("activate", module) {
+            Request::Activate(spec) => {
+                let module = spec.map(module_part);
+                if self.known_module("activate", spec, module) {
                     self.hub.activate(self.id, module);
                 }
             }
-            Request::Deactivate(module) => {
-                if self.known_module("deactivate", module) {
+            Request::Deactivate(spec) => {
+                let module = spec.map(module_part);
+                if self.known_module("deactivate", spec, module) {
                     self.hub.deactivate(self.id, module);
                 }
             }
@@ -259,11 +264,12 @@ impl Connection {
         }
     }
 
-    /// Whether `module` (if given) exists; replies with an error for `action` if not.
-    fn known_module(&self, action: &str, module: Option<&str>) -> bool {
+    /// Whether `module` (if given) exists; replies with an error for `action` naming `spec`,
+    /// the specifier as sent, if not.
+    fn known_module(&self, action: &str, spec: Option<&str>, module: Option<&str>) -> bool {
         match module {
             Some(m) if !self.hub.model.modules.contains_key(m) => {
-                self.error(action, module, no_such_module(m));
+                self.error(action, spec, no_such_module(m));
                 false
             }
             _ => true,
@@ -271,12 +277,9 @@ impl Connection {
     }
 
     /// Resolves `module:accessible`, replying with an error if that fails.
-    fn resolve<'s>(
-        &self,
-        action: &str,
-        spec: Option<&'s str>,
-    ) -> Option<(&'s str, &'s str, Arc<Hub>)> {
-        let Some((module, accessible)) = spec.and_then(split_specifier) else {
+    fn resolve<'s>(&self, action: &str, spec: Option<&'s str>) -> Option<(Target<'s>, Arc<Hub>)> {
+        let used = spec.map(accessible_part);
+        let Some((module, accessible)) = used.and_then(split_specifier) else {
             let error = SecopError::new(
                 ErrorClass::ProtocolError,
                 "expected `<module>:<accessible>`",
@@ -288,7 +291,13 @@ impl Connection {
             self.error(action, spec, no_such_module(module));
             return None;
         }
-        Some((module, accessible, Arc::clone(&self.hub)))
+        let target = Target {
+            sent: spec.unwrap_or_default(),
+            used: used.unwrap_or_default(),
+            module,
+            accessible,
+        };
+        Some((target, Arc::clone(&self.hub)))
     }
 
     async fn read<R: AsyncReadExt + Unpin>(
@@ -296,26 +305,24 @@ impl Connection {
         spec: Option<&str>,
         incoming: &mut Incoming<'_, R>,
     ) {
-        let Some((module, parameter, hub)) = self.resolve("read", spec) else {
+        let Some((target, hub)) = self.resolve("read", spec) else {
             return;
         };
-        let spec = spec.unwrap_or_default();
+        let (module, parameter) = (target.module, target.accessible);
         let Some(param) = hub.model.modules[module].parameter(parameter) else {
             return self.error(
                 "read",
-                Some(spec),
+                Some(target.sent),
                 no_such_parameter(&hub.model.modules[module], parameter),
             );
         };
         if let Some(constant) = &param.constant {
             let json = param.datainfo.encode(constant).unwrap_or(Json::Null);
             let report = data_report(json, &Qualifiers::at(now()));
-            return self.reply(protocol::data_message("reply", spec, &report));
+            return self.reply(protocol::data_message("reply", target.used, &report));
         }
         if !param.cached {
-            return self
-                .read_with_repeats(module, parameter, spec, incoming)
-                .await;
+            return self.read_with_repeats(&target, incoming).await;
         }
         let result = match hub.cached(module, parameter).as_deref() {
             Some(CacheEntry::Value { report, .. }) => Ok(report.clone()),
@@ -325,19 +332,19 @@ impl Connection {
                 "no value available yet",
             )),
         };
-        self.answer("read", "reply", spec, result);
+        self.answer("read", "reply", &target, result);
     }
 
     /// Reads through the module. Until the replies are sent it keeps taking the client's
-    /// requests as long as each is a read of the same parameter: the module may share those
-    /// with the running read. The first other request is held for after the replies.
+    /// requests as long as each is a read of the same parameter with the same specifier as
+    /// sent: the module may share those with the running read. The first other request is
+    /// held for after the replies.
     async fn read_with_repeats<R: AsyncReadExt + Unpin>(
         &self,
-        module: &str,
-        parameter: &str,
-        spec: &str,
+        target: &Target<'_>,
         incoming: &mut Incoming<'_, R>,
     ) {
+        let (module, parameter) = (target.module, target.accessible);
         let mut replies = VecDeque::new();
         replies.push_back(self.send_read(module, parameter).await);
         loop {
@@ -351,11 +358,11 @@ impl Connection {
                 result = reply => {
                     let result = result.unwrap_or_else(|_| Err(shutting_down()));
                     replies.pop_front();
-                    self.answer("read", "reply", spec, result);
+                    self.answer("read", "reply", target, result);
                 }
                 () = self.close.cancelled() => return,
                 frame = next_frame_drained(self, incoming), if looking => match frame {
-                    Some(Frame::Line(line)) if is_read_of(&line, spec) => {
+                    Some(Frame::Line(line)) if is_read_of(&line, target.sent) => {
                         self.note_received(&line);
                         replies.push_back(self.send_read(module, parameter).await);
                     }
@@ -410,10 +417,10 @@ impl Connection {
     }
 
     async fn change(&self, spec: Option<&str>, data: Option<&str>) {
-        let Some((module, parameter, hub)) = self.resolve("change", spec) else {
+        let Some((target, hub)) = self.resolve("change", spec) else {
             return;
         };
-        let spec = spec.unwrap_or_default();
+        let (module, parameter) = (target.module, target.accessible);
         let m = &hub.model.modules[module];
         let value = m
             .parameter(parameter)
@@ -424,7 +431,7 @@ impl Connection {
             });
         let value = match value {
             Ok(value) => value,
-            Err(e) => return self.error("change", Some(spec), e),
+            Err(e) => return self.error("change", Some(target.sent), e),
         };
         let result = self
             .run(module, |reply| Job::Change {
@@ -433,14 +440,14 @@ impl Connection {
                 reply,
             })
             .await;
-        self.answer("change", "changed", spec, result);
+        self.answer("change", "changed", &target, result);
     }
 
     async fn call(&self, spec: Option<&str>, data: Option<&str>) {
-        let Some((module, command, hub)) = self.resolve("do", spec) else {
+        let Some((target, hub)) = self.resolve("do", spec) else {
             return;
         };
-        let spec = spec.unwrap_or_default();
+        let (module, command) = (target.module, target.accessible);
         let m = &hub.model.modules[module];
         let argument = m
             .command(command)
@@ -448,7 +455,7 @@ impl Connection {
             .and_then(|cmd| argument(cmd, data));
         let argument = match argument {
             Ok(argument) => argument,
-            Err(e) => return self.error("do", Some(spec), e),
+            Err(e) => return self.error("do", Some(target.sent), e),
         };
         let result = self
             .run(module, |reply| Job::Do {
@@ -457,16 +464,16 @@ impl Connection {
                 reply,
             })
             .await;
-        self.answer("do", "done", spec, result);
+        self.answer("do", "done", &target, result);
     }
 
     /// `check`: validated like the matching `change` or `do`, then decided by the handler.
     /// Only this connection gets the reply; nothing is cached or published.
     async fn check(&self, spec: Option<&str>, data: Option<&str>) {
-        let Some((module, accessible, hub)) = self.resolve("check", spec) else {
+        let Some((target, hub)) = self.resolve("check", spec) else {
             return;
         };
-        let spec = spec.unwrap_or_default();
+        let (module, accessible) = (target.module, target.accessible);
         let m = &hub.model.modules[module];
         let validated = match m.accessibles.get(accessible) {
             None => Err(no_such_parameter(m, accessible)),
@@ -480,7 +487,7 @@ impl Connection {
         };
         let (echo, value) = match validated {
             Ok(validated) => validated,
-            Err(e) => return self.error("check", Some(spec), e),
+            Err(e) => return self.error("check", Some(target.sent), e),
         };
         let result = self
             .run(module, |reply| Job::Check {
@@ -490,7 +497,7 @@ impl Connection {
                 reply,
             })
             .await;
-        self.answer("check", "checked", spec, result);
+        self.answer("check", "checked", &target, result);
     }
 
     /// Sends a job to a module actor and waits for its result.
@@ -508,12 +515,23 @@ impl Connection {
         rx.await.map_err(|_| shutting_down())?
     }
 
-    fn answer(&self, action: &str, reply_action: &str, spec: &str, result: JobResult) {
+    /// Replies naming the part of the specifier used, or with an error naming it as sent.
+    fn answer(&self, action: &str, reply_action: &str, target: &Target, result: JobResult) {
         match result {
-            Ok(report) => self.reply(protocol::data_message(reply_action, spec, &report)),
-            Err(error) => self.error(action, Some(spec), error),
+            Ok(report) => self.reply(protocol::data_message(reply_action, target.used, &report)),
+            Err(error) => self.error(action, Some(target.sent), error),
         }
     }
+}
+
+/// A resolved `<module>:<accessible>` specifier.
+struct Target<'s> {
+    /// The specifier as sent, which error replies name.
+    sent: &'s str,
+    /// Its `<module>:<accessible>` part, which other replies name.
+    used: &'s str,
+    module: &'s str,
+    accessible: &'s str,
 }
 
 /// The next frame once the outgoing queue is within its limit; `None` if there was none

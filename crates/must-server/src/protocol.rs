@@ -147,13 +147,13 @@ pub(crate) fn parse_request(line: &str) -> Request<'_> {
     match action {
         "*IDN?" => Request::Identify,
         "describe" => Request::Describe,
-        "activate" => Request::Activate(specifier.map(module_part)),
-        "deactivate" => Request::Deactivate(specifier.map(module_part)),
+        "activate" => Request::Activate(specifier),
+        "deactivate" => Request::Deactivate(specifier),
         "ping" => Request::Ping(specifier),
-        "read" => Request::Read(specifier.map(accessible_part)),
-        "change" => Request::Change(specifier.map(accessible_part), data),
-        "do" => Request::Do(specifier.map(accessible_part), data),
-        "check" => Request::Check(specifier.map(accessible_part), data),
+        "read" => Request::Read(specifier),
+        "change" => Request::Change(specifier, data),
+        "do" => Request::Do(specifier, data),
+        "check" => Request::Check(specifier, data),
         // `logging "info"` with one space: no module name starts with `"`
         "logging" => match specifier {
             Some(s) if s.starts_with('"') => {
@@ -167,10 +167,11 @@ pub(crate) fn parse_request(line: &str) -> Request<'_> {
 
 // SECoP's compatibility rule 5: of a specifier with more `:` parts than the action takes,
 // use the part understood and ignore the rest (`activate m:p` is `activate m`). A
-// specifier starting with `:` is left alone, so it still gets its error.
+// specifier starting with `:` is left alone, so it still gets its error. Replies name the
+// part used; error replies name the specifier as sent.
 
 /// `<module>` of `<module>:<anything>`.
-fn module_part(specifier: &str) -> &str {
+pub(crate) fn module_part(specifier: &str) -> &str {
     match specifier.split_once(':') {
         Some((module, _)) if !module.is_empty() => module,
         _ => specifier,
@@ -178,7 +179,7 @@ fn module_part(specifier: &str) -> &str {
 }
 
 /// `<module>:<accessible>` of `<module>:<accessible>:<anything>`.
-fn accessible_part(specifier: &str) -> &str {
+pub(crate) fn accessible_part(specifier: &str) -> &str {
     match specifier.match_indices(':').nth(1) {
         Some((end, _)) if !specifier.starts_with(':') => &specifier[..end],
         _ => specifier,

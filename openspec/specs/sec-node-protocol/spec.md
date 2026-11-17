@@ -18,7 +18,7 @@ The node SHALL read messages as lines ending in LF with an optional preceding CR
 - **THEN** the data part is `{"a": 1, "b": 2}`
 
 ### Requirement: Longer specifiers
-The node SHALL treat a specifier with more `:` parts than the action takes as its leading part, ignoring the rest (SECoP compatibility rule 5): `activate`, `deactivate` and `logging` use `<module>`, and `read`, `change`, `do` and `check` use `<module>:<accessible>`. Replies name the part the node used.
+The node SHALL treat a specifier with more `:` parts than the action takes as its leading part, ignoring the rest (SECoP compatibility rule 5): `activate`, `deactivate` and `logging` use `<module>`, and `read`, `change`, `do` and `check` use `<module>:<accessible>`. Replies name the part the node used; error replies name the specifier as sent.
 
 #### Scenario: Module-wise activation with a parameter
 - **WHEN** a client sends `activate t2:value`
@@ -27,6 +27,10 @@ The node SHALL treat a specifier with more `:` parts than the action takes as it
 #### Scenario: Read with an extra part
 - **WHEN** a client sends `read t1:value:x`
 - **THEN** it receives `reply t1:value` with the data report of `t1:value`
+
+#### Scenario: Error reply with an extra part
+- **WHEN** a client sends `read t1:nope:x`
+- **THEN** it receives `error_read t1:nope:x` with a `NoSuchParameter` error report
 
 ### Requirement: Oversized and malformed messages
 The node SHALL reply with a `ProtocolError` to a message longer than the configured maximum line length (default 1 MiB) or with an unknown action, and SHALL reply with `BadJSON` when the data part is not valid JSON.

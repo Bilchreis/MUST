@@ -84,7 +84,7 @@ async fn ignored_values() {
 }
 
 /// Compatibility rule 5: a specifier with more `:` parts than the action takes is treated
-/// as its leading part, and the reply names that part.
+/// as its leading part. Replies name that part; error replies name the specifier as sent.
 #[tokio::test]
 async fn longer_specifiers() {
     let (n, _) = start();
@@ -101,6 +101,9 @@ async fn longer_specifiers() {
     assert!(updates.contains(&"t2:value".to_owned()), "{updates:?}");
     assert!(updates.iter().all(|s| s.starts_with("t2:")), "{updates:?}");
     assert_eq!(c.request("deactivate t2:value").await, "inactive t2");
+    n.update("t2", "value", must_types::Value::Double(3.0))
+        .unwrap();
+    assert_eq!(c.try_line(Duration::from_millis(300)).await, None);
 
     let line = c.request("read t1:value:x").await;
     assert!(line.starts_with("reply t1:value [295.0,"), "{line}");
@@ -111,12 +114,20 @@ async fn longer_specifiers() {
     let plain = c.request("check t1:target 1").await;
     let longer = c.request("check t1:target:x 1").await;
     assert_eq!(longer.split(' ').next(), plain.split(' ').next());
-    assert_eq!(parse(&longer).1, "t1:target");
+    assert_eq!(parse(&longer).1, "t1:target:x");
     assert_eq!(error_class(&longer), error_class(&plain));
-    // the part understood still has to name something
+
+    // the part understood still has to name something, and the error names what was sent
     let line = c.request("read t1:nope:x").await;
-    assert!(line.starts_with("error_read t1:nope "), "{line}");
+    assert!(line.starts_with("error_read t1:nope:x "), "{line}");
     assert_eq!(error_class(&line), "NoSuchParameter");
+    let line = c.request("activate nope:value").await;
+    assert!(line.starts_with("error_activate nope:value "), "{line}");
+    assert_eq!(error_class(&line), "NoSuchModule");
+    // `t1::x` comes down to `t1:`, which names no accessible
+    let line = c.request("read t1::x").await;
+    assert!(line.starts_with("error_read t1::x "), "{line}");
+    assert_eq!(error_class(&line), "ProtocolError");
 }
 
 /// A message is ASCII: other bytes get an error reply and the connection keeps working.

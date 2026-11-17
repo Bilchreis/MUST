@@ -186,6 +186,31 @@ async fn accepted_value() {
     );
 }
 
+/// Compatibility rule 5: `check` of a longer specifier checks its `<module>:<accessible>`
+/// part. The reply names that part; an error names the specifier as sent.
+#[tokio::test]
+async fn longer_specifier() {
+    let checker = Arc::new(Checker::default());
+    let n = start(&checker);
+    let mut c = Client::connect(n.local_addr()).await;
+    let (action, spec, data) = parse(&c.request("check t1:target:x 250").await);
+    assert_eq!((action.as_str(), spec.as_str()), ("checked", "t1:target"));
+    assert_eq!(data[0], json!(250.0));
+    let (action, spec, data) = parse(&c.request("check t1:target:x 280").await);
+    assert_eq!(
+        (action.as_str(), spec.as_str()),
+        ("error_check", "t1:target:x")
+    );
+    assert_eq!(data[0], "Impossible");
+    assert_eq!(
+        checker.checks(),
+        [
+            ("target".to_owned(), Some(Value::Double(250.0))),
+            ("target".to_owned(), Some(Value::Double(280.0))),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn not_checkable() {
     let checker = Arc::new(Checker::default());
