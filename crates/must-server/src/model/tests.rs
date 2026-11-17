@@ -286,6 +286,70 @@ fn property_value_checks() {
     assert_eq!(props, ["timeout", "schemata", "features", "meaning"]);
 }
 
+#[test]
+fn several_problems_at_once() {
+    let e = errors(
+        node()
+            .module(Module::new("a", "").interface_classes(["Readable"]))
+            .unwrap()
+            .module(controller("b").visibility("nope"))
+            .unwrap(),
+    );
+    let paths: Vec<&str> = e.iter().map(|e| e.path.as_str()).collect();
+    assert!(paths.contains(&"a.description"), "{paths:?}");
+    assert!(paths.contains(&"a"), "{paths:?}");
+    assert!(paths.contains(&"b.visibility"), "{paths:?}");
+    let message = BuildError(e).to_string();
+    assert!(message.lines().count() >= 4, "{message}");
+}
+
+// --- 2.3 interface classes and status
+
+#[test]
+fn drivable_without_stop() {
+    let module = Module::new("t1", "x")
+        .interface_classes(["Drivable"])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "s"))
+        .unwrap()
+        .parameter(Parameter::new("target", kelvin(), "t").writable())
+        .unwrap();
+    let k = kinds(node().module(module).unwrap());
+    assert_eq!(
+        k,
+        [ModelErrorKind::InterfaceClass {
+            class: "Drivable".into(),
+            what: "a command `stop`".into()
+        }]
+    );
+    assert!(node().module(controller("t1")).unwrap().build().is_ok());
+}
+
+#[test]
+fn writable_needs_writable_target() {
+    let module = sensor("t1")
+        .interface_classes(["Writable"])
+        .parameter(Parameter::new("target", kelvin(), "t"))
+        .unwrap();
+    let k = kinds(node().module(module).unwrap());
+    assert!(
+        matches!(&k[0], ModelErrorKind::InterfaceClass { what, .. } if what.contains("writable"))
+    );
+}
+
+#[test]
+fn custom_class_before_base_class() {
+    let module = sensor("t1").interface_classes(["_MyHeater", "Readable"]);
+    assert!(node().module(module).unwrap().build().is_ok());
+    let module = Module::new("t1", "x").interface_classes(["Readable"]);
+    assert_eq!(
+        kinds(node().module(module).unwrap()).len(),
+        2,
+        "value and status missing"
+    );
+}
+
 fn go() -> Command {
     Command::new("go", DataInfo::command().build().unwrap(), "start")
 }
@@ -406,70 +470,6 @@ fn communicator_without_communicate_warns() {
         .unwrap();
     let built = node().module(io).unwrap().build().unwrap();
     assert_eq!(built.warnings(), []);
-}
-
-#[test]
-fn several_problems_at_once() {
-    let e = errors(
-        node()
-            .module(Module::new("a", "").interface_classes(["Readable"]))
-            .unwrap()
-            .module(controller("b").visibility("nope"))
-            .unwrap(),
-    );
-    let paths: Vec<&str> = e.iter().map(|e| e.path.as_str()).collect();
-    assert!(paths.contains(&"a.description"), "{paths:?}");
-    assert!(paths.contains(&"a"), "{paths:?}");
-    assert!(paths.contains(&"b.visibility"), "{paths:?}");
-    let message = BuildError(e).to_string();
-    assert!(message.lines().count() >= 4, "{message}");
-}
-
-// --- 2.3 interface classes and status
-
-#[test]
-fn drivable_without_stop() {
-    let module = Module::new("t1", "x")
-        .interface_classes(["Drivable"])
-        .parameter(Parameter::new("value", kelvin(), "v"))
-        .unwrap()
-        .parameter(Parameter::new("status", status_info(), "s"))
-        .unwrap()
-        .parameter(Parameter::new("target", kelvin(), "t").writable())
-        .unwrap();
-    let k = kinds(node().module(module).unwrap());
-    assert_eq!(
-        k,
-        [ModelErrorKind::InterfaceClass {
-            class: "Drivable".into(),
-            what: "a command `stop`".into()
-        }]
-    );
-    assert!(node().module(controller("t1")).unwrap().build().is_ok());
-}
-
-#[test]
-fn writable_needs_writable_target() {
-    let module = sensor("t1")
-        .interface_classes(["Writable"])
-        .parameter(Parameter::new("target", kelvin(), "t"))
-        .unwrap();
-    let k = kinds(node().module(module).unwrap());
-    assert!(
-        matches!(&k[0], ModelErrorKind::InterfaceClass { what, .. } if what.contains("writable"))
-    );
-}
-
-#[test]
-fn custom_class_before_base_class() {
-    let module = sensor("t1").interface_classes(["_MyHeater", "Readable"]);
-    assert!(node().module(module).unwrap().build().is_ok());
-    let module = Module::new("t1", "x").interface_classes(["Readable"]);
-    assert_eq!(
-        kinds(node().module(module).unwrap()).len(),
-        2,
-        "value and status missing"
-    );
 }
 
 #[test]
