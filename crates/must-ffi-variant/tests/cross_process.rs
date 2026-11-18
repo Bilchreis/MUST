@@ -25,9 +25,12 @@ async fn host_process_is_discovered_and_read() {
     let _ = std::fs::remove_dir_all(&registry);
     let logs = std::env::temp_dir().join(format!("must-cross-logs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&logs);
-    let day = |days_ago: u64| {
-        (chrono::Local::now().date_naive() - chrono::Days::new(days_ago))
-            .format("%Y-%m-%d.log")
+    let day = |days_ago: i64| {
+        jiff::ZonedDateTime::now()
+            .date()
+            .checked_sub(jiff::Span::new().days(days_ago))
+            .unwrap()
+            .strftime("%Y-%m-%d.log")
             .to_string()
     };
     let node_logs = logs.join("hostnode_a");

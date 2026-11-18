@@ -4,7 +4,8 @@
 
 use std::fmt::Write as _;
 
-use chrono::{FixedOffset, Local, TimeZone};
+use jiff::Timestamp;
+use jiff::tz::{Offset, TimeZone};
 use must_monitor::protocol::{Direction, NodeState};
 use must_types::DataInfo;
 use ratatui::Frame;
@@ -51,7 +52,7 @@ pub struct Theme {
     /// Use Unicode line drawing.
     pub unicode: bool,
     /// Show times in this offset from UTC instead of the local time zone (for tests).
-    pub offset: Option<FixedOffset>,
+    pub offset: Option<Offset>,
 }
 
 impl Theme {
@@ -779,17 +780,15 @@ fn clients_table(node: &Node, now: f64, theme: Theme) -> Table<'static> {
 fn clock(time: f64, theme: Theme) -> String {
     #[allow(clippy::cast_possible_truncation)]
     let millis = (time * 1000.0).round() as i64;
-    let formatted = match theme.offset {
-        Some(offset) => offset
-            .timestamp_millis_opt(millis)
-            .single()
-            .map(|t| t.format("%H:%M:%S%.3f").to_string()),
-        None => Local
-            .timestamp_millis_opt(millis)
-            .single()
-            .map(|t| t.format("%H:%M:%S%.3f").to_string()),
-    };
-    formatted.unwrap_or_else(|| format!("{time:.3}"))
+    let zone = theme.offset.map_or_else(TimeZone::system, TimeZone::fixed);
+    Timestamp::from_millisecond(millis).map_or_else(
+        |_| format!("{time:.3}"),
+        |t| {
+            t.to_zoned_datetime(zone)
+                .strftime("%H:%M:%S%.3f")
+                .to_string()
+        },
+    )
 }
 
 /// The last `rows` of `lines` before the scroll position (back from the newest).

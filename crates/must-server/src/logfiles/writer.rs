@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveDate};
+use jiff::civil::Date;
+use jiff::{Span, ZonedDateTime};
 
 use super::format::{day_file, parse_day_file};
 use crate::events::LogLevel;
@@ -38,12 +39,12 @@ pub(crate) enum Command {
         days: u32,
         /// For warnings about the node's log.
         hub: Weak<Hub>,
-        today: NaiveDate,
+        today: Date,
     },
     /// Text (one or more complete lines) for the file of `date`.
     Lines {
         node: LogId,
-        date: NaiveDate,
+        date: Date,
         text: String,
     },
     /// The node stopped: flush and close its file, then acknowledge.
@@ -184,7 +185,7 @@ fn run(rx: &Receiver<Command>, queued: &AtomicUsize) {
             next_flush = now + FLUSH_INTERVAL;
         }
         if now >= next_clean {
-            writer.clean_all(Local::now().date_naive());
+            writer.clean_all(ZonedDateTime::now().date());
             next_clean = now + CLEAN_INTERVAL;
         }
     }
@@ -194,7 +195,7 @@ fn run(rx: &Receiver<Command>, queued: &AtomicUsize) {
 
 /// The open file of a node.
 struct OpenFile {
-    date: NaiveDate,
+    date: Date,
     path: PathBuf,
     out: BufWriter<File>,
 }
@@ -206,7 +207,7 @@ struct NodeLog {
     hub: Weak<Hub>,
     file: Option<OpenFile>,
     /// Logging failed for this day; retried with the next day's lines.
-    failed: Option<NaiveDate>,
+    failed: Option<Date>,
     /// The file last announced to the node.
     reported: Option<PathBuf>,
 }
@@ -220,7 +221,7 @@ impl NodeLog {
         }
     }
 
-    fn fail(&mut self, date: NaiveDate, message: &str) {
+    fn fail(&mut self, date: Date, message: &str) {
         self.file = None;
         self.failed = Some(date);
         self.warn(format!("{message}; file logging stops until the next day"));
@@ -237,7 +238,7 @@ impl NodeLog {
         }
     }
 
-    fn write(&mut self, pid: u32, date: NaiveDate, text: &str) {
+    fn write(&mut self, pid: u32, date: Date, text: &str) {
         if self.failed == Some(date) {
             return;
         }
@@ -263,7 +264,7 @@ impl NodeLog {
         }
     }
 
-    fn open(&self, pid: u32, date: NaiveDate) -> Result<OpenFile, String> {
+    fn open(&self, pid: u32, date: Date) -> Result<OpenFile, String> {
         create_dir(&self.folder)
             .map_err(|e| format!("cannot create log directory {}: {e}", self.folder.display()))?;
         let mut path = self.folder.join(day_file(date, None));
@@ -331,8 +332,11 @@ fn create_dir(dir: &Path) -> io::Result<()> {
 
 /// Deletes the log files in `folder` older than `days` days before `today`; leaves files
 /// with other names alone. Returns the deleted names (for tests).
-pub(crate) fn clean(folder: &Path, today: NaiveDate, days: u32) -> Vec<String> {
-    let Some(cutoff) = today.checked_sub_days(chrono::Days::new(u64::from(days))) else {
+pub(crate) fn clean(folder: &Path, today: Date, days: u32) -> Vec<String> {
+    let Ok(cutoff) = Span::new()
+        .try_days(days)
+        .and_then(|span| today.checked_sub(span))
+    else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(folder) else {
@@ -422,7 +426,7 @@ impl Writer {
         }
     }
 
-    pub(crate) fn clean_all(&self, today: NaiveDate) {
+    pub(crate) fn clean_all(&self, today: Date) {
         for log in self.nodes.values() {
             clean(&log.folder, today, log.days);
         }
@@ -456,11 +460,11 @@ mod tests {
         dir
     }
 
-    fn date(d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 10, d).unwrap()
+    fn date(d: i8) -> Date {
+        jiff::civil::date(2026, 10, d)
     }
 
-    fn open(w: &mut Writer, node: LogId, folder: &Path, days: u32, today: NaiveDate) {
+    fn open(w: &mut Writer, node: LogId, folder: &Path, days: u32, today: Date) {
         w.handle(Command::Open {
             node,
             folder: folder.to_owned(),
@@ -470,7 +474,7 @@ mod tests {
         });
     }
 
-    fn lines(w: &mut Writer, node: LogId, d: NaiveDate, text: &str) {
+    fn lines(w: &mut Writer, node: LogId, d: Date, text: &str) {
         w.handle(Command::Lines {
             node,
             date: d,

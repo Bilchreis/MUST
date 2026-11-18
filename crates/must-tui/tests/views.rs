@@ -24,7 +24,7 @@ fn theme() -> Theme {
     Theme {
         color: true,
         unicode: true,
-        offset: chrono::FixedOffset::east_opt(3600),
+        offset: Some(jiff::tz::offset(1)),
     }
 }
 

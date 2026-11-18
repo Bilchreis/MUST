@@ -4,9 +4,11 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt::{Display, Write as _};
+use std::fmt::Write as _;
 
-use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, ZonedDateTime};
 
 use crate::events::{ConnectionId, NodeEvent};
 
@@ -31,15 +33,15 @@ pub(crate) fn node_folder(equipment_id: &str) -> String {
 }
 
 /// `YYYY-MM-DD.log`, or `YYYY-MM-DD-<pid>.log` when another process writes the first.
-pub(crate) fn day_file(date: NaiveDate, pid: Option<u32>) -> String {
+pub(crate) fn day_file(date: Date, pid: Option<u32>) -> String {
     match pid {
-        None => format!("{}.log", date.format("%Y-%m-%d")),
-        Some(pid) => format!("{}-{pid}.log", date.format("%Y-%m-%d")),
+        None => format!("{}.log", date.strftime("%Y-%m-%d")),
+        Some(pid) => format!("{}-{pid}.log", date.strftime("%Y-%m-%d")),
     }
 }
 
 /// The date of a log file name made by [`day_file`]; `None` for any other name.
-pub(crate) fn parse_day_file(name: &str) -> Option<NaiveDate> {
+pub(crate) fn parse_day_file(name: &str) -> Option<Date> {
     let stem = name.strip_suffix(".log")?;
     let (date, pid) = (stem.get(..10)?, stem.get(10..)?);
     if !(pid.is_empty()
@@ -58,15 +60,12 @@ pub(crate) fn parse_day_file(name: &str) -> Option<NaiveDate> {
     }) {
         return None;
     }
-    NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+    Date::strptime("%Y-%m-%d", date).ok()
 }
 
 /// Local time with milliseconds and UTC offset, e.g. `2026-10-27T16:42:10.123+01:00`.
-pub(crate) fn timestamp<Tz: TimeZone>(time: &DateTime<Tz>) -> String
-where
-    Tz::Offset: Display,
-{
-    time.format("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()
+pub(crate) fn timestamp(time: &ZonedDateTime) -> String {
+    time.strftime("%Y-%m-%dT%H:%M:%S%.3f%:z").to_string()
 }
 
 /// The time of a node's lines: the text of [`timestamp`], made once per second, because
@@ -74,31 +73,34 @@ where
 #[derive(Default)]
 pub(crate) struct LineClock {
     second: Option<i64>,
-    date: NaiveDate,
+    date: Date,
     text: String,
 }
 
 impl LineClock {
     /// The current [`timestamp`] and local date.
-    pub(crate) fn now(&mut self) -> (&str, NaiveDate) {
-        self.at(Utc::now(), &Local)
+    pub(crate) fn now(&mut self) -> (&str, Date) {
+        self.at(Timestamp::now(), TimeZone::system)
     }
 
-    fn at<Tz: TimeZone>(&mut self, time: DateTime<Utc>, zone: &Tz) -> (&str, NaiveDate)
-    where
-        Tz::Offset: Display,
-    {
-        let second = time.timestamp();
+    /// `zone` is only asked for when the second changes.
+    fn at(&mut self, time: Timestamp, zone: impl FnOnce() -> TimeZone) -> (&str, Date) {
+        let millis = time.as_millisecond();
+        let second = millis.div_euclid(1000);
         if self.second != Some(second) {
-            let local = time.with_timezone(zone);
+            let local = time.to_zoned_datetime(zone());
             self.text = timestamp(&local);
-            self.date = local.date_naive();
+            self.date = local.date();
             self.second = Some(second);
         }
         // the digits before the offset, which is always `+hh:mm`
         let start = self.text.len() - "123+01:00".len();
-        let millis = time.timestamp_subsec_millis().min(999);
-        #[allow(clippy::cast_possible_truncation, reason = "digits")]
+        let millis = millis.rem_euclid(1000);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "digits of 0..1000"
+        )]
         let digits = [
             b'0' + (millis / 100) as u8,
             b'0' + (millis / 10 % 10) as u8,
@@ -188,7 +190,9 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::Arc;
 
-    use chrono::FixedOffset;
+    use jiff::SignedDuration;
+    use jiff::civil::date;
+    use jiff::tz::offset;
 
     use super::*;
     use crate::events::LogLevel;
@@ -205,7 +209,7 @@ mod tests {
 
     #[test]
     fn day_files() {
-        let date = NaiveDate::from_ymd_opt(2026, 10, 27).unwrap();
+        let date = date(2026, 10, 27);
         assert_eq!(day_file(date, None), "2026-10-27.log");
         assert_eq!(day_file(date, Some(4242)), "2026-10-27-4242.log");
         assert_eq!(parse_day_file("2026-10-27.log"), Some(date));
@@ -224,12 +228,11 @@ mod tests {
         }
     }
 
-    fn at(h: u32, m: u32, s: u32, ms: u32) -> DateTime<FixedOffset> {
-        FixedOffset::east_opt(3600)
+    fn at(h: i8, m: i8, s: i8, ms: i32) -> ZonedDateTime {
+        date(2026, 10, 27)
+            .at(h, m, s, ms * 1_000_000)
+            .to_zoned_datetime(TimeZone::fixed(offset(1)))
             .unwrap()
-            .with_ymd_and_hms(2026, 10, 27, h, m, s)
-            .unwrap()
-            + chrono::Duration::milliseconds(i64::from(ms))
     }
 
     #[test]
@@ -243,19 +246,25 @@ mod tests {
             at(16, 42, 10, 999),
             at(16, 42, 11, 123),
             at(23, 59, 59, 999),
-            at(23, 59, 59, 999) + chrono::Duration::milliseconds(1),
+            at(23, 59, 59, 999)
+                .checked_add(SignedDuration::from_millis(1))
+                .unwrap(),
             at(16, 42, 10, 500),
         ] {
-            let (text, date) = clock.at(time.to_utc(), time.offset());
+            let (text, date) = clock.at(time.timestamp(), || time.time_zone().clone());
             assert_eq!(text, timestamp(&time));
-            assert_eq!(date, time.date_naive());
+            assert_eq!(date, time.date());
         }
-        // the offset changes with the second it applies to
-        let summer = FixedOffset::east_opt(7200).unwrap();
-        let time = at(16, 42, 12, 5).to_utc();
         assert_eq!(
-            clock.at(time, &summer).0,
-            timestamp(&time.with_timezone(&summer))
+            timestamp(&at(16, 42, 10, 0)),
+            "2026-10-27T16:42:10.000+01:00"
+        );
+        // the offset changes with the second it applies to
+        let summer = TimeZone::fixed(offset(2));
+        let time = at(16, 42, 12, 5).timestamp();
+        assert_eq!(
+            clock.at(time, || summer.clone()).0,
+            timestamp(&time.to_zoned_datetime(summer.clone()))
         );
     }
 
