@@ -461,22 +461,54 @@ impl Validator {
         let Some(Accessible::Parameter(status)) = m.accessibles.get("status") else {
             return;
         };
-        let problem = match &status.datainfo {
+        let path = format!("{}:status", m.name);
+        let members = match &status.datainfo {
             DataInfo::Tuple(t) => match t.members() {
-                [DataInfo::Enum(e), DataInfo::String(_)] => e
-                    .members()
-                    .iter()
-                    .find(|(_, v)| !(0..=499).contains(*v))
-                    .map(|(name, v)| format!("code {v} of `{name}` is outside 0..499")),
-                _ => Some("the members are not an enum and a string".to_owned()),
+                [DataInfo::Enum(e), DataInfo::String(_)] => Ok(e.members()),
+                _ => Err("the members are not an enum and a string".to_owned()),
             },
-            other => Some(format!("it is a `{}`", other.type_name())),
+            other => Err(format!("it is a `{}`", other.type_name())),
         };
-        if let Some(problem) = problem {
+        let members = match members {
+            Ok(members) => members,
+            Err(problem) => {
+                self.error(ModelError::new(path, ModelErrorKind::StatusShape(problem)));
+                return;
+            }
+        };
+        if let Some((name, v)) = members.iter().find(|(_, v)| !(0..=499).contains(*v)) {
             self.error(ModelError::new(
-                format!("{}:status", m.name),
-                ModelErrorKind::StatusShape(problem),
+                path.clone(),
+                ModelErrorKind::StatusShape(format!("code {v} of `{name}` is outside 0..499")),
             ));
+        }
+        // The spec leaves status names free; MUST is stricter: a group code (0, 100, …,
+        // 400) must carry its group name, and the other codes of the table "Useful
+        // statuscodes" should carry theirs.
+        for (name, &code) in members {
+            let by_code = STATUS_CODES.iter().find(|(c, ..)| *c == code);
+            let by_name = STATUS_CODES.iter().find(|(_, n, _)| *n == name.as_str());
+            // a group code or name used wrongly is an error, so it goes first
+            let wrong = [by_code, by_name]
+                .into_iter()
+                .flatten()
+                .filter(|&&(c, n, _)| c != code || n != name.as_str())
+                .max_by_key(|&&(.., group)| group);
+            let Some(&(c, n, group)) = wrong else {
+                continue;
+            };
+            let problem = format!("`{name}` = {code}: SECoP names code {c} `{n}`");
+            if group {
+                self.error(ModelError::new(
+                    path.clone(),
+                    ModelErrorKind::StatusShape(problem),
+                ));
+            } else {
+                self.warnings.push(ModelWarning {
+                    path: path.clone(),
+                    message: format!("{problem}, which this overrides"),
+                });
+            }
         }
     }
 
@@ -516,8 +548,8 @@ impl Validator {
     }
 
     /// `controlled_by`, `control_active` and `mode`, whose names SECoP reserves with a
-    /// fixed data type. `controlled_by` is required with "must", so it gives errors; the
-    /// other two are only described, so they give warnings.
+    /// fixed data type. A name without a leading underscore claims the standard meaning,
+    /// so one of another type is an error.
     fn check_predefined(&mut self, m: &Module, module_names: &[&str]) {
         let param = |name: &str| m.accessibles.get(name);
         let path = |name: &str| format!("{}:{name}", m.name);
@@ -564,7 +596,7 @@ impl Validator {
         let checks = [
             (
                 "control_active",
-                "a readonly bool",
+                "a readonly bool parameter",
                 parameter("control_active").is_some_and(|p| {
                     matches!(p.datainfo, DataInfo::Bool(_))
                         && p.props.get("readonly") != Some(&Json::Bool(false))
@@ -572,16 +604,16 @@ impl Validator {
             ),
             (
                 "mode",
-                "an enum",
+                "an enum parameter",
                 parameter("mode").is_some_and(|p| matches!(p.datainfo, DataInfo::Enum(_))),
             ),
         ];
         for (name, what, fits) in checks {
             if param(name).is_some() && !fits {
-                self.warnings.push(ModelWarning {
-                    path: path(name),
-                    message: format!("`{name}` is predefined by SECoP as {what} parameter"),
-                });
+                self.errors.push(ModelError::new(
+                    path(name),
+                    ModelErrorKind::PredefinedAccessible { name, what },
+                ));
             }
         }
     }
@@ -626,3 +658,26 @@ impl Validator {
         }
     }
 }
+
+/// The table "Useful statuscodes" of the SECoP specification: code, name and whether it
+/// is a group code.
+const STATUS_CODES: [(i64, &str, bool); 18] = [
+    (0, "DISABLED", true),
+    (100, "IDLE", true),
+    (130, "STANDBY", false),
+    (150, "PREPARED", false),
+    (200, "WARN", true),
+    (230, "WARN_STANDBY", false),
+    (250, "WARN_PREPARED", false),
+    (300, "BUSY", true),
+    (310, "DISABLING", false),
+    (320, "INITIALIZING", false),
+    (340, "PREPARING", false),
+    (360, "STARTING", false),
+    (370, "RAMPING", false),
+    (380, "STABILIZING", false),
+    (390, "FINALIZING", false),
+    (400, "ERROR", true),
+    (430, "ERROR_STANDBY", false),
+    (450, "ERROR_PREPARED", false),
+];

@@ -121,7 +121,7 @@ pub fn controller(sim: Arc<Sim>) -> Module {
         )
         .unwrap()
         .parameter(
-            Parameter::new("mode", di(json!({"type": "struct", "members": {
+            Parameter::new("_mode", di(json!({"type": "struct", "members": {
                 "a": {"type": "int", "min": 0, "max": 9}, "b": {"type": "int", "min": 0, "max": 9}}})), "mode")
                 .writable(),
         )

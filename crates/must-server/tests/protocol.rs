@@ -37,9 +37,9 @@ async fn crlf_line_ending() {
 async fn data_containing_spaces() {
     let (n, _) = start();
     let mut c = Client::connect(n.local_addr()).await;
-    let line = c.request(r#"change t1:mode {"a": 1, "b": 2}"#).await;
+    let line = c.request(r#"change t1:_mode {"a": 1, "b": 2}"#).await;
     let (action, spec, data) = parse(&line);
-    assert_eq!((action.as_str(), spec.as_str()), ("changed", "t1:mode"));
+    assert_eq!((action.as_str(), spec.as_str()), ("changed", "t1:_mode"));
     assert_eq!(data[0], json!({"a": 1, "b": 2}));
 }
 

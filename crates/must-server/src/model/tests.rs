@@ -446,6 +446,56 @@ fn status_shape() {
     ));
 }
 
+/// A Readable `t1` whose status enum has the given members.
+fn with_status(members: &Json) -> NodeBuilder {
+    let info = di(json!({"type": "tuple", "members": [
+        {"type": "enum", "members": members}, {"type": "string"}]}));
+    let module = Module::new("t1", "x")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("status", info, "s"))
+        .unwrap();
+    node().module(module).unwrap()
+}
+
+#[test]
+fn status_names_of_the_table() {
+    // the table's names, and codes it does not name, are fine
+    let fine = json!({"DISABLED": 0, "IDLE": 100, "STANDBY": 130, "WARN": 200,
+        "BUSY": 300, "RAMPING": 370, "ERROR": 400, "_MINE": 376, "HOLDING": 160});
+    assert_eq!(with_status(&fine).build().unwrap().warnings(), []);
+
+    // a group code or name used otherwise is an error
+    let group = [
+        json!({"idle": 100}),
+        json!({"READY": 100}),
+        json!({"BUSY": 370}),
+        json!({"IDLE": 130}),
+        json!({"ERROR": 450}),
+    ];
+    for members in group {
+        let k = kinds(with_status(&members));
+        assert_eq!(k.len(), 1, "{members}: {k:?}");
+        assert!(
+            matches!(&k[0], ModelErrorKind::StatusShape(_)),
+            "{members}: {k:?}"
+        );
+    }
+
+    // another code or name of the table used otherwise is a warning
+    let others = [
+        json!({"IDLE": 100, "READY": 150}),
+        json!({"IDLE": 100, "PREPARED": 160}),
+        json!({"IDLE": 100, "RAMPING": 360}),
+    ];
+    for members in others {
+        let built = with_status(&members).build().unwrap();
+        let paths: Vec<&str> = built.warnings().iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["t1:status"], "{members}");
+    }
+}
+
 // --- 2.4 postfixes
 
 #[test]
@@ -929,12 +979,12 @@ fn control_active_and_mode() {
         ),
     ];
     for (name, param) in unfitting {
-        let built = node()
-            .module(controller_with("t1", param))
-            .unwrap()
-            .build()
-            .unwrap();
-        assert_eq!(built.warnings().len(), 1, "{name}");
-        assert_eq!(built.warnings()[0].path, format!("t1:{name}"));
+        let e = errors(node().module(controller_with("t1", param)).unwrap());
+        assert_eq!(e.len(), 1, "{name}: {e:?}");
+        assert_eq!(e[0].path, format!("t1:{name}"));
+        assert!(
+            matches!(e[0].kind, ModelErrorKind::PredefinedAccessible { name: n, .. } if n == name),
+            "{name}: {e:?}"
+        );
     }
 }
