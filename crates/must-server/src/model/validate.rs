@@ -253,7 +253,8 @@ impl Validator {
                 }
             }
         }
-        // subsystems: follow the members that name systems
+        // subsystems: follow the members that name systems; a name that is also a module's
+        // is ambiguous and already reported, so it is not followed
         let subsystems = |name: &str| -> Vec<&str> {
             systems
                 .get(name)
@@ -261,7 +262,7 @@ impl Validator {
                 .and_then(Json::as_object)
                 .into_iter()
                 .flat_map(|m| m.values().filter_map(Json::as_str))
-                .filter(|m| systems.contains_key(*m))
+                .filter(|m| systems.contains_key(*m) && !module_names.contains(m))
                 .collect()
         };
         for name in systems.keys() {
