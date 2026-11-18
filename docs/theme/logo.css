@@ -1,0 +1,6 @@
+/* The logo on the first page: dark letters in the light themes, light letters in the
+   dark ones (see logo/README.md). */
+.must-logo { margin-top: 0; }
+.must-logo-dark { display: none; }
+html.coal .must-logo-light, html.navy .must-logo-light, html.ayu .must-logo-light { display: none; }
+html.coal .must-logo-dark, html.navy .must-logo-dark, html.ayu .must-logo-dark { display: inline; }

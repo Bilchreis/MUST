@@ -97,6 +97,12 @@ impl IntInfo {
 
 impl EnumInfo {
     fn decode(&self, json: &Json) -> Result<Value> {
+        // SECoP's compatibility rule 7: a member name stands for its value
+        if let Json::String(name) = json {
+            return self.value_of(name).map(Value::Enum).ok_or_else(|| {
+                ValueError::wrong_type(format!("\"{name}\" is not a member name of the enum"))
+            });
+        }
         let value = decode_integer(json)?;
         if self.name_of(value).is_none() {
             return Err(ValueError::range(format!(

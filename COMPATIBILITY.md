@@ -70,6 +70,11 @@ MUST speaks SECoP 2.0; SHALL spoke SECoP V2019-09-16. Clients that support SECoP
 - **Datainfo** is checked against SECoP 2.0 when the node is complete. SHALL's 1.0-style
   descriptions are still accepted: type names in any case, and `int` without limits
   (published with the range ±2^24).
+- **Status names** follow the SECoP status codes: a group code (0, 100, 200, 300, 400)
+  must be named `DISABLED`, `IDLE`, `WARN`, `BUSY` or `ERROR`, in capitals, and these
+  names cannot be used for other codes, or the node is not completed. A code of the
+  table "Useful statuscodes" with another name (e.g. `"READY": 150` instead of
+  `PREPARED`) gives a warning. SHALL accepted any names.
 - **`visibility`** given as a number (1, 2, 3) is published as `"user"`, `"advanced"`,
   `"expert"`.
 - **Custom properties** without a leading underscore are published under the given

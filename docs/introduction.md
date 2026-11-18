@@ -1,4 +1,7 @@
-# MUST
+<h1 class="must-logo">
+  <img class="must-logo-light" src="logo/must-logo.svg" alt="MUST" width="260">
+  <img class="must-logo-dark" src="logo/must-logo-dark.svg" alt="MUST" width="260">
+</h1>
 
 MUST is a Rust rewrite of [SHALL](https://github.com/SampleEnvironment/SHALL), the
 SECoP hardware abstraction layer. It lets existing programs, drivers and LabVIEW code

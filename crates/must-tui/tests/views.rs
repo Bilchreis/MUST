@@ -267,6 +267,21 @@ fn overview_several_hosts() {
 }
 
 #[test]
+fn empty_overview_shows_the_logo() {
+    let app = App::new(NOW, None);
+    insta::assert_snapshot!("overview_empty", screen(&app, 60, 12));
+    let colored = terminal(&app, 60, 10, theme());
+    assert_eq!(colors_of(&colored, "▀▀▀▀")[0], Color::Indexed(202));
+    let plain = Theme {
+        unicode: false,
+        ..no_color()
+    };
+    let ascii = terminal(&app, 60, 10, plain).backend().to_string();
+    assert!(ascii.contains("=====") && ascii.contains("MUST"), "{ascii}");
+    assert!(ascii.is_ascii(), "{ascii}");
+}
+
+#[test]
 fn overview_states_contexts_and_status_colors() {
     let app = app();
     let shown = screen(&app, 100, 20);

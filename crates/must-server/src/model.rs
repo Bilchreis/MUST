@@ -171,6 +171,14 @@ pub enum ModelErrorKind {
     /// The module's or a parameter's poll settings are invalid.
     #[error("{0}")]
     Polling(&'static str),
+    /// An accessible whose name SECoP reserves is declared another way.
+    #[error("`{name}` is predefined by SECoP and must be {what}")]
+    PredefinedAccessible {
+        /// The accessible name.
+        name: &'static str,
+        /// What SECoP requires of it.
+        what: &'static str,
+    },
 }
 
 impl ModelError {
@@ -662,6 +670,11 @@ impl Parameter {
 
     /// Declares the parameter constant with the given value (JSON, checked against the
     /// datainfo). It is answered without calling the handler and never changes.
+    ///
+    /// SECoP says a constant "can neither be read nor written". A `read` is still answered
+    /// with the constant and the current time, as Frappy does: the specification names no
+    /// error for it, and the reply is harmless. A `change` fails with `ReadOnly`, and
+    /// constants are not sent after `activate`.
     pub fn constant(mut self, value: impl Into<Json>) -> Self {
         self.props.set("constant", value.into());
         self

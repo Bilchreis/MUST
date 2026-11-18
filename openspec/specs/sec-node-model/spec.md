@@ -60,6 +60,16 @@ The library SHALL require module, accessible and property names to be valid iden
 ### Requirement: Property values
 The library SHALL check SECoP-defined property values: `visibility` must be one of the new-style or old-style values listed by the spec, `interface_classes` and `features` must be lists of strings, `timeout` a positive number, and `meaning` an object.
 
+`meaning`, of a module or an accessible, SHALL be checked against the specification's rules: `function`, `belongs_to`, `link` and `key` are strings, `importance` is an integer from 0 to 50; the object contains `function` or `link`; `importance` and `function` come together; `belongs_to` needs `function`; and `key` needs `link`. These allow exactly the eight key combinations the specification lists. Any `function` and `belongs_to` string SHALL be accepted, since both lists are open. Other keys SHALL be reported as completion warnings unless they start with `_`. SECoP 1.0's tuple form `[name, importance]` SHALL be rejected.
+
+#### Scenario: Importance without function
+- **WHEN** a module has `meaning` `{"importance": 20}`
+- **THEN** completion fails with an error for `meaning`
+
+#### Scenario: Meaning with a link only
+- **WHEN** a parameter has `meaning` `{"link": "https://w3id.org/nfdi4cat/voc4cat_0000051"}`
+- **THEN** it is accepted
+
 #### Scenario: Invalid visibility
 - **WHEN** a parameter has `visibility` `"wxw"`
 - **THEN** completion fails with an error naming the visibility value
@@ -81,6 +91,12 @@ The library SHALL accept in `interface_classes` only the SECoP 2.0 interface cla
 
 ### Requirement: Interface class rules
 The library SHALL check the module's base class (the last entry of `interface_classes`): `Readable` needs parameters `value` and `status`; `Writable` additionally a writable `target`; `Drivable` additionally a `stop` command.
+
+It SHALL also check the acquisition classes wherever they appear in `interface_classes`: `AcquisitionController` needs a parameter `status`, a command `go` and the module property `acquisition_channels`; `AcquisitionChannel` needs parameters `value` and `status`; `Acquisition` needs `value`, `status` and `go` and must not have `acquisition_channels`. Each value of `acquisition_channels` SHALL name a module of the node. A `Communicator` without a command `communicate` SHALL be reported as a completion warning, since the specification says it should have one but does not require it.
+
+#### Scenario: Acquisition controller without go
+- **WHEN** a module with `interface_classes` `["AcquisitionController"]` has `status` and `acquisition_channels` but no `go`
+- **THEN** completion fails with an error naming the missing command `go`
 
 #### Scenario: Drivable without stop
 - **WHEN** a module with `interface_classes` `["Drivable"]` has `value`, `status` and `target` but no `stop`
@@ -107,6 +123,32 @@ The library SHALL require a `status` parameter to be a tuple of an enum (all mem
 #### Scenario: Status code out of range
 - **WHEN** the status enum contains a member with value 500
 - **THEN** completion fails
+
+### Requirement: Status names of the specification
+The library SHALL reject a status enum member whose code is a group code of the specification (0 `DISABLED`, 100 `IDLE`, 200 `WARN`, 300 `BUSY`, 400 `ERROR`) with another name, or whose name is a group name with another code. It SHALL report as a completion warning a member that gives another code of the table "Useful statuscodes" (such as 130 `STANDBY` or 370 `RAMPING`) another name, or one of its names another code. This is stricter than the specification, which leaves the names free, so that a client reading the names sees the meaning the codes have.
+
+#### Scenario: Group code with another name
+- **WHEN** the status enum contains the member `"READY": 100`
+- **THEN** completion fails with an error for `status`
+
+#### Scenario: Table code with another name
+- **WHEN** the status enum contains the members `"IDLE": 100` and `"READY": 150`
+- **THEN** completion succeeds with a warning for `status`
+
+#### Scenario: Code the table does not name
+- **WHEN** the status enum contains the members `"IDLE": 100` and `"HOLDING": 160`
+- **THEN** completion succeeds without a warning
+
+### Requirement: Predefined accessibles with a fixed data type
+The library SHALL reject a `controlled_by` that is not a readonly enum parameter with the member `self` = 0, and SHALL report as a completion warning a member of it that names no module of the node (it may name a module of another SEC node). It SHALL also reject a `control_active` that is not a readonly `bool` parameter and a `mode` that is not an enum parameter: a name without a leading underscore claims the meaning SECoP gives it.
+
+#### Scenario: controlled_by without self
+- **WHEN** a module has a parameter `controlled_by` with datainfo `{"type": "enum", "members": {"t2": 0}}`
+- **THEN** completion fails with an error for `controlled_by`
+
+#### Scenario: mode of another type
+- **WHEN** a module has a parameter `mode` with datainfo `{"type": "string"}`
+- **THEN** completion fails with an error for `mode`
 
 ### Requirement: Module-level postfix rules
 The library SHALL require a postfixed parameter (`_min`, `_max`, `_limits`, `_enable`) to have its parent parameter in the same module with a matching datainfo, and SHALL reject a module that has both `<p>_limits` and `<p>_min` or `<p>_max` for the same parent.

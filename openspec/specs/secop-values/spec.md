@@ -82,11 +82,19 @@ The library SHALL accept, when decoding a `double`, `scaled` or `int` value in r
 - **THEN** decoding fails with a `RangeError`
 
 ### Requirement: Enum values
-The library SHALL accept an enum value only if it equals one of the member values, in both modes.
+The library SHALL accept an enum value only if it equals one of the member values, in both modes. It SHALL also accept a string that is one of the member names, as that member's value (SECoP compatibility rule 7), and SHALL encode enum values as integers.
 
 #### Scenario: Unknown member value
 - **WHEN** `250` is decoded against `{"type": "enum", "members": {"IDLE": 100, "BUSY": 300}}`
 - **THEN** decoding fails with a `RangeError`
+
+#### Scenario: Member name
+- **WHEN** `"BUSY"` is decoded against `{"type": "enum", "members": {"IDLE": 100, "BUSY": 300}}`
+- **THEN** the value is 300
+
+#### Scenario: String that is no member name
+- **WHEN** `"NOPE"` is decoded against `{"type": "enum", "members": {"IDLE": 100, "BUSY": 300}}`
+- **THEN** decoding fails with a `WrongType`
 
 ### Requirement: Boolean values
 The library SHALL decode `bool` only from JSON `true` or `false`.

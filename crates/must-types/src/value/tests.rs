@@ -108,9 +108,24 @@ fn enum_values() {
         class_of(e.decode(&json!(250), Mode::Request)),
         ErrorClass::RangeError
     );
+    // a member name stands for its value, in both modes
     assert_eq!(
-        class_of(e.decode(&json!("IDLE"), Mode::Request)),
+        e.decode(&json!("BUSY"), Mode::Request),
+        Ok(Value::Enum(300))
+    );
+    assert_eq!(e.decode(&json!("IDLE"), Mode::Report), Ok(Value::Enum(100)));
+    assert_eq!(
+        class_of(e.decode(&json!("NOPE"), Mode::Request)),
         ErrorClass::WrongType
+    );
+    // and is sent as the integer
+    assert_eq!(e.encode(&Value::Enum(300)), Ok(json!(300)));
+    // also inside other types
+    let a = info(json!({"type": "array", "minlen": 0, "maxlen": 3,
+        "members": {"type": "enum", "members": {"IDLE": 100, "BUSY": 300}}}));
+    assert_eq!(
+        a.decode(&json!([100, "BUSY"]), Mode::Request),
+        Ok(Value::Array(vec![Value::Enum(100), Value::Enum(300)]))
     );
 }
 

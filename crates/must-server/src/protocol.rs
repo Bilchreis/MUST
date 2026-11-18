@@ -165,6 +165,27 @@ pub(crate) fn parse_request(line: &str) -> Request<'_> {
     }
 }
 
+// SECoP's compatibility rule 5: of a specifier with more `:` parts than the action takes,
+// use the part understood and ignore the rest (`activate m:p` is `activate m`). A
+// specifier starting with `:` is left alone, so it still gets its error. Replies name the
+// part used; error replies name the specifier as sent.
+
+/// `<module>` of `<module>:<anything>`.
+pub(crate) fn module_part(specifier: &str) -> &str {
+    match specifier.split_once(':') {
+        Some((module, _)) if !module.is_empty() => module,
+        _ => specifier,
+    }
+}
+
+/// `<module>:<accessible>` of `<module>:<accessible>:<anything>`.
+pub(crate) fn accessible_part(specifier: &str) -> &str {
+    match specifier.match_indices(':').nth(1) {
+        Some((end, _)) if !specifier.starts_with(':') => &specifier[..end],
+        _ => specifier,
+    }
+}
+
 /// Splits `<module>:<accessible>`.
 pub(crate) fn split_specifier(specifier: &str) -> Option<(&str, &str)> {
     specifier

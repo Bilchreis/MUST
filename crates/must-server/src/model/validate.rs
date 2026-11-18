@@ -268,8 +268,10 @@ impl Validator {
             }
         }
         self.check_interface_classes(m);
+        self.check_acquisition_classes(m, module_names);
         self.check_status(m);
         self.check_postfixes(m);
+        self.check_predefined(m, module_names);
         self.check_polling(m);
     }
 
@@ -326,10 +328,8 @@ impl Validator {
                 format!("{v} is not a SECoP visibility like \"www\", \"wr-\" or \"expert\""),
             ));
         }
-        if let Some(meaning) = p.get("meaning")
-            && !meaning.is_object()
-        {
-            self.error(ModelError::property(path, "meaning", "must be an object"));
+        if let Some(meaning) = p.get("meaning") {
+            self.check_meaning(meaning, path);
         }
         self.check_string(p, path, "group");
         if let Some(group) = p.str("group") {
@@ -344,6 +344,67 @@ impl Validator {
                         },
                     ));
                 }
+            }
+        }
+    }
+
+    /// `meaning` of a module or an accessible: the key types and the key combinations of
+    /// the specification. Any `function` and `belongs_to` string is accepted, since both
+    /// lists are open.
+    fn check_meaning(&mut self, meaning: &Json, path: &str) {
+        let Some(m) = meaning.as_object() else {
+            return self.error(ModelError::property(path, "meaning", "must be an object"));
+        };
+        for (key, value) in m {
+            let valid = match key.as_str() {
+                "function" | "belongs_to" | "link" | "key" => value.is_string(),
+                "importance" => value.as_u64().is_some_and(|i| i <= 50),
+                _ => {
+                    if !key.starts_with('_') {
+                        self.warnings.push(ModelWarning {
+                            path: format!("{path}.meaning").trim_start_matches('.').to_owned(),
+                            message: format!("`{key}` is not a key of SECoP's `meaning`"),
+                        });
+                    }
+                    continue;
+                }
+            };
+            if !valid {
+                let expected = if key == "importance" {
+                    "an integer from 0 to 50"
+                } else {
+                    "a string"
+                };
+                self.error(ModelError::property(
+                    path,
+                    "meaning",
+                    format!("`{key}` must be {expected}"),
+                ));
+            }
+        }
+        let has = |key| m.contains_key(key);
+        let rules = [
+            (
+                !has("function") && !has("link"),
+                "must contain `function` or `link`",
+            ),
+            (
+                has("function") && !has("importance"),
+                "`function` needs `importance`",
+            ),
+            (
+                has("importance") && !has("function"),
+                "`importance` needs `function`",
+            ),
+            (
+                has("belongs_to") && !has("function"),
+                "`belongs_to` needs `function`",
+            ),
+            (has("key") && !has("link"), "`key` needs `link`"),
+        ];
+        for (broken, reason) in rules {
+            if broken {
+                self.error(ModelError::property(path, "meaning", reason));
             }
         }
     }
@@ -456,26 +517,139 @@ impl Validator {
         }
     }
 
+    /// The acquisition classes and `Communicator`, wherever they are in
+    /// `interface_classes`: `AcquisitionChannel` and `Acquisition` come before `Readable`,
+    /// which is the base class then.
+    fn check_acquisition_classes(&mut self, m: &Module, module_names: &[&str]) {
+        let classes: Vec<&str> = m
+            .props
+            .get("interface_classes")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .collect();
+        let has = |name: &str| matches!(m.accessibles.get(name), Some(Accessible::Parameter(_)));
+        let command = |name: &str| matches!(m.accessibles.get(name), Some(Accessible::Command(_)));
+        let channels = m.props.get("acquisition_channels");
+        for class in classes {
+            let mut what = Vec::new();
+            match class {
+                "AcquisitionController" => {
+                    if !has("status") {
+                        what.push("a parameter `status`");
+                    }
+                    if !command("go") {
+                        what.push("a command `go`");
+                    }
+                    if channels.is_none() {
+                        what.push("the module property `acquisition_channels`");
+                    }
+                }
+                "AcquisitionChannel" | "Acquisition" => {
+                    for (name, needed) in [
+                        ("value", "a parameter `value`"),
+                        ("status", "a parameter `status`"),
+                    ] {
+                        if !has(name) {
+                            what.push(needed);
+                        }
+                    }
+                    if class == "Acquisition" {
+                        if !command("go") {
+                            what.push("a command `go`");
+                        }
+                        if channels.is_some() {
+                            what.push("no module property `acquisition_channels`");
+                        }
+                    }
+                }
+                // "should", not "must": `communicate` is meant for Communicators
+                "Communicator" if !command("communicate") => {
+                    self.warnings.push(ModelWarning {
+                        path: m.name.clone(),
+                        message: "a `Communicator` should have a command `communicate`".into(),
+                    });
+                }
+                _ => {}
+            }
+            for what in what {
+                self.errors.push(ModelError::new(
+                    m.name.clone(),
+                    ModelErrorKind::InterfaceClass {
+                        class: class.to_owned(),
+                        what: what.to_owned(),
+                    },
+                ));
+            }
+        }
+        // the channels are modules of this node
+        let names = channels.and_then(Json::as_object).into_iter().flatten();
+        for (role, channel) in names {
+            if let Some(channel) = channel.as_str()
+                && !module_names.contains(&channel)
+            {
+                self.error(ModelError::property(
+                    &m.name,
+                    "acquisition_channels",
+                    format!("`{role}` names `{channel}`, which is no module of this node"),
+                ));
+            }
+        }
+    }
+
     fn check_status(&mut self, m: &Module) {
         let Some(Accessible::Parameter(status)) = m.accessibles.get("status") else {
             return;
         };
-        let problem = match &status.datainfo {
+        let path = format!("{}:status", m.name);
+        let members = match &status.datainfo {
             DataInfo::Tuple(t) => match t.members() {
-                [DataInfo::Enum(e), DataInfo::String(_)] => e
-                    .members()
-                    .iter()
-                    .find(|(_, v)| !(0..=499).contains(*v))
-                    .map(|(name, v)| format!("code {v} of `{name}` is outside 0..499")),
-                _ => Some("the members are not an enum and a string".to_owned()),
+                [DataInfo::Enum(e), DataInfo::String(_)] => Ok(e.members()),
+                _ => Err("the members are not an enum and a string".to_owned()),
             },
-            other => Some(format!("it is a `{}`", other.type_name())),
+            other => Err(format!("it is a `{}`", other.type_name())),
         };
-        if let Some(problem) = problem {
+        let members = match members {
+            Ok(members) => members,
+            Err(problem) => {
+                self.error(ModelError::new(path, ModelErrorKind::StatusShape(problem)));
+                return;
+            }
+        };
+        if let Some((name, v)) = members.iter().find(|(_, v)| !(0..=499).contains(*v)) {
             self.error(ModelError::new(
-                format!("{}:status", m.name),
-                ModelErrorKind::StatusShape(problem),
+                path.clone(),
+                ModelErrorKind::StatusShape(format!("code {v} of `{name}` is outside 0..499")),
             ));
+        }
+        // The spec leaves status names free; MUST is stricter: a group code (0, 100, …,
+        // 400) must carry its group name, and the other codes of the table "Useful
+        // statuscodes" should carry theirs.
+        for (name, &code) in members {
+            let by_code = STATUS_CODES.iter().find(|(c, ..)| *c == code);
+            let by_name = STATUS_CODES.iter().find(|(_, n, _)| *n == name.as_str());
+            // a group code or name used wrongly is an error, so it goes first
+            let wrong = [by_code, by_name]
+                .into_iter()
+                .flatten()
+                .filter(|&&(c, n, _)| c != code || n != name.as_str())
+                .max_by_key(|&&(.., group)| group);
+            let Some(&(c, n, group)) = wrong else {
+                continue;
+            };
+            let problem = format!("`{name}` = {code}: SECoP names code {c} `{n}`");
+            if group {
+                self.error(ModelError::new(
+                    path.clone(),
+                    ModelErrorKind::StatusShape(problem),
+                ));
+            } else {
+                self.warnings.push(ModelWarning {
+                    path: path.clone(),
+                    message: format!("{problem}, which this overrides"),
+                });
+            }
         }
     }
 
@@ -510,6 +684,77 @@ impl Validator {
                         ));
                     }
                 }
+            }
+        }
+    }
+
+    /// `controlled_by`, `control_active` and `mode`, whose names SECoP reserves with a
+    /// fixed data type. A name without a leading underscore claims the standard meaning,
+    /// so one of another type is an error.
+    fn check_predefined(&mut self, m: &Module, module_names: &[&str]) {
+        let param = |name: &str| m.accessibles.get(name);
+        let path = |name: &str| format!("{}:{name}", m.name);
+        if let Some(accessible) = param("controlled_by") {
+            let mut wrong = |what| {
+                self.errors.push(ModelError::new(
+                    path("controlled_by"),
+                    ModelErrorKind::PredefinedAccessible {
+                        name: "controlled_by",
+                        what,
+                    },
+                ));
+            };
+            match accessible {
+                Accessible::Command(_) => wrong("a readonly enum parameter"),
+                Accessible::Parameter(p) => {
+                    if p.props.get("readonly") == Some(&Json::Bool(false)) {
+                        wrong("readonly");
+                    }
+                    match &p.datainfo {
+                        DataInfo::Enum(e) if e.value_of("self") == Some(0) => {
+                            let others = e.members().keys().filter(|n| *n != "self");
+                            for other in others {
+                                if !module_names.contains(&other.as_str()) {
+                                    self.warnings.push(ModelWarning {
+                                        path: path("controlled_by"),
+                                        message: format!(
+                                            "member `{other}` is no module of this node"
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        DataInfo::Enum(_) => wrong("an enum with the member `self` = 0"),
+                        _ => wrong("an enum of module names and `self` = 0"),
+                    }
+                }
+            }
+        }
+        let parameter = |name| match param(name) {
+            Some(Accessible::Parameter(p)) => Some(p),
+            _ => None,
+        };
+        let checks = [
+            (
+                "control_active",
+                "a readonly bool parameter",
+                parameter("control_active").is_some_and(|p| {
+                    matches!(p.datainfo, DataInfo::Bool(_))
+                        && p.props.get("readonly") != Some(&Json::Bool(false))
+                }),
+            ),
+            (
+                "mode",
+                "an enum parameter",
+                parameter("mode").is_some_and(|p| matches!(p.datainfo, DataInfo::Enum(_))),
+            ),
+        ];
+        for (name, what, fits) in checks {
+            if param(name).is_some() && !fits {
+                self.errors.push(ModelError::new(
+                    path(name),
+                    ModelErrorKind::PredefinedAccessible { name, what },
+                ));
             }
         }
     }
@@ -554,3 +799,26 @@ impl Validator {
         }
     }
 }
+
+/// The table "Useful statuscodes" of the SECoP specification: code, name and whether it
+/// is a group code.
+const STATUS_CODES: [(i64, &str, bool); 18] = [
+    (0, "DISABLED", true),
+    (100, "IDLE", true),
+    (130, "STANDBY", false),
+    (150, "PREPARED", false),
+    (200, "WARN", true),
+    (230, "WARN_STANDBY", false),
+    (250, "WARN_PREPARED", false),
+    (300, "BUSY", true),
+    (310, "DISABLING", false),
+    (320, "INITIALIZING", false),
+    (340, "PREPARING", false),
+    (360, "STARTING", false),
+    (370, "RAMPING", false),
+    (380, "STABILIZING", false),
+    (390, "FINALIZING", false),
+    (400, "ERROR", true),
+    (430, "ERROR_STANDBY", false),
+    (450, "ERROR_PREPARED", false),
+];

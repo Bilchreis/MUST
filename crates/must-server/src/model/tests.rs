@@ -286,6 +286,90 @@ fn property_value_checks() {
     assert_eq!(props, ["timeout", "schemata", "features", "meaning"]);
 }
 
+/// A module and its `value`, both with the same `meaning`.
+fn with_meaning(meaning: &Json) -> NodeBuilder {
+    let module = Module::new("t1", "a temperature sensor")
+        .interface_classes(["Readable"])
+        .property("meaning", meaning.clone())
+        .unwrap()
+        .parameter(
+            Parameter::new("value", kelvin(), "temperature")
+                .property("meaning", meaning.clone())
+                .unwrap(),
+        )
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap();
+    node().module(module).unwrap()
+}
+
+#[test]
+fn meaning_combinations_of_the_specification() {
+    let allowed = [
+        "function importance belongs_to",
+        "function importance",
+        "key link",
+        "link",
+        "function importance link",
+        "function importance key link",
+        "function importance belongs_to link",
+        "function importance belongs_to key link",
+    ];
+    for keys in allowed {
+        let meaning: serde_json::Map<String, Json> = keys
+            .split(' ')
+            .map(|key| {
+                let value = if key == "importance" {
+                    json!(20)
+                } else {
+                    json!("x")
+                };
+                (key.to_owned(), value)
+            })
+            .collect();
+        let node = with_meaning(&Json::Object(meaning)).build().unwrap();
+        assert_eq!(node.warnings(), [], "{keys:?}");
+    }
+    // an unknown function and belongs_to are fine: both lists are open
+    let open = json!({"function": "_mine_regulation", "importance": 0, "belongs_to": "x"});
+    assert!(with_meaning(&open).build().is_ok());
+}
+
+#[test]
+fn invalid_meanings() {
+    let invalid = [
+        json!({}),
+        json!({"importance": 20}),
+        json!({"key": "k"}),
+        json!({"function": "temperature", "importance": 99}),
+        json!({"function": "temperature", "importance": -1}),
+        json!({"function": "temperature"}),
+        json!({"link": "https://w3id.org/x", "belongs_to": "sample"}),
+        json!({"function": 3, "importance": "x"}),
+        json!({"link": 1}),
+        json!(["temperature", 10]),
+    ];
+    for meaning in invalid {
+        let e = errors(with_meaning(&meaning));
+        let paths: Vec<&str> = e.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"t1.meaning"), "{meaning}: {paths:?}");
+        assert!(paths.contains(&"t1:value.meaning"), "{meaning}: {paths:?}");
+        assert!(
+            e.iter().all(|e| matches!(&e.kind,
+                ModelErrorKind::InvalidProperty { property, .. } if property == "meaning")),
+            "{meaning}: {e:?}"
+        );
+    }
+}
+
+#[test]
+fn unknown_meaning_key_warns() {
+    let meaning = json!({"link": "https://w3id.org/x", "colour": "red", "_mine": 1});
+    let node = with_meaning(&meaning).build().unwrap();
+    let paths: Vec<&str> = node.warnings().iter().map(|w| w.path.as_str()).collect();
+    assert_eq!(paths, ["t1.meaning", "t1:value.meaning"]);
+}
+
 #[test]
 fn several_problems_at_once() {
     let e = errors(
@@ -350,6 +434,128 @@ fn custom_class_before_base_class() {
     );
 }
 
+fn go() -> Command {
+    Command::new("go", DataInfo::command().build().unwrap(), "start")
+}
+
+/// A module with `value` and `status` and the given classes.
+fn acquisition(name: &str, classes: &[&str]) -> Module {
+    Module::new(name, "an acquisition module")
+        .interface_classes(classes.iter().copied())
+        .parameter(Parameter::new("value", kelvin(), "counts"))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap()
+}
+
+/// What each `InterfaceClass` error of a failed build requires.
+fn class_requirements(builder: NodeBuilder) -> Vec<(String, String)> {
+    kinds(builder)
+        .into_iter()
+        .filter_map(|k| match k {
+            ModelErrorKind::InterfaceClass { class, what } => Some((class, what)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn acquisition_classes() {
+    let controller = Module::new("ctrl", "a controller")
+        .interface_classes(["AcquisitionController"])
+        .property("acquisition_channels", json!({"t": "timer"}))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap()
+        .command(go())
+        .unwrap();
+    let channel = acquisition("timer", &["AcquisitionChannel", "Readable"]);
+    let single = acquisition("single", &["Acquisition", "Readable"])
+        .command(go())
+        .unwrap();
+    let built = node()
+        .module(controller)
+        .unwrap()
+        .module(channel)
+        .unwrap()
+        .module(single)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings(), []);
+
+    // a controller without status, go and acquisition_channels
+    let bare = Module::new("ctrl", "a controller").interface_classes(["AcquisitionController"]);
+    let reqs = class_requirements(node().module(bare).unwrap());
+    let reqs: Vec<&str> = reqs.iter().map(|(_, what)| what.as_str()).collect();
+    assert_eq!(
+        reqs,
+        [
+            "a parameter `status`",
+            "a command `go`",
+            "the module property `acquisition_channels`"
+        ]
+    );
+
+    // a channel without value or status (checked even though `Readable` would be too)
+    let channel = Module::new("ch", "a channel").interface_classes(["AcquisitionChannel"]);
+    let reqs = class_requirements(node().module(channel).unwrap());
+    assert_eq!(reqs.len(), 2, "{reqs:?}");
+    assert!(reqs.iter().all(|(class, _)| class == "AcquisitionChannel"));
+
+    // an Acquisition without go, and with acquisition_channels
+    let single = acquisition("single", &["Acquisition", "Readable"])
+        .property("acquisition_channels", json!({"t": "single"}))
+        .unwrap();
+    let reqs = class_requirements(node().module(single).unwrap());
+    let reqs: Vec<&str> = reqs.iter().map(|(_, what)| what.as_str()).collect();
+    assert_eq!(
+        reqs,
+        [
+            "a command `go`",
+            "no module property `acquisition_channels`"
+        ]
+    );
+}
+
+#[test]
+fn acquisition_channels_name_modules_of_the_node() {
+    let controller = Module::new("ctrl", "a controller")
+        .interface_classes(["AcquisitionController"])
+        .property("acquisition_channels", json!({"t": "timer", "m": "nope"}))
+        .unwrap()
+        .parameter(Parameter::new("status", status_info(), "status"))
+        .unwrap()
+        .command(go())
+        .unwrap();
+    let channel = acquisition("timer", &["AcquisitionChannel", "Readable"]);
+    let e = errors(node().module(controller).unwrap().module(channel).unwrap());
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert_eq!(e[0].path, "ctrl.acquisition_channels");
+    assert!(e[0].to_string().contains("`nope`"), "{}", e[0]);
+}
+
+#[test]
+fn communicator_without_communicate_warns() {
+    let bare = Module::new("io", "serial line").interface_classes(["Communicator"]);
+    let built = node().module(bare).unwrap().build().unwrap();
+    assert_eq!(built.warnings().len(), 1);
+    assert_eq!(built.warnings()[0].path, "io");
+
+    let string = DataInfo::string().build().unwrap();
+    let communicate = DataInfo::command()
+        .argument(&string)
+        .result(&string)
+        .build()
+        .unwrap();
+    let io = Module::new("io", "serial line")
+        .interface_classes(["Communicator"])
+        .command(Command::new("communicate", communicate, "send and receive"))
+        .unwrap();
+    let built = node().module(io).unwrap().build().unwrap();
+    assert_eq!(built.warnings(), []);
+}
+
 #[test]
 fn non_standard_class_without_underscore() {
     let module = sensor("t1").interface_classes(["MyHeater", "Readable"]);
@@ -361,10 +567,16 @@ fn non_standard_class_without_underscore() {
         ModelErrorKind::UnknownInterfaceClass("MyHeater".into())
     );
     assert!(e[0].to_string().contains("`_MyHeater`"), "{}", e[0]);
-    // every SECoP 2.0 class is accepted
+    // every SECoP 2.0 class name is known (the acquisition classes need more accessibles)
     for class in INTERFACE_CLASSES {
         let module = sensor("t1").interface_classes([*class, "Readable"]);
-        assert!(node().module(module).unwrap().build().is_ok(), "{class}");
+        if let Err(BuildError(e)) = node().module(module).unwrap().build() {
+            assert!(
+                e.iter()
+                    .all(|e| !matches!(e.kind, ModelErrorKind::UnknownInterfaceClass(_))),
+                "{class}: {e:?}"
+            );
+        }
     }
 }
 
@@ -444,6 +656,56 @@ fn status_shape() {
         kinds(node().module(module).unwrap())[0],
         ModelErrorKind::StatusShape(_)
     ));
+}
+
+/// A Readable `t1` whose status enum has the given members.
+fn with_status(members: &Json) -> NodeBuilder {
+    let info = di(json!({"type": "tuple", "members": [
+        {"type": "enum", "members": members}, {"type": "string"}]}));
+    let module = Module::new("t1", "x")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("status", info, "s"))
+        .unwrap();
+    node().module(module).unwrap()
+}
+
+#[test]
+fn status_names_of_the_table() {
+    // the table's names, and codes it does not name, are fine
+    let fine = json!({"DISABLED": 0, "IDLE": 100, "STANDBY": 130, "WARN": 200,
+        "BUSY": 300, "RAMPING": 370, "ERROR": 400, "_MINE": 376, "HOLDING": 160});
+    assert_eq!(with_status(&fine).build().unwrap().warnings(), []);
+
+    // a group code or name used otherwise is an error
+    let group = [
+        json!({"idle": 100}),
+        json!({"READY": 100}),
+        json!({"BUSY": 370}),
+        json!({"IDLE": 130}),
+        json!({"ERROR": 450}),
+    ];
+    for members in group {
+        let k = kinds(with_status(&members));
+        assert_eq!(k.len(), 1, "{members}: {k:?}");
+        assert!(
+            matches!(&k[0], ModelErrorKind::StatusShape(_)),
+            "{members}: {k:?}"
+        );
+    }
+
+    // another code or name of the table used otherwise is a warning
+    let others = [
+        json!({"IDLE": 100, "READY": 150}),
+        json!({"IDLE": 100, "PREPARED": 160}),
+        json!({"IDLE": 100, "RAMPING": 360}),
+    ];
+    for members in others {
+        let built = with_status(&members).build().unwrap();
+        let paths: Vec<&str> = built.warnings().iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["t1:status"], "{members}");
+    }
 }
 
 // --- 2.4 postfixes
@@ -829,4 +1091,112 @@ fn integer_pollinterval_is_ordinary() {
 fn discovery_is_on_by_default() {
     let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
     assert!(node.model.options.discovery.is_enabled());
+}
+
+// --- predefined accessibles with a fixed data type
+
+fn enum_info(members: &Json) -> DataInfo {
+    di(json!({"type": "enum", "members": members}))
+}
+
+/// A Drivable `name` with the extra parameter.
+fn controller_with(name: &str, extra: Parameter) -> Module {
+    controller(name).parameter(extra).unwrap()
+}
+
+#[test]
+fn controlled_by() {
+    let good = Parameter::new(
+        "controlled_by",
+        enum_info(&json!({"self": 0, "t2": 1})),
+        "who controls t1",
+    );
+    let built = node()
+        .module(controller_with("t1", good))
+        .unwrap()
+        .module(controller("t2"))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings(), []);
+
+    let bad = [
+        Parameter::new("controlled_by", DataInfo::string().build().unwrap(), "x"),
+        Parameter::new("controlled_by", enum_info(&json!({"t2": 0})), "x"),
+        Parameter::new(
+            "controlled_by",
+            enum_info(&json!({"self": 1, "t2": 0})),
+            "x",
+        ),
+        Parameter::new("controlled_by", enum_info(&json!({"self": 0})), "x").writable(),
+    ];
+    for param in bad {
+        let e = errors(node().module(controller_with("t1", param)).unwrap());
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].path, "t1:controlled_by");
+        assert!(matches!(
+            e[0].kind,
+            ModelErrorKind::PredefinedAccessible {
+                name: "controlled_by",
+                ..
+            }
+        ));
+    }
+
+    // a member that is no module of this node may be on another node: a warning
+    let elsewhere = Parameter::new(
+        "controlled_by",
+        enum_info(&json!({"self": 0, "remote": 1})),
+        "x",
+    );
+    let built = node()
+        .module(controller_with("t1", elsewhere))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings().len(), 1);
+    assert_eq!(built.warnings()[0].path, "t1:controlled_by");
+}
+
+#[test]
+fn control_active_and_mode() {
+    let bool_info = DataInfo::bool().build().unwrap();
+    let int_info = di(json!({"type": "int", "min": 0, "max": 1}));
+    let mode = enum_info(&json!({"off": 0, "on": 1}));
+    let fitting = [
+        Parameter::new("control_active", bool_info.clone(), "x"),
+        Parameter::new("mode", mode.clone(), "x"),
+        Parameter::new("mode", mode, "x").writable(),
+    ];
+    for param in fitting {
+        let built = node()
+            .module(controller_with("t1", param))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(built.warnings(), []);
+    }
+    let unfitting = [
+        (
+            "control_active",
+            Parameter::new("control_active", int_info, "x"),
+        ),
+        (
+            "control_active",
+            Parameter::new("control_active", bool_info, "x").writable(),
+        ),
+        (
+            "mode",
+            Parameter::new("mode", DataInfo::string().build().unwrap(), "x"),
+        ),
+    ];
+    for (name, param) in unfitting {
+        let e = errors(node().module(controller_with("t1", param)).unwrap());
+        assert_eq!(e.len(), 1, "{name}: {e:?}");
+        assert_eq!(e[0].path, format!("t1:{name}"));
+        assert!(
+            matches!(e[0].kind, ModelErrorKind::PredefinedAccessible { name: n, .. } if n == name),
+            "{name}: {e:?}"
+        );
+    }
 }
