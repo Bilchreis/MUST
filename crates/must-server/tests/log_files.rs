@@ -62,7 +62,7 @@ fn temp(name: &str) -> PathBuf {
 }
 
 fn today() -> String {
-    chrono::Local::now().format("%Y-%m-%d").to_string()
+    jiff::ZonedDateTime::now().strftime("%Y-%m-%d").to_string()
 }
 
 fn start(builder: NodeBuilder) -> RunningNode {
@@ -469,9 +469,12 @@ fn directory_and_days_from_the_environment() {
     let dir = temp("env-dir");
     let folder = dir.join("envnode");
     std::fs::create_dir_all(&folder).unwrap();
-    let day = |days_ago: u64| {
-        (chrono::Local::now().date_naive() - chrono::Days::new(days_ago))
-            .format("%Y-%m-%d.log")
+    let day = |days_ago: i64| {
+        jiff::ZonedDateTime::now()
+            .date()
+            .checked_sub(jiff::Span::new().days(days_ago))
+            .unwrap()
+            .strftime("%Y-%m-%d.log")
             .to_string()
     };
     for days_ago in [7, 8] {

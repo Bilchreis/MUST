@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
-use chrono::Local;
+use jiff::ZonedDateTime;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 
@@ -108,7 +108,7 @@ pub(crate) fn start(hub: &Arc<Hub>, config: Option<&LogFiles>) -> Option<LogHand
         folder: dir.join(node_folder(&hub.model.equipment_id)),
         days: config.days,
         hub: Arc::downgrade(hub),
-        today: Local::now().date_naive(),
+        today: ZonedDateTime::now().date(),
     };
     tokio::spawn(run(events, sender, node, open, finished.clone()));
 

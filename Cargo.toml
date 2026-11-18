@@ -18,11 +18,11 @@ must-types = { path = "crates/must-types" }
 async-trait = "0.1"
 base64 = "0.22"
 cc = "1"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 fastrand = "2"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 if-addrs = "0.15"
 indexmap = "2"
+jiff = "1"
 libloading = "0.9"
 proptest = "1"
 serde = "1"

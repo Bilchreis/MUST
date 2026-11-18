@@ -41,7 +41,7 @@ fn start(dir: &Path, name: &str) -> RunningNode {
 }
 
 fn log_of(dir: &Path, name: &str) -> String {
-    let today = chrono::Local::now().format("%Y-%m-%d");
+    let today = jiff::ZonedDateTime::now().strftime("%Y-%m-%d");
     std::fs::read_to_string(dir.join(name).join(format!("{today}.log"))).unwrap()
 }
 
