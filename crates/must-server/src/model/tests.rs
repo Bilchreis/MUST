@@ -580,6 +580,142 @@ fn non_standard_class_without_underscore() {
     }
 }
 
+// --- systems
+
+fn with_systems(systems: &Json) -> NodeBuilder {
+    node()
+        .property("systems", systems.clone())
+        .unwrap()
+        .module(sensor("cryo1_T"))
+        .unwrap()
+        .module(sensor("mag5t_x"))
+        .unwrap()
+}
+
+#[test]
+fn systems_of_the_specification() {
+    // a system with a subsystem, as in the specification's examples
+    let systems = json!({
+        "cryo1": {"description": "A cryo", "system": "OrangeCryostat",
+                  "modules": {"T": "cryo1_T", "X": "mag5t"}},
+        "mag5t": {"description": "A magnet", "system": "Magnet",
+                  "modules": {"X": "mag5t_x"}},
+    });
+    let built = with_systems(&systems).build().unwrap();
+    assert_eq!(built.warnings(), []);
+}
+
+fn system(modules: &Json) -> Json {
+    json!({"description": "x", "system": "S", "modules": modules})
+}
+
+#[test]
+fn valid_systems() {
+    let valid = [
+        json!({}),
+        // which members a system needs is in its schema, which the node does not read
+        json!({"a": system(&json!({}))}),
+        // two systems sharing a subsystem is no cycle
+        json!({
+            "a": system(&json!({"B": "b", "C": "c"})),
+            "b": system(&json!({"D": "d"})),
+            "c": system(&json!({"D": "d"})),
+            "d": system(&json!({"T": "cryo1_T"})),
+        }),
+    ];
+    for systems in valid {
+        let built = with_systems(&systems).build();
+        assert!(built.is_ok_and(|b| b.warnings().is_empty()), "{systems}");
+    }
+}
+
+#[test]
+fn invalid_systems() {
+    // each input with the reasons it is rejected for, one error per reason
+    let invalid: [(Json, &[&str]); 14] = [
+        (json!([]), &["must be an object"]),
+        (json!({"cryo1": 5}), &["`cryo1` must be an object"]),
+        (
+            json!({"cryo1": {}}),
+            &[
+                "`cryo1` needs a string `description`",
+                "`cryo1` needs a string `system`",
+                "`cryo1` needs an object `modules`",
+            ],
+        ),
+        (
+            json!({"cryo1": {"description": 1, "system": "S", "modules": {}}}),
+            &["`cryo1` needs a string `description`"],
+        ),
+        (
+            json!({"cryo1": {"description": "x", "system": 1, "modules": {}}}),
+            &["`cryo1` needs a string `system`"],
+        ),
+        (
+            json!({"cryo1": {"description": "x", "system": "S", "modules": []}}),
+            &["`cryo1` needs an object `modules`"],
+        ),
+        (
+            json!({"cryo1": system(&json!({"T": "nope"}))}),
+            &["`cryo1.modules.T` names `nope`"],
+        ),
+        (
+            json!({"cryo1": system(&json!({"T": 3}))}),
+            &["`cryo1.modules.T` must be a string"],
+        ),
+        (
+            json!({"cryo1_T": system(&json!({}))}),
+            &["`cryo1_T` is also the name of a module"],
+        ),
+        // the member names the module as much as the system, so it is no cycle
+        (
+            json!({"cryo1_T": system(&json!({"X": "cryo1_T"}))}),
+            &["`cryo1_T` is also the name of a module"],
+        ),
+        (
+            json!({"cryo1": system(&json!({"X": "cryo1", "Y": "cryo1"}))}),
+            &["`cryo1` contains itself"],
+        ),
+        (
+            json!({"a": system(&json!({"X": "b"})), "b": system(&json!({"X": "a"}))}),
+            &["`a` contains itself", "`b` contains itself"],
+        ),
+        // `a` leads into the cycle but is not part of it
+        (
+            json!({
+                "a": system(&json!({"X": "b"})),
+                "b": system(&json!({"X": "c"})),
+                "c": system(&json!({"X": "b"})),
+            }),
+            &["`b` contains itself", "`c` contains itself"],
+        ),
+        (
+            json!({"a": system(&json!({"X": "b"})), "b": system(&json!({"X": "cryo1"}))}),
+            &["`b.modules.X` names `cryo1`"],
+        ),
+    ];
+    for (systems, expected) in invalid {
+        let reasons: Vec<String> = errors(with_systems(&systems))
+            .into_iter()
+            .map(|e| match e.kind {
+                ModelErrorKind::InvalidProperty { property, reason }
+                    if e.path == "systems" && property == "systems" =>
+                {
+                    reason
+                }
+                kind => panic!("{systems}: unexpected error {kind:?}"),
+            })
+            .collect();
+        assert_eq!(reasons.len(), expected.len(), "{systems}: {reasons:?}");
+        for want in expected {
+            assert!(
+                reasons.iter().any(|r| r.starts_with(want)),
+                "{systems}: no `{want}` in {reasons:?}"
+            );
+        }
+    }
+}
+
 // --- default module properties
 
 struct MyDriver;

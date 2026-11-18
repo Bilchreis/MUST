@@ -78,6 +78,13 @@ The library SHALL check SECoP-defined property values: `visibility` must be one 
 - **WHEN** a module has `visibility` `"expert"`
 - **THEN** it is accepted and reported unchanged in the structure report
 
+### Requirement: Systems
+The library SHALL check the node property `systems` as far as possible without the systems' schemata: it is an object; each entry is an object with a string `description`, a string `system` and an object `modules` whose values are strings, each naming a module or another system of the node; no system has the name of a module; and no system contains itself through subsystems. Whether all non-optional modules of a system are present needs the system's schema and SHALL not be checked when the node is built, so that building a node never depends on the network.
+
+#### Scenario: System member that does not exist
+- **WHEN** `systems` is `{"cryo1": {"description": "A cryo", "system": "OrangeCryostat", "modules": {"T": "nope"}}}` and the node has no module or system `nope`
+- **THEN** completion fails with an error for `systems`
+
 ### Requirement: Interface class names
 The library SHALL accept in `interface_classes` only the SECoP 2.0 interface classes (`Readable`, `Writable`, `Drivable`, `Communicator`, `AcquisitionController`, `AcquisitionChannel`, `Acquisition`) and custom names starting with an underscore.
 
