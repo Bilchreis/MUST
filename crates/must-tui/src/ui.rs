@@ -249,6 +249,9 @@ fn draw_overview(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
         }
     }
     if app.processes.is_empty() {
+        lines.push(Line::default());
+        lines.extend(logo(theme));
+        lines.push(Line::default());
         lines.push(Line::styled(
             "No MUST nodes are running for this user.",
             theme.dim(),
@@ -260,6 +263,23 @@ fn draw_overview(frame: &mut Frame, area: Rect, app: &App, theme: Theme) {
     let mut text = vec![header];
     text.extend(lines.into_iter().skip(offset));
     frame.render_widget(Paragraph::new(text).block(theme.block("Nodes")), area);
+}
+
+/// The MUST logo, the word under a bar, as the empty overview shows it.
+fn logo(theme: Theme) -> Vec<Line<'static>> {
+    let (bar, letters): (&str, &[&str]) = if theme.unicode {
+        (
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            &["█▄ ▄█ █  █ ██▀▀ ▀▀█▀▀", "█ ▀ █ █▄▄█ ▄▄██   █"],
+        )
+    } else {
+        ("=====", &["MUST"])
+    };
+    // the orange of the logo, in the 256-color palette
+    let mut lines = vec![Line::styled(bar, theme.fg(Color::Indexed(202)))];
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    lines.extend(letters.iter().map(|row| Line::styled(*row, bold)));
+    lines
 }
 
 /// `text` cut or padded to exactly `width` characters.

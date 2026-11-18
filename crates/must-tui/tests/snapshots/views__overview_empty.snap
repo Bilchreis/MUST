@@ -1,0 +1,16 @@
+---
+source: crates/must-tui/tests/views.rs
+expression: "screen(&app, 60, 12)"
+---
+" must-tui  1 Overview  2 Detail  3 Traffic  4 Logs   0 proce"
+"┌ Nodes ───────────────────────────────────────────────────┐"
+"│NODE         CONTEXT    STATE    CL  MSG/S  STATUS        │"
+"│                                                          │"
+"│▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                    │"
+"│█▄ ▄█ █  █ ██▀▀ ▀▀█▀▀                                     │"
+"│█ ▀ █ █▄▄█ ▄▄██   █                                       │"
+"│                                                          │"
+"│No MUST nodes are running for this user.                  │"
+"│                                                          │"
+"└──────────────────────────────────────────────────────────┘"
+" ↑↓ select · Enter details · Tab views · P pin · ? help · q "

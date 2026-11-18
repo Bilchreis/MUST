@@ -11,5 +11,7 @@ build-dir = "../target/book"
 create-missing = false
 
 [output.html]
+# the logo on the first page follows the light or dark theme; the favicon is in theme/
+additional-css = ["theme/logo.css"]
 git-repository-url = "https://github.com/Bilchreis/MUST"
 edit-url-template = "https://github.com/Bilchreis/MUST/edit/main/docs/{path}"
