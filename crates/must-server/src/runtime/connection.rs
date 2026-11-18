@@ -6,15 +6,23 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 
 use indexmap::IndexMap;
 use must_types::{ErrorClass, Qualifiers, SecopError, Value, ValueError, data_report};
 use serde_json::Value as Json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -26,7 +34,7 @@ use crate::protocol::{
     self, Frame, LineSplitter, Request, accessible_part, module_part, now, parse_request,
     split_specifier,
 };
-use crate::websocket::{self, Handshake, Sniff};
+use crate::websocket::{self, Opened, Socket};
 
 /// `line` and its LF, in `buf`.
 fn with_lf<'b>(buf: &'b mut Vec<u8>, line: &str) -> &'b [u8] {
@@ -36,88 +44,24 @@ fn with_lf<'b>(buf: &'b mut Vec<u8>, line: &str) -> &'b [u8] {
     buf
 }
 
-/// Serves one client until it disconnects or `stop` is cancelled.
+/// Serves one client until it disconnects or `stop` is cancelled. With `websockets`, a
+/// client whose first bytes are `GET /` is served over a WebSocket.
 pub(crate) async fn serve(
     hub: Arc<Hub>,
     actors: Arc<HashMap<String, ActorHandle>>,
     stream: TcpStream,
     peer: SocketAddr,
     stop: CancellationToken,
+    websockets: bool,
 ) {
     let _ = stream.set_nodelay(true);
-    let (mut reader, mut writer) = stream.into_split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
-    // WebSocket handshake responses and control frames, written before the next message
-    let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    let websocket = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::unbounded_channel::<Outgoing>();
     let stats = Arc::new(QueueStats::default());
     // cancelled by node stop, by the hub on overflow, or when the client goes away
     let close = stop.child_token();
     let id = hub.register(peer, tx, Arc::clone(&stats), close.clone());
     info!(%peer, id, "client connected");
     hub.emit(NodeEvent::ClientConnected { id, peer });
-
-    let writer_task = {
-        let (hub, stats, close) = (Arc::clone(&hub), Arc::clone(&stats), close.clone());
-        let websocket = Arc::clone(&websocket);
-        tokio::spawn(async move {
-            // a line and its LF (or its frame), written at once; reused for every line
-            let mut buf = Vec::new();
-            loop {
-                let out = tokio::select! {
-                    biased;
-                    () = close.cancelled() => break,
-                    Some(raw) = raw_rx.recv() => {
-                        let written = tokio::select! {
-                            () = close.cancelled() => break,
-                            r = writer.write_all(&raw) => r,
-                        };
-                        if written.is_err() {
-                            close.cancel();
-                            break;
-                        }
-                        continue;
-                    }
-                    out = rx.recv() => match out {
-                        Some(out) => out,
-                        None => break,
-                    },
-                };
-                let bytes = if websocket.load(Ordering::Acquire) {
-                    websocket::text_frame(&mut buf, &out.line)
-                } else {
-                    with_lf(&mut buf, &out.line)
-                };
-                let written = tokio::select! {
-                    () = close.cancelled() => break,
-                    r = writer.write_all(bytes) => r,
-                };
-                stats.total.fetch_sub(out.size(), Ordering::AcqRel);
-                if out.is_update {
-                    stats.updates.fetch_sub(out.size(), Ordering::AcqRel);
-                }
-                stats.drained.notify_waiters();
-                if written.is_err() {
-                    close.cancel();
-                    break;
-                }
-                debug!(id, "> {}", out.line);
-                if !out.is_log && hub.observed() {
-                    hub.emit(NodeEvent::MessageSent { id, line: out.line });
-                }
-            }
-            // a refused handshake or a close frame queued as the connection ends
-            let _ = tokio::time::timeout(Duration::from_secs(1), async {
-                while let Ok(raw) = raw_rx.try_recv() {
-                    if writer.write_all(&raw).await.is_err() {
-                        break;
-                    }
-                }
-            })
-            .await;
-            let _ = writer.shutdown().await;
-        })
-    };
 
     let mut conn = Connection {
         hub: Arc::clone(&hub),
@@ -126,10 +70,35 @@ pub(crate) async fn serve(
         stats,
         close: close.clone(),
     };
-    let reason = conn.read_loop(&mut reader, raw_tx, websocket).await;
-    close.cancel();
-    hub.unregister(id);
-    let _ = writer_task.await;
+    let opened = if websockets {
+        let max_line_length = hub.model.options.max_line_length;
+        tokio::select! {
+            () = close.cancelled() => Err(conn.closed_reason()),
+            opened = websocket::open(stream, max_line_length) => opened,
+        }
+    } else {
+        Ok(Opened::Tcp(stream, Vec::new()))
+    };
+    let reason = match opened {
+        Ok(Opened::Tcp(stream, first)) => {
+            let (mut reader, writer) = stream.into_split();
+            let source = Source::Raw(&mut reader);
+            conn.serve_with(source, &first, Sink::Tcp(writer), rx, &stop)
+                .await
+        }
+        Ok(Opened::WebSocket(socket)) => {
+            let (sink, mut messages) = (*socket).split();
+            // `R` is unused: any reader type will do
+            let source = Source::<OwnedReadHalf>::WebSocket(&mut messages);
+            conn.serve_with(source, &[], Sink::WebSocket(sink), rx, &stop)
+                .await
+        }
+        Err(reason) => {
+            close.cancel();
+            hub.unregister(id);
+            reason
+        }
+    };
     let reason = if stop.is_cancelled() {
         "node stopped".to_owned()
     } else {
@@ -137,6 +106,42 @@ pub(crate) async fn serve(
     };
     info!(%peer, id, reason, "client disconnected");
     hub.emit(NodeEvent::ClientDisconnected { id, reason });
+}
+
+/// Where a connection's messages go.
+enum Sink {
+    /// Raw TCP: each message is a line.
+    Tcp(OwnedWriteHalf),
+    /// A WebSocket: each message is a TEXT frame, without a line ending.
+    WebSocket(SplitSink<Socket, Message>),
+}
+
+impl Sink {
+    /// Sends one message, with `buf` to build it in; `false` if the connection is gone.
+    async fn send(&mut self, buf: &mut Vec<u8>, line: &str) -> bool {
+        match self {
+            Self::Tcp(writer) => writer.write_all(with_lf(buf, line)).await.is_ok(),
+            Self::WebSocket(sink) => sink.send(Message::text(line)).await.is_ok(),
+        }
+    }
+
+    /// Ends the connection; a WebSocket is closed with `frame` first.
+    async fn finish(self, frame: CloseFrame) {
+        match self {
+            Self::Tcp(mut writer) => {
+                let _ = writer.shutdown().await;
+            }
+            Self::WebSocket(mut sink) => {
+                // fails at once when the client closed already
+                let _ = tokio::time::timeout(Duration::from_secs(1), async {
+                    if sink.send(Message::Close(Some(frame))).await.is_ok() {
+                        let _ = sink.close().await;
+                    }
+                })
+                .await;
+            }
+        }
+    }
 }
 
 struct Connection {
@@ -147,129 +152,64 @@ struct Connection {
     close: CancellationToken,
 }
 
-/// How the client's bytes carry SECoP messages.
-enum Transport {
-    /// The first bytes, until they show whether they start a WebSocket handshake.
-    Sniffing(Vec<u8>),
-    /// Raw TCP: the bytes are lines.
-    Tcp,
-    /// The HTTP request of a WebSocket handshake, so far.
-    Handshake(Vec<u8>),
-    /// WebSocket frames, each holding a message.
-    WebSocket(websocket::Decoder),
-    /// Nothing more is read: the handshake was refused or the WebSocket closed.
-    Done,
+/// Where a connection's requests come from.
+enum Source<'r, R> {
+    /// Raw TCP (or a test's stream): the bytes are lines.
+    Raw(&'r mut R),
+    /// A WebSocket: each message holds lines, the last one with an optional line ending.
+    WebSocket(&'r mut SplitStream<Socket>),
 }
 
 /// A connection's incoming bytes, split into requests.
 struct Incoming<'r, R> {
-    reader: &'r mut R,
+    source: Source<'r, R>,
     splitter: LineSplitter,
     buf: Vec<u8>,
     /// A frame taken while looking for repeated reads, to be handled next.
     held: Option<Frame>,
     /// Why no more bytes will come.
     ended: Option<String>,
-    transport: Transport,
-    /// Bytes for the writer to send as they are (handshake response, control frames).
-    raw: mpsc::UnboundedSender<Vec<u8>>,
-    /// Set when the handshake succeeded: the writer then sends frames.
-    websocket: Arc<AtomicBool>,
-    /// Whether the WebSocket message being received ended in LF so far.
-    ends_with_lf: bool,
+    /// The close frame for the client, when its WebSocket failed.
+    failure: Option<CloseFrame>,
 }
 
 impl<R: AsyncReadExt + Unpin> Incoming<'_, R> {
-    /// Reads more bytes from the client; cancel safe.
+    /// Reads more from the client; cancel safe.
     async fn fill(&mut self) {
-        // the only await: nothing below it may be cut short by a cancellation
-        let read = self.reader.read(&mut self.buf).await;
-        match read {
-            Ok(0) => self.ended = Some("closed by client".into()),
-            Ok(n) => {
-                let buf = std::mem::take(&mut self.buf);
-                self.receive(&buf[..n]);
-                self.buf = buf;
+        match &mut self.source {
+            Source::Raw(reader) => match reader.read(&mut self.buf).await {
+                Ok(0) => self.ended = Some("closed by client".into()),
+                Ok(n) => self.splitter.feed(&self.buf[..n]),
+                Err(e) => self.ended = Some(format!("read error: {e}")),
+            },
+            Source::WebSocket(messages) => {
+                let message = messages.next().await;
+                self.receive(message);
             }
-            Err(e) => self.ended = Some(format!("read error: {e}")),
         }
     }
 
-    /// Passes received bytes on, according to the transport.
-    fn receive(&mut self, data: &[u8]) {
-        match std::mem::replace(&mut self.transport, Transport::Done) {
-            Transport::Tcp => {
-                self.transport = Transport::Tcp;
-                self.splitter.feed(data);
+    /// Passes a WebSocket message on.
+    fn receive(&mut self, message: Option<Result<Message, WsError>>) {
+        match message {
+            None => self.ended = Some("closed by client".into()),
+            Some(Ok(Message::Text(text))) => self.feed_message(text.as_bytes()),
+            Some(Ok(Message::Binary(data))) => self.feed_message(&data),
+            // tungstenite answers pings and a close itself; after a close the stream ends
+            Some(Ok(_)) => {}
+            Some(Err(e)) => {
+                let (reason, frame) = websocket::failure(&e);
+                self.ended = Some(reason);
+                self.failure = frame;
             }
-            Transport::Sniffing(mut first) => {
-                first.extend_from_slice(data);
-                match websocket::sniff(&first) {
-                    Sniff::Undecided => self.transport = Transport::Sniffing(first),
-                    Sniff::Tcp => {
-                        self.transport = Transport::Tcp;
-                        self.splitter.feed(&first);
-                    }
-                    Sniff::WebSocket => {
-                        self.transport = Transport::Handshake(Vec::new());
-                        self.receive(&first);
-                    }
-                }
-            }
-            Transport::Handshake(mut request) => {
-                request.extend_from_slice(data);
-                match websocket::handshake(&request) {
-                    Handshake::Incomplete => self.transport = Transport::Handshake(request),
-                    Handshake::Accepted { response, used } => {
-                        self.websocket.store(true, Ordering::Release);
-                        let _ = self.raw.send(response);
-                        self.transport = Transport::WebSocket(websocket::Decoder::default());
-                        self.receive(&request[used..]);
-                    }
-                    Handshake::Refused { response, reason } => {
-                        let _ = self.raw.send(response);
-                        self.ended = Some(format!("WebSocket handshake refused: {reason}"));
-                    }
-                }
-            }
-            Transport::WebSocket(mut decoder) => {
-                let mut events = Vec::new();
-                decoder.feed(data, &mut events);
-                self.transport = Transport::WebSocket(decoder);
-                for event in events {
-                    self.websocket_event(event);
-                }
-            }
-            Transport::Done => {}
         }
     }
 
-    fn websocket_event(&mut self, event: websocket::Event) {
-        match event {
-            websocket::Event::Data(data) => {
-                self.ends_with_lf = data.last() == Some(&b'\n');
-                self.splitter.feed(&data);
-            }
-            // one message per frame: the line ending is optional
-            websocket::Event::EndOfMessage => {
-                if !self.ends_with_lf {
-                    self.splitter.feed(b"\n");
-                }
-                self.ends_with_lf = false;
-            }
-            websocket::Event::Reply(frame) => {
-                let _ = self.raw.send(frame);
-            }
-            websocket::Event::Closed(frame) => {
-                let _ = self.raw.send(frame);
-                self.transport = Transport::Done;
-                self.ended = Some("closed by client".into());
-            }
-            websocket::Event::Failed(reason, frame) => {
-                let _ = self.raw.send(frame);
-                self.transport = Transport::Done;
-                self.ended = Some(format!("WebSocket protocol error: {reason}"));
-            }
+    /// One message per frame: the line ending is optional.
+    fn feed_message(&mut self, data: &[u8]) {
+        self.splitter.feed(data);
+        if !data.ends_with(b"\n") {
+            self.splitter.feed(b"\n");
         }
     }
 }
@@ -279,24 +219,110 @@ impl<R: AsyncReadExt + Unpin> Incoming<'_, R> {
 const MAX_REPEATED_READS: usize = 64;
 
 impl Connection {
-    /// Reads and handles requests; returns why it stopped.
-    async fn read_loop(
+    /// Serves the client with a writer task draining `rx` into `sink`; returns why it
+    /// stopped.
+    async fn serve_with<R: AsyncReadExt + Unpin>(
         &mut self,
-        reader: &mut (impl AsyncReadExt + Unpin),
-        raw: mpsc::UnboundedSender<Vec<u8>>,
-        websocket: Arc<AtomicBool>,
+        source: Source<'_, R>,
+        first: &[u8],
+        sink: Sink,
+        rx: mpsc::UnboundedReceiver<Outgoing>,
+        stop: &CancellationToken,
     ) -> String {
+        let (failure_tx, failure) = oneshot::channel();
+        let writer = self.spawn_writer(sink, rx, failure, stop.clone());
+        let (reason, frame) = self.read_loop(source, first).await;
+        match frame {
+            Some(frame) => drop(failure_tx.send(frame)),
+            None => drop(failure_tx),
+        }
+        self.close.cancel();
+        self.hub.unregister(self.id);
+        let _ = writer.await;
+        reason
+    }
+
+    /// Writes the outgoing messages until the connection closes, then ends it.
+    fn spawn_writer(
+        &self,
+        mut sink: Sink,
+        mut rx: mpsc::UnboundedReceiver<Outgoing>,
+        failure: oneshot::Receiver<CloseFrame>,
+        stop: CancellationToken,
+    ) -> JoinHandle<()> {
+        let (hub, stats, close) = (
+            Arc::clone(&self.hub),
+            Arc::clone(&self.stats),
+            self.close.clone(),
+        );
+        let id = self.id;
+        tokio::spawn(async move {
+            // a line and its LF, written at once; reused for every line
+            let mut buf = Vec::new();
+            loop {
+                let out = tokio::select! {
+                    () = close.cancelled() => break,
+                    out = rx.recv() => match out {
+                        Some(out) => out,
+                        None => break,
+                    },
+                };
+                let written = tokio::select! {
+                    () = close.cancelled() => break,
+                    written = sink.send(&mut buf, &out.line) => written,
+                };
+                stats.total.fetch_sub(out.size(), Ordering::AcqRel);
+                if out.is_update {
+                    stats.updates.fetch_sub(out.size(), Ordering::AcqRel);
+                }
+                stats.drained.notify_waiters();
+                if !written {
+                    close.cancel();
+                    break;
+                }
+                debug!(id, "> {}", out.line);
+                if !out.is_log && hub.observed() {
+                    hub.emit(NodeEvent::MessageSent { id, line: out.line });
+                }
+            }
+            let frame = match failure.await {
+                Ok(frame) => frame,
+                Err(_) if stop.is_cancelled() => {
+                    websocket::close_frame(CloseCode::Away, "node stopped")
+                }
+                Err(_) if stats.overflowed.load(Ordering::Acquire) => {
+                    websocket::close_frame(CloseCode::Policy, "too much unread data")
+                }
+                Err(_) => websocket::close_frame(CloseCode::Normal, ""),
+            };
+            sink.finish(frame).await;
+        })
+    }
+
+    /// Reads and handles requests, after the bytes already read in `first`; returns why
+    /// it stopped, and the close frame for a failed WebSocket.
+    async fn read_loop<R: AsyncReadExt + Unpin>(
+        &mut self,
+        source: Source<'_, R>,
+        first: &[u8],
+    ) -> (String, Option<CloseFrame>) {
         let mut incoming = Incoming {
-            reader,
+            source,
             splitter: LineSplitter::new(self.hub.model.options.max_line_length),
             buf: vec![0u8; 16 * 1024],
             held: None,
             ended: None,
-            transport: Transport::Sniffing(Vec::new()),
-            raw,
-            websocket,
-            ends_with_lf: false,
+            failure: None,
         };
+        incoming.splitter.feed(first);
+        let reason = self.handle_requests(&mut incoming).await;
+        (reason, incoming.failure.take())
+    }
+
+    async fn handle_requests<R: AsyncReadExt + Unpin>(
+        &mut self,
+        incoming: &mut Incoming<'_, R>,
+    ) -> String {
         loop {
             while let Some(frame) = incoming
                 .held
@@ -308,7 +334,7 @@ impl Connection {
                     return self.closed_reason();
                 }
                 match frame {
-                    Frame::Line(line) => self.handle(&line, &mut incoming).await,
+                    Frame::Line(line) => self.handle(&line, incoming).await,
                     Frame::TooLong => self.error(
                         "",
                         None,
@@ -864,10 +890,10 @@ mod tests {
             close: close.clone(),
         };
         let (mut client, mut reader) = duplex(1024);
-        let (raw, _) = mpsc::unbounded_channel();
-        let websocket = Arc::new(AtomicBool::new(false));
-        let serving =
-            tokio::spawn(async move { connection.read_loop(&mut reader, raw, websocket).await });
+        let serving = tokio::spawn(async move {
+            let source = Source::Raw(&mut reader);
+            connection.read_loop(source, &[]).await.0
+        });
         let pause = || tokio::time::sleep(Duration::from_millis(100));
 
         client.write_all(b"read m:value\n").await.unwrap();

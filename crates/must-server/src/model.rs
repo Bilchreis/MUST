@@ -290,6 +290,7 @@ pub(crate) struct NodeOptions {
     pub max_line_length: usize,
     pub max_outgoing_bytes: usize,
     pub initial_read: bool,
+    pub websockets: bool,
     pub monitored: bool,
     /// `None`: from the environment ([`LogFiles::from_env`]).
     pub log_files: Option<LogFiles>,
@@ -322,6 +323,7 @@ impl NodeBuilder {
                 max_line_length: DEFAULT_MAX_LINE_LENGTH,
                 max_outgoing_bytes: DEFAULT_MAX_OUTGOING_BYTES,
                 initial_read: true,
+                websockets: true,
                 monitored: true,
                 log_files: None,
                 discovery: Discovery::default(),
@@ -399,6 +401,14 @@ impl NodeBuilder {
     /// that `activate` has values to send (default true).
     pub fn initial_read(mut self, enabled: bool) -> Self {
         self.options.initial_read = enabled;
+        self
+    }
+
+    /// Whether a client whose first bytes are `GET /` is served over a WebSocket on the
+    /// node's port (default true; see [WebSockets](crate#websockets)). Off, `GET /` is an
+    /// unknown action. `MUST_WEBSOCKETS=0` turns WebSockets off regardless.
+    pub fn websockets(mut self, enabled: bool) -> Self {
+        self.options.websockets = enabled;
         self
     }
 

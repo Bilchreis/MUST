@@ -141,12 +141,15 @@ impl Node {
         let actors = Arc::new(actors);
 
         start_polling(&hub, &actors, &tracker, &stop);
+        let websockets =
+            self.model.options.websockets && crate::websocket::enabled_by_environment();
         tracker.spawn(accept_loop(
             Arc::clone(&hub),
             Arc::clone(&actors),
             listener,
             stop.clone(),
             tracker.clone(),
+            websockets,
         ));
         crate::discovery::start(&hub, addr, &tracker, &stop);
 
@@ -175,6 +178,7 @@ async fn accept_loop(
     listener: TcpListener,
     stop: CancellationToken,
     tracker: TaskTracker,
+    websockets: bool,
 ) {
     loop {
         let accepted = tokio::select! {
@@ -189,6 +193,7 @@ async fn accept_loop(
                     stream,
                     peer,
                     stop.clone(),
+                    websockets,
                 ));
             }
             Err(e) => hub.log(
