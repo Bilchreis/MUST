@@ -658,6 +658,56 @@ fn status_shape() {
     ));
 }
 
+/// A Readable `t1` whose status enum has the given members.
+fn with_status(members: &Json) -> NodeBuilder {
+    let info = di(json!({"type": "tuple", "members": [
+        {"type": "enum", "members": members}, {"type": "string"}]}));
+    let module = Module::new("t1", "x")
+        .interface_classes(["Readable"])
+        .parameter(Parameter::new("value", kelvin(), "v"))
+        .unwrap()
+        .parameter(Parameter::new("status", info, "s"))
+        .unwrap();
+    node().module(module).unwrap()
+}
+
+#[test]
+fn status_names_of_the_table() {
+    // the table's names, and codes it does not name, are fine
+    let fine = json!({"DISABLED": 0, "IDLE": 100, "STANDBY": 130, "WARN": 200,
+        "BUSY": 300, "RAMPING": 370, "ERROR": 400, "_MINE": 376, "HOLDING": 160});
+    assert_eq!(with_status(&fine).build().unwrap().warnings(), []);
+
+    // a group code or name used otherwise is an error
+    let group = [
+        json!({"idle": 100}),
+        json!({"READY": 100}),
+        json!({"BUSY": 370}),
+        json!({"IDLE": 130}),
+        json!({"ERROR": 450}),
+    ];
+    for members in group {
+        let k = kinds(with_status(&members));
+        assert_eq!(k.len(), 1, "{members}: {k:?}");
+        assert!(
+            matches!(&k[0], ModelErrorKind::StatusShape(_)),
+            "{members}: {k:?}"
+        );
+    }
+
+    // another code or name of the table used otherwise is a warning
+    let others = [
+        json!({"IDLE": 100, "READY": 150}),
+        json!({"IDLE": 100, "PREPARED": 160}),
+        json!({"IDLE": 100, "RAMPING": 360}),
+    ];
+    for members in others {
+        let built = with_status(&members).build().unwrap();
+        let paths: Vec<&str> = built.warnings().iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["t1:status"], "{members}");
+    }
+}
+
 // --- 2.4 postfixes
 
 #[test]
@@ -1041,4 +1091,112 @@ fn integer_pollinterval_is_ordinary() {
 fn discovery_is_on_by_default() {
     let node = NodeBuilder::new("HZB-vm4", "test node").build().unwrap();
     assert!(node.model.options.discovery.is_enabled());
+}
+
+// --- predefined accessibles with a fixed data type
+
+fn enum_info(members: &Json) -> DataInfo {
+    di(json!({"type": "enum", "members": members}))
+}
+
+/// A Drivable `name` with the extra parameter.
+fn controller_with(name: &str, extra: Parameter) -> Module {
+    controller(name).parameter(extra).unwrap()
+}
+
+#[test]
+fn controlled_by() {
+    let good = Parameter::new(
+        "controlled_by",
+        enum_info(&json!({"self": 0, "t2": 1})),
+        "who controls t1",
+    );
+    let built = node()
+        .module(controller_with("t1", good))
+        .unwrap()
+        .module(controller("t2"))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings(), []);
+
+    let bad = [
+        Parameter::new("controlled_by", DataInfo::string().build().unwrap(), "x"),
+        Parameter::new("controlled_by", enum_info(&json!({"t2": 0})), "x"),
+        Parameter::new(
+            "controlled_by",
+            enum_info(&json!({"self": 1, "t2": 0})),
+            "x",
+        ),
+        Parameter::new("controlled_by", enum_info(&json!({"self": 0})), "x").writable(),
+    ];
+    for param in bad {
+        let e = errors(node().module(controller_with("t1", param)).unwrap());
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].path, "t1:controlled_by");
+        assert!(matches!(
+            e[0].kind,
+            ModelErrorKind::PredefinedAccessible {
+                name: "controlled_by",
+                ..
+            }
+        ));
+    }
+
+    // a member that is no module of this node may be on another node: a warning
+    let elsewhere = Parameter::new(
+        "controlled_by",
+        enum_info(&json!({"self": 0, "remote": 1})),
+        "x",
+    );
+    let built = node()
+        .module(controller_with("t1", elsewhere))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(built.warnings().len(), 1);
+    assert_eq!(built.warnings()[0].path, "t1:controlled_by");
+}
+
+#[test]
+fn control_active_and_mode() {
+    let bool_info = DataInfo::bool().build().unwrap();
+    let int_info = di(json!({"type": "int", "min": 0, "max": 1}));
+    let mode = enum_info(&json!({"off": 0, "on": 1}));
+    let fitting = [
+        Parameter::new("control_active", bool_info.clone(), "x"),
+        Parameter::new("mode", mode.clone(), "x"),
+        Parameter::new("mode", mode, "x").writable(),
+    ];
+    for param in fitting {
+        let built = node()
+            .module(controller_with("t1", param))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(built.warnings(), []);
+    }
+    let unfitting = [
+        (
+            "control_active",
+            Parameter::new("control_active", int_info, "x"),
+        ),
+        (
+            "control_active",
+            Parameter::new("control_active", bool_info, "x").writable(),
+        ),
+        (
+            "mode",
+            Parameter::new("mode", DataInfo::string().build().unwrap(), "x"),
+        ),
+    ];
+    for (name, param) in unfitting {
+        let e = errors(node().module(controller_with("t1", param)).unwrap());
+        assert_eq!(e.len(), 1, "{name}: {e:?}");
+        assert_eq!(e[0].path, format!("t1:{name}"));
+        assert!(
+            matches!(e[0].kind, ModelErrorKind::PredefinedAccessible { name: n, .. } if n == name),
+            "{name}: {e:?}"
+        );
+    }
 }
