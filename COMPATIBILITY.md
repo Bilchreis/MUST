@@ -223,6 +223,10 @@ passes the bytes through unchanged; it does not interpret the elements.
   when `SECoP_S_nodeComplete` opens its port. SHALL opened no UDP port. A node on
   `localhost` answers only local requests. `MUST_DISCOVERY=0` turns discovery off. See
   the README.
+- **WebSockets** (new): a client whose first bytes on the node's TCP port are `GET /`
+  is served SECoP over a WebSocket, so browser clients can connect directly. Raw TCP
+  clients are not affected; SHALL answered `GET /` with an error. `MUST_WEBSOCKETS=0`
+  turns WebSockets off.
 - **Log files** (new): every node writes its traffic (each published value once), client
   connections and its log records to `<log dir>\<equipment_id>\<YYYY-MM-DD>.log`, by
   default under `%LOCALAPPDATA%\must\logs` (Windows) or `~/.local/state/must/logs`

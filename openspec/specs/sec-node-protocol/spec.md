@@ -43,6 +43,25 @@ The node SHALL reply with a `ProtocolError` to a message longer than the configu
 - **WHEN** a client sends `change t1:target {oops`
 - **THEN** the node replies `error_change t1:target` with a `BadJSON` error report
 
+### Requirement: WebSockets
+The node SHALL treat a connection whose first bytes are `GET /` as a WebSocket connection (SECoP transport, RFC 6455) on the same port as raw TCP: it SHALL answer a valid upgrade request (`Upgrade: websocket`, `Sec-WebSocket-Version: 13`, `Sec-WebSocket-Key`) with `101 Switching Protocols`, and any other `GET /` request with `400 Bad Request` before closing. After the handshake it SHALL read each TEXT (or BINARY) message as SECoP messages with an optional line ending, apply the maximum line length to them, send every message in its own TEXT frame without a line ending, and answer pings with pongs and a close with a close. It SHALL close the connection with status 1009 when a message is longer than the maximum line length (and its line ending), with status 1002 when the client breaks the WebSocket protocol (for example with an unmasked frame), and with status 1001 when the node stops. WebSockets SHALL be on by default; the application SHALL be able to turn them off per node, and the environment variable `MUST_WEBSOCKETS=0`, read when a node starts, SHALL turn them off. Turned off, `GET /` SHALL be handled as an unknown action.
+
+#### Scenario: Request in a frame
+- **WHEN** a WebSocket client sends a TEXT frame `*IDN?`
+- **THEN** it receives a TEXT frame with the identification
+
+#### Scenario: Message longer than the limit
+- **WHEN** a WebSocket client sends a message longer than the maximum line length
+- **THEN** the node closes the WebSocket with status 1009
+
+#### Scenario: WebSockets turned off
+- **WHEN** WebSockets are turned off for a node and a client sends a WebSocket upgrade request
+- **THEN** it receives `error_GET` with a `ProtocolError`
+
+#### Scenario: Raw TCP is unaffected
+- **WHEN** a raw TCP client sends `*IDN?\n` one byte at a time
+- **THEN** it receives the identification line
+
 ### Requirement: Identification
 The node SHALL reply to `*IDN?` with `ISSE,SECoP,<draft-date>,v2.0`, where `<draft-date>` is the date of the SECoP 2.0 draft must implements, and SHALL deactivate all updates on that connection.
 

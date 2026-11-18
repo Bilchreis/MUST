@@ -149,6 +149,18 @@
 //! closes a connection. They do count toward that limit, so heavy logging can make a
 //! later update close a client that does not read.
 //!
+//! # WebSockets
+//!
+//! A connection whose first bytes are `GET /` is a WebSocket (SECoP's transport section,
+//! RFC 6455), on the same port as raw TCP: browser clients can talk to the node directly.
+//! After the HTTP handshake every message travels in a TEXT frame. The line ending is
+//! optional in received frames and not sent; requests, replies and updates are the same
+//! as over raw TCP. A message longer than [`NodeBuilder::max_line_length`] closes the
+//! WebSocket with status 1009 ("message too big"), as the framing cannot be resumed after
+//! it. The handshake and the framing are [`tokio_tungstenite`]'s.
+//! [`NodeBuilder::websockets`] with `false`, or `MUST_WEBSOCKETS=0`, turns WebSockets off:
+//! `GET /` is then an unknown action, as without WebSocket support.
+//!
 //! # Discovery
 //!
 //! A running node answers SECoP's UDP discovery requests on port 10767 with its TCP
@@ -166,6 +178,7 @@ pub mod monitor;
 mod protocol;
 mod report;
 mod runtime;
+mod websocket;
 
 pub use discovery::Discovery;
 pub use events::{ConnectionId, LogLevel, NodeEvent};
@@ -178,3 +191,4 @@ pub use model::{
     Parameter,
 };
 pub use runtime::{NODE_LOG_TARGET, RunningNode, StartError};
+pub use websocket::WEBSOCKETS_VARIABLE;
