@@ -545,6 +545,24 @@ async fn disabled_through_the_api() {
     must_server::monitor::set_enabled(true);
 }
 
+/// An endpoint that cannot be bound (here: a socket path over the `sockaddr_un` limit)
+/// leaves the node running without monitoring, also when started from async code.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unusable_endpoint_disables_monitoring() {
+    let _serial = serial();
+    // the registry directory itself is created without parents
+    std::fs::create_dir_all(&*DIR).unwrap();
+    let dir = DIR.join("x".repeat(100));
+    must_server::monitor::set_registry_dir(Some(dir.clone()));
+    let n = start(Arc::new(Sim::default()));
+    assert!(!dir.join(format!("{}.json", std::process::id())).exists());
+    let mut c = Client::connect(n.local_addr()).await;
+    assert!(c.request("ping x").await.starts_with("pong x"));
+    n.stop().await;
+    must_server::monitor::set_registry_dir(Some(DIR.clone()));
+}
+
 /// Run by `disabled_through_the_environment` in a child process with `MUST_MONITOR=0`.
 #[tokio::test]
 #[ignore = "run in a child process by disabled_through_the_environment"]

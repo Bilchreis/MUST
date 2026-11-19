@@ -223,15 +223,36 @@ fn monitor() -> MutexGuard<'static, Option<Monitor>> {
     MONITOR.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The endpoint's runtime until its thread takes it over. `open` may run on a Tokio
+/// worker (`Node::spawn` from async code), where dropping a runtime panics, so an
+/// early return shuts it down in the background instead.
+struct Unstarted(Option<tokio::runtime::Runtime>);
+
+impl Unstarted {
+    fn get(&self) -> &tokio::runtime::Runtime {
+        self.0.as_ref().expect("the runtime is not taken yet")
+    }
+}
+
+impl Drop for Unstarted {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
 /// Opens the endpoint: its thread with a runtime, the listener and the registration.
 fn open() -> std::io::Result<Monitor> {
     let process = must_monitor::platform::current_process()?;
     let dir = registry_dir().map_err(std::io::Error::other)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let runtime = Unstarted(Some(
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?,
+    ));
     let listener = {
-        let _guard = runtime.enter();
+        let _guard = runtime.get().enter();
         Listener::bind(&dir)
     };
     let (listener, endpoint) = listener?;
@@ -252,7 +273,7 @@ fn open() -> std::io::Result<Monitor> {
         }),
     });
     let shutdown = CancellationToken::new();
-    let handle = runtime.handle().clone();
+    let handle = runtime.get().handle().clone();
     handle.spawn(peer::accept_loop(
         Arc::clone(&shared),
         listener,
@@ -265,6 +286,8 @@ fn open() -> std::io::Result<Monitor> {
         std::thread::Builder::new()
             .name("must-monitor".into())
             .spawn(move || {
+                let mut runtime = runtime;
+                let runtime = runtime.0.take().expect("the runtime is not taken yet");
                 runtime.block_on(shutdown.cancelled());
                 // dropping the runtime ends all endpoint tasks and closes connections
                 drop(runtime);
