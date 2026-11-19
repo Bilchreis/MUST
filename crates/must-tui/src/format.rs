@@ -172,7 +172,12 @@ fn plain(info: &DataInfo, value: &Json) -> String {
             let inner: Vec<String> = s
                 .members()
                 .iter()
-                .filter_map(|(name, m)| Some(format!("{name}: {}", with_unit(m, map.get(name)?))))
+                .filter_map(|(name, m)| match map.get(name) {
+                    Some(v) => Some(format!("{name}: {}", with_unit(m, v))),
+                    // a mandatory member the node left out: show that the value is malformed
+                    None if !s.is_optional(name) => Some(format!("{name}: ?")),
+                    None => None,
+                })
                 .collect();
             format!("{{{}}}", inner.join(", "))
         }
@@ -366,6 +371,8 @@ mod tests {
             "optional": ["t"]}),
         );
         assert_eq!(value(Some(&optional), &json!({"x": 1.0})), "{x: 1 m}");
+        // a left-out mandatory member is shown as missing
+        assert_eq!(value(Some(&optional), &json!({"t": 2.0})), "{x: ?, t: 2}");
         let points = info(
             &json!({"type": "array", "maxlen": 4, "members": {"type": "struct",
             "members": {"x": metres}}}),
