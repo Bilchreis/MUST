@@ -29,5 +29,15 @@ changes and implemented in this order:
 11. `add-matrix-datatype` – the SECoP 2.0 matrix data type (`must-types`, done)
 12. `add-check-message` – answers to SECoP `check` requests (`must-server`, done)
 13. `add-logging-messages` – SECoP remote logging (`must-server`, done)
+14. `add-tui-secop-check` – the TUI's detail view checks a node's description with the
+    SECoP checker (`secop-check`) and lists its findings (`must-tui`, done)
+
+Planned, not started yet:
+
+- `add-module-macro` – `#[must_server::module]` and `#[must_server::methods]`, which
+  declare a module's parameters, commands and properties next to its behaviour
+  (`must-server`)
+- `add-node-config-files` – nodes built from TOML config files out of registered module
+  types, with templates for many modules of one type (`must-config`)
 
 SHALL's client library (`SECoP_C_*`) is out of scope.
